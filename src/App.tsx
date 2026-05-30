@@ -19,8 +19,8 @@ import { Menu, LogOut, User, ChevronDown, KeyRound } from 'lucide-react';
 import { authApi } from './services/api';
 import { useToast } from './components/Toast';
 import Modal from './components/Modal';
-
-type ExtendedPage = Page | 'users';
+import FinancialCenter from './pages/FinancialCenter';
+type ExtendedPage = Page | 'users' | 'financialCenter';
 
 function PageRenderer({ page }: { page: ExtendedPage }) {
   switch (page) {
@@ -35,6 +35,7 @@ function PageRenderer({ page }: { page: ExtendedPage }) {
     case 'clientAccts': return <ClientAccounts />;
     case 'debts':       return <Debts />;
     case 'users':       return <UsersPage />;
+    case 'financialCenter': return <FinancialCenter />;
     default:            return <Dashboard />;
   }
 }
@@ -43,6 +44,7 @@ function AppContent() {
   const { user, isLoading, isAuthenticated, logout, isAdmin } = useAuth();
   const toast = useToast();
   const [currentPage, setCurrentPage] = useState<ExtendedPage>('dashboard');
+  console.log('Current Page =', currentPage);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState('');
   const [userMenuOpen, setUserMenuOpen] = useState(false);
