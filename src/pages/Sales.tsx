@@ -56,6 +56,10 @@ export default function Sales() {
   readyStockApi.getAll()
 ]);
 
+console.log('sales=', s);
+console.log('returns=', r);
+console.log('marketers=', m);
+
 setSales(s as any);
 setReturns(r as any);
 setMarketers(m);
