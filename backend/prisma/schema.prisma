@@ -230,3 +230,12 @@ model Marketer {
 
   @@map("marketers")
 }
+model Asset {
+  id         Int      @id @default(autoincrement())
+  name       String
+  value      Float
+  notes      String?
+  created_at DateTime @default(now())
+
+  @@map("assets")
+}

@@ -8,7 +8,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.marketersRouter = exports.paymentLogRouter = exports.returnsRouter = exports.clientAccountsRouter = exports.debtsRouter = exports.modelProdRouter = exports.cuttingRouter = exports.accessoriesRouter = exports.fabricRouter = exports.readyStockRouter = exports.expensesRouter = void 0;
+exports.fixedAssetsRouter = exports.marketersRouter = exports.paymentLogRouter = exports.returnsRouter = exports.clientAccountsRouter = exports.debtsRouter = exports.modelProdRouter = exports.cuttingRouter = exports.accessoriesRouter = exports.fabricRouter = exports.readyStockRouter = exports.expensesRouter = void 0;
 const express_1 = require("express");
 const prisma_1 = __importDefault(require("../lib/prisma"));
 const auth_1 = require("../middleware/auth");
@@ -424,6 +424,42 @@ exports.marketersRouter.delete('/:name', auth_1.requireManager, async (req, res)
     }
     catch {
         return res.status(500).json({ message: 'خطأ' });
+    }
+});
+// ===== FIXED ASSETS =====
+exports.fixedAssetsRouter = (0, express_1.Router)();
+exports.fixedAssetsRouter.use(auth_1.authenticate);
+exports.fixedAssetsRouter.get('/', async (_req, res) => {
+    try {
+        return res.json(await prisma_1.default.asset.findMany({ orderBy: { id: 'asc' } }));
+    }
+    catch {
+        return res.status(500).json({ message: 'خطأ في جلب البيانات' });
+    }
+});
+exports.fixedAssetsRouter.post('/', auth_1.requireManager, async (req, res) => {
+    try {
+        return res.status(201).json(await prisma_1.default.asset.create({ data: req.body }));
+    }
+    catch {
+        return res.status(500).json({ message: 'خطأ في الإضافة' });
+    }
+});
+exports.fixedAssetsRouter.put('/:id', auth_1.requireManager, async (req, res) => {
+    try {
+        return res.json(await prisma_1.default.asset.update({ where: { id: parseInt(req.params.id) }, data: req.body }));
+    }
+    catch {
+        return res.status(500).json({ message: 'خطأ في التحديث' });
+    }
+});
+exports.fixedAssetsRouter.delete('/:id', auth_1.requireManager, async (req, res) => {
+    try {
+        await prisma_1.default.asset.delete({ where: { id: parseInt(req.params.id) } });
+        return res.json({ message: 'تم الحذف' });
+    }
+    catch {
+        return res.status(500).json({ message: 'خطأ في الحذف' });
     }
 });
 //# sourceMappingURL=entities.js.map

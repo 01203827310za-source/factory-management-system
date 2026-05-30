@@ -18,8 +18,11 @@ const PORT = process.env.PORT || 3001;
 // ===== Middleware =====
 app.use((0, helmet_1.default)());
 app.use((0, cors_1.default)({
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
-    credentials: true,
+    origin: [
+        'http://localhost:5173',
+        'https://laudable-reflection-production-904d.up.railway.app'
+    ],
+    credentials: true
 }));
 app.use(express_1.default.json({ limit: '10mb' }));
 app.use((0, morgan_1.default)(process.env.NODE_ENV === 'development' ? 'dev' : 'combined'));

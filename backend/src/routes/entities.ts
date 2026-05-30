@@ -270,3 +270,23 @@ marketersRouter.delete('/:name', requireManager, async (req, res) => {
     return res.json(all.map(m => m.name));
   } catch { return res.status(500).json({ message: 'خطأ' }); }
 });
+// ===== FIXED ASSETS =====
+export const fixedAssetsRouter = Router();
+fixedAssetsRouter.use(authenticate);
+
+fixedAssetsRouter.get('/', async (_req, res) => {
+  try { return res.json(await prisma.asset.findMany({ orderBy: { id: 'asc' } })); }
+  catch { return res.status(500).json({ message: 'خطأ في جلب البيانات' }); }
+});
+fixedAssetsRouter.post('/', requireManager, async (req, res) => {
+  try { return res.status(201).json(await prisma.asset.create({ data: req.body })); }
+  catch { return res.status(500).json({ message: 'خطأ في الإضافة' }); }
+});
+fixedAssetsRouter.put('/:id', requireManager, async (req, res) => {
+  try { return res.json(await prisma.asset.update({ where: { id: parseInt(req.params.id as string) }, data: req.body })); }
+  catch { return res.status(500).json({ message: 'خطأ في التحديث' }); }
+});
+fixedAssetsRouter.delete('/:id', requireManager, async (req, res) => {
+  try { await prisma.asset.delete({ where: { id: parseInt(req.params.id as string) } }); return res.json({ message: 'تم الحذف' }); }
+  catch { return res.status(500).json({ message: 'خطأ في الحذف' }); }
+});
