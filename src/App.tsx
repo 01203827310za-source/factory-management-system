@@ -104,7 +104,7 @@ function AppContent() {
       </button>
 
       {/* User info bar - top left */}
-      <div className="fixed top-4 left-4 z-30">
+      <div className="fixed top-4 left-1/2 -translate-x-1/2 z-30">
         <div className="relative">
           <button
             onClick={() => setUserMenuOpen(!userMenuOpen)}
