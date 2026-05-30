@@ -21,11 +21,11 @@ expensesRouter.post('/', requireManager, async (req, res) => {
   catch { return res.status(500).json({ message: 'خطأ في الإضافة' }); }
 });
 expensesRouter.put('/:id', requireManager, async (req, res) => {
-  try { return res.json(await prisma.expenseRevenue.update({ where: { id: parseInt(req.params.id) }, data: req.body })); }
+  try { return res.json(await prisma.expenseRevenue.update({ where: { id: parseInt(req.params.id as string) }, data: req.body })); }
   catch { return res.status(500).json({ message: 'خطأ في التحديث' }); }
 });
 expensesRouter.delete('/:id', requireManager, async (req, res) => {
-  try { await prisma.expenseRevenue.delete({ where: { id: parseInt(req.params.id) } }); return res.json({ message: 'تم الحذف' }); }
+  try { await prisma.expenseRevenue.delete({ where: { id: parseInt(req.params.id as string) } }); return res.json({ message: 'تم الحذف' }); }
   catch { return res.status(500).json({ message: 'خطأ في الحذف' }); }
 });
 
@@ -42,11 +42,11 @@ readyStockRouter.post('/', requireManager, async (req, res) => {
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 readyStockRouter.put('/:id', requireManager, async (req, res) => {
-  try { return res.json(await prisma.readyStock.update({ where: { id: parseInt(req.params.id) }, data: req.body })); }
+  try { return res.json(await prisma.readyStock.update({ where: { id: parseInt(req.params.id as string) }, data: req.body })); }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 readyStockRouter.delete('/:id', requireManager, async (req, res) => {
-  try { await prisma.readyStock.delete({ where: { id: parseInt(req.params.id) } }); return res.json({ message: 'تم' }); }
+  try { await prisma.readyStock.delete({ where: { id: parseInt(req.params.id as string) } }); return res.json({ message: 'تم' }); }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 
@@ -63,11 +63,11 @@ fabricRouter.post('/', requireManager, async (req, res) => {
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 fabricRouter.put('/:id', requireManager, async (req, res) => {
-  try { return res.json(await prisma.fabricWarehouse.update({ where: { id: parseInt(req.params.id) }, data: req.body })); }
+  try { return res.json(await prisma.fabricWarehouse.update({ where: { id: parseInt(req.params.id as string) }, data: req.body })); }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 fabricRouter.delete('/:id', requireManager, async (req, res) => {
-  try { await prisma.fabricWarehouse.delete({ where: { id: parseInt(req.params.id) } }); return res.json({ message: 'تم' }); }
+  try { await prisma.fabricWarehouse.delete({ where: { id: parseInt(req.params.id as string) } }); return res.json({ message: 'تم' }); }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 
@@ -84,11 +84,11 @@ accessoriesRouter.post('/', requireManager, async (req, res) => {
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 accessoriesRouter.put('/:id', requireManager, async (req, res) => {
-  try { return res.json(await prisma.accessoriesWarehouse.update({ where: { id: parseInt(req.params.id) }, data: req.body })); }
+  try { return res.json(await prisma.accessoriesWarehouse.update({ where: { id: parseInt(req.params.id as string) }, data: req.body })); }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 accessoriesRouter.delete('/:id', requireManager, async (req, res) => {
-  try { await prisma.accessoriesWarehouse.delete({ where: { id: parseInt(req.params.id) } }); return res.json({ message: 'تم' }); }
+  try { await prisma.accessoriesWarehouse.delete({ where: { id: parseInt(req.params.id as string) } }); return res.json({ message: 'تم' }); }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 
@@ -105,11 +105,11 @@ cuttingRouter.post('/', requireManager, async (req, res) => {
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 cuttingRouter.put('/:id', requireManager, async (req, res) => {
-  try { return res.json(await prisma.cuttingOrder.update({ where: { id: parseInt(req.params.id) }, data: req.body })); }
+  try { return res.json(await prisma.cuttingOrder.update({ where: { id: parseInt(req.params.id as string) }, data: req.body })); }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 cuttingRouter.delete('/:id', requireManager, async (req, res) => {
-  try { await prisma.cuttingOrder.delete({ where: { id: parseInt(req.params.id) } }); return res.json({ message: 'تم' }); }
+  try { await prisma.cuttingOrder.delete({ where: { id: parseInt(req.params.id as string) } }); return res.json({ message: 'تم' }); }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 
@@ -126,11 +126,11 @@ modelProdRouter.post('/', requireManager, async (req, res) => {
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 modelProdRouter.put('/:id', requireManager, async (req, res) => {
-  try { return res.json(await prisma.modelProduction.update({ where: { id: parseInt(req.params.id) }, data: req.body })); }
+  try { return res.json(await prisma.modelProduction.update({ where: { id: parseInt(req.params.id as string) }, data: req.body })); }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 modelProdRouter.delete('/:id', requireManager, async (req, res) => {
-  try { await prisma.modelProduction.delete({ where: { id: parseInt(req.params.id) } }); return res.json({ message: 'تم' }); }
+  try { await prisma.modelProduction.delete({ where: { id: parseInt(req.params.id as string) } }); return res.json({ message: 'تم' }); }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 
@@ -153,7 +153,7 @@ debtsRouter.post('/', requireManager, async (req: Request, res: Response) => {
 });
 debtsRouter.put('/:id', requireManager, async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const data = req.body;
     if (data.total_amount !== undefined || data.amount_paid !== undefined) {
       const cur = await prisma.debt.findUnique({ where: { id } });
@@ -165,7 +165,7 @@ debtsRouter.put('/:id', requireManager, async (req: Request, res: Response) => {
   } catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 debtsRouter.delete('/:id', requireManager, async (req, res) => {
-  try { await prisma.debt.delete({ where: { id: parseInt(req.params.id) } }); return res.json({ message: 'تم' }); }
+  try { await prisma.debt.delete({ where: { id: parseInt(req.params.id as string) } }); return res.json({ message: 'تم' }); }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 
@@ -187,7 +187,7 @@ clientAccountsRouter.post('/', requireManager, async (req: Request, res: Respons
 });
 clientAccountsRouter.put('/:id', requireManager, async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const data = req.body;
     if (data.total_amount !== undefined || data.amount_paid !== undefined) {
       const cur = await prisma.clientAccount.findUnique({ where: { id } });
@@ -199,7 +199,7 @@ clientAccountsRouter.put('/:id', requireManager, async (req: Request, res: Respo
   } catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 clientAccountsRouter.delete('/:id', requireManager, async (req, res) => {
-  try { await prisma.clientAccount.delete({ where: { id: parseInt(req.params.id) } }); return res.json({ message: 'تم' }); }
+  try { await prisma.clientAccount.delete({ where: { id: parseInt(req.params.id as string) } }); return res.json({ message: 'تم' }); }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 
@@ -216,11 +216,11 @@ returnsRouter.post('/', requireManager, async (req, res) => {
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 returnsRouter.put('/:id', requireManager, async (req, res) => {
-  try { return res.json(await prisma.returnItem.update({ where: { id: parseInt(req.params.id) }, data: req.body })); }
+  try { return res.json(await prisma.returnItem.update({ where: { id: parseInt(req.params.id as string) }, data: req.body })); }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 returnsRouter.delete('/:id', requireManager, async (req, res) => {
-  try { await prisma.returnItem.delete({ where: { id: parseInt(req.params.id) } }); return res.json({ message: 'تم' }); }
+  try { await prisma.returnItem.delete({ where: { id: parseInt(req.params.id as string) } }); return res.json({ message: 'تم' }); }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 
@@ -237,7 +237,7 @@ paymentLogRouter.post('/', requireManager, async (req, res) => {
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 paymentLogRouter.delete('/:id', requireManager, async (req, res) => {
-  try { await prisma.paymentLog.delete({ where: { id: parseInt(req.params.id) } }); return res.json({ message: 'تم' }); }
+  try { await prisma.paymentLog.delete({ where: { id: parseInt(req.params.id as string) } }); return res.json({ message: 'تم' }); }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 
@@ -264,7 +264,7 @@ marketersRouter.post('/', requireManager, async (req, res) => {
 });
 marketersRouter.delete('/:name', requireManager, async (req, res) => {
   try {
-    const name = decodeURIComponent(req.params.name);
+    const name = decodeURIComponent(req.params.name as string);
     await prisma.marketer.delete({ where: { name } });
     const all = await prisma.marketer.findMany({ orderBy: { id: 'asc' } });
     return res.json(all.map(m => m.name));

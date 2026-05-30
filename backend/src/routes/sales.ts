@@ -35,7 +35,7 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
 // PUT /api/sales/:id
 router.put('/:id', requireManager, async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const data = req.body;
     if (data.invoice_value !== undefined || data.deposit_paid !== undefined) {
       const current = await prisma.sale.findUnique({ where: { id } });
@@ -53,7 +53,7 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
 // DELETE /api/sales/:id
 router.delete('/:id', requireManager, async (req: Request, res: Response) => {
   try {
-    await prisma.sale.delete({ where: { id: parseInt(req.params.id) } });
+    await prisma.sale.delete({ where: { id: parseInt(req.params.id as string) } });
     return res.json({ message: 'تم حذف الطلب' });
   } catch {
     return res.status(500).json({ message: 'خطأ في حذف الطلب' });

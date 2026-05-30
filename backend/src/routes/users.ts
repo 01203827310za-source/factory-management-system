@@ -47,7 +47,7 @@ router.post('/', requireAdmin, async (req: Request, res: Response) => {
 // PUT /api/users/:id
 router.put('/:id', requireAdmin, async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const { full_name, role, is_active, password } = req.body;
 
     // Prevent disabling your own admin account
@@ -78,7 +78,7 @@ router.put('/:id', requireAdmin, async (req: Request, res: Response) => {
 // DELETE /api/users/:id
 router.delete('/:id', requireAdmin, async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     if (req.user!.userId === id) {
       return res.status(400).json({ message: 'لا يمكنك حذف حسابك الخاص' });
     }
