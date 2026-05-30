@@ -1,10 +1,15 @@
 import { useState, useMemo, useEffect } from 'react';
-import { salesStore, readyStockStore, returnsStore } from '../data/store';
+import {
+  salesApi,
+  returnsApi,
+  readyStockApi,
+  marketersApi
+} from '../services/api';
 import type { Sale, ReturnItem } from '../types';
 import Modal from '../components/Modal';
 import { useToast } from '../components/Toast';
 import { Plus, Edit2, Trash2, Filter, Download, Search, UserPlus, Printer, ArrowLeftRight, RefreshCw } from 'lucide-react';
-import { marketersApi } from '../services/api';
+
 import * as XLSX from 'xlsx';
 
 const ORDER_STATUSES: Sale['order_status'][] = ['تم الصرف', 'لم يتم الصرف', 'حساب عميل'];
@@ -33,6 +38,7 @@ export default function Sales() {
   // Returns
   const [returnsModalOpen, setReturnsModalOpen] = useState(false);
   const [returns, setReturns] = useState<ReturnItem[]>([]);
+  const [readyStock, setReadyStock] = useState<any[]>([]);
   const [returnForm, setReturnForm] = useState({
     date: '', order_number: '', client_name: '', returned_by: '' as 'حاتم' | 'ميدو' | '',
     paid_by: '' as 'حاتم' | 'ميدو' | '',
@@ -43,10 +49,17 @@ export default function Sales() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [s, r, m] = await Promise.all([salesStore.getAll(), returnsStore.getAll(), marketersApi.getAll()]);
-      setSales(s);
-      setReturns(r);
-      setMarketers(m);
+      const [s, r, m, stock] = await Promise.all([
+  salesApi.getAll(),
+  returnsApi.getAll(),
+  marketersApi.getAll(),
+  readyStockApi.getAll()
+]);
+
+setSales(s as any);
+setReturns(r as any);
+setMarketers(m);
+setReadyStock(stock);
     } catch (e: unknown) {
       toast('error', e instanceof Error ? e.message : 'خطأ في التحميل');
     } finally {
@@ -83,13 +96,19 @@ export default function Sales() {
   };
   const [form, setForm] = useState(emptyForm);
 
-  const stockCodes = readyStockStore.getAll().map(s => s.model_code);
-  const stockColors: Record<string, string[]> = {};
-  readyStockStore.getAll().forEach(s => {
-    if (!stockColors[s.model_code]) stockColors[s.model_code] = [];
-    if (!stockColors[s.model_code].includes(s.color)) stockColors[s.model_code].push(s.color);
-  });
+  const stockCodes = readyStock.map((s: any) => s.model_code);
 
+const stockColors: Record<string, string[]> = {};
+
+readyStock.forEach((s: any) => {
+  if (!stockColors[s.model_code]) {
+    stockColors[s.model_code] = [];
+  }
+
+  if (!stockColors[s.model_code].includes(s.color)) {
+    stockColors[s.model_code].push(s.color);
+  }
+});
   const openAdd = () => { setEditSale(null); setForm({ ...emptyForm, marketer: marketers[0] || '' }); setModalOpen(true); };
   const openEdit = (sale: Sale) => {
     setEditSale(sale);
@@ -126,13 +145,20 @@ export default function Sales() {
       delivery_method: form.delivery_method, warehouse: form.warehouse, shipping_collected: form.shipping_collected,
       row_number: sales.length + 1,
     };
-    if (editSale) { salesStore.update(editSale.id, data); toast('success', 'تم تعديل الأوردر بنجاح'); }
-    else { salesStore.add(data); toast('success', 'تم إضافة الأوردر بنجاح'); }
-    setModalOpen(false);
-  };
+    if (editSale) {
+  await salesApi.update(editSale.id, data as any);
+  toast('success', 'تم تعديل الأوردر بنجاح');
+} else {
+  await salesApi.add(data as any);
+  toast('success', 'تم إضافة الأوردر بنجاح');
+}
 
-  const handleDelete = (id: number) => {
-    salesStore.remove(id); setDeleteConfirm(null); toast('success', 'تم حذف الأوردر');
+await loadData();
+setModalOpen(false);
+};
+  const handleDelete = async (id: number) => {
+    await salesApi.remove(id);
+await loadData();; setDeleteConfirm(null); toast('success', 'تم حذف الأوردر');
   };
 
   // Invoice Print
@@ -178,13 +204,14 @@ export default function Sales() {
       toast('error', 'يرجى ملء رقم الأوردر وكود الموديل');
       return;
     }
-    returnsStore.add(returnForm);
+    await returnsApi.add(returnForm as any);
+await loadData();(returnForm);
     toast('success', 'تم تسجيل المرتجع — تم تحديث المخزون');
     setReturnsModalOpen(false);
   };
 
   const handleDeleteReturn = async (id: number) => {
-    try { await returnsStore.remove(id); toast('success', 'تم حذف المرتجع'); setDeleteReturnConfirm(null); await loadData(); }
+    try { await await returnsApi.remove(id);(id); toast('success', 'تم حذف المرتجع'); setDeleteReturnConfirm(null); await loadData(); }
     catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'خطأ'); }
   };
 
