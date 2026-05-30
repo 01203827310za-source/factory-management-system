@@ -44,7 +44,6 @@ function AppContent() {
   const { user, isLoading, isAuthenticated, logout, isAdmin } = useAuth();
   const toast = useToast();
   const [currentPage, setCurrentPage] = useState<ExtendedPage>('dashboard');
-  console.log('Current Page =', currentPage);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState('');
   const [userMenuOpen, setUserMenuOpen] = useState(false);
