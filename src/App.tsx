@@ -19,8 +19,7 @@ import { Menu, LogOut, User, ChevronDown, KeyRound } from 'lucide-react';
 import { authApi } from './services/api';
 import { useToast } from './components/Toast';
 import Modal from './components/Modal';
-import FinancialCenter from './pages/FinancialCenter';
-type ExtendedPage = Page | 'users' | 'financialCenter';
+type ExtendedPage = Page | 'users';
 
 function PageRenderer({ page }: { page: ExtendedPage }) {
   switch (page) {
@@ -35,7 +34,7 @@ function PageRenderer({ page }: { page: ExtendedPage }) {
     case 'clientAccts': return <ClientAccounts />;
     case 'debts':       return <Debts />;
     case 'users':       return <UsersPage />;
-    case 'financialCenter': return <FinancialCenter />;
+
     default:            return <Dashboard />;
   }
 }

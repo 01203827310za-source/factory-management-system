@@ -16,7 +16,6 @@ interface SidebarProps {
 
 const menuItems: { page: Page; label: string; icon: React.ReactNode }[] = [
   { page: 'dashboard', label: 'لوحة التحكم', icon: <LayoutDashboard size={20} /> },
-  { page: 'financialCenter', label: 'المركز المالي', icon: <Landmark size={20} /> },
   { page: 'fabric', label: 'مخزن القماش', icon: <Shirt size={20} /> },
   { page: 'readyStock', label: 'مخزن الاستوك', icon: <Package size={20} /> },
   { page: 'cutting', label: 'رقم القص', icon: <Scissors size={20} /> },
