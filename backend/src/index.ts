@@ -4,6 +4,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import financialCenterRouter from './routes/financialCenter';
+import reportsRouter from './routes/reports';
 import authRouter from './routes/auth';
 import usersRouter from './routes/users';
 import salesRouter from './routes/sales';
@@ -50,6 +51,7 @@ app.use('/api/returns', returnsRouter);
 app.use('/api/payment-log', paymentLogRouter);
 app.use('/api/marketers', marketersRouter);
 app.use('/api/fixed-assets', fixedAssetsRouter);
+app.use('/api/reports', reportsRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/financial-center', financialCenterRouter);
 

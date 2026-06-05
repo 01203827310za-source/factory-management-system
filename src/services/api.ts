@@ -367,6 +367,74 @@ export type FixedAssetRecord = {
   created_at: string;
 };
 
+// ===== REPORTS =====
+export const reportsApi = {
+  getReport: (from_date: string, to_date: string) =>
+    get<ReportData>(`/reports?from_date=${from_date}&to_date=${to_date}`),
+};
+
+export interface CapitalSnapshot {
+  stock_value: number;
+  fabric_value: number;
+  accessories_value: number;
+  client_accounts: number;
+  cash: number;
+  total_assets: number;
+  total_debts: number;
+  net_assets: number;
+}
+
+export interface ReportData {
+  summary: {
+    total_sales: number;
+    total_expenses: number;
+    net_profit: number;
+    total_reservations: number;
+    total_debts: number;
+  };
+  sales_report: {
+    total_orders: number;
+    total_invoice_value: number;
+    total_deposits: number;
+    total_remaining: number;
+    top_marketer: string;
+    top_model: string;
+    by_marketer: { marketer: string; count: number; value: number; remaining: number }[];
+  };
+  inventory_report: {
+    total_qty: number;
+    reserved_qty: number;
+    available_qty: number;
+    low_stock: { model_code: string; product_name: string; actual: number; reserved: number; available: number }[];
+    fabric_value: number;
+    fabric_balance_kg: number;
+    accessories_value: number;
+    accessories_balance: number;
+  };
+  financial_report: {
+    total_revenues: number;
+    total_expenses: number;
+    net_profit: number;
+  };
+  customers_report: {
+    top_clients: { client: string; value: number; remaining: number }[];
+    total_outstanding: number;
+    debts: { name: string; remaining: number }[];
+  };
+  reservations_report: {
+    count: number;
+    value: number;
+    items: { model_code: string; product_name: string; actual: number; reserved: number; available: number }[];
+    shortages: { model_code: string; product_name: string; actual: number; reserved: number; available: number }[];
+  };
+  capital_growth: {
+    start: CapitalSnapshot;
+    end: CapitalSnapshot;
+    growth_amount: number;
+    growth_percent: number | null;
+  };
+}
+
 // ===== FINANCIAL CENTER =====
 export const financialCenterApi = {
   getData: () => get<FinancialCenterData>('/financial-center'),

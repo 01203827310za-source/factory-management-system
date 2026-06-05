@@ -14,6 +14,7 @@ import ClientAccounts from './pages/ClientAccounts';
 import Debts from './pages/Debts';
 import UsersPage from './pages/Users';
 import FixedAssets from './pages/FixedAssets';
+import Reports from './pages/Reports';
 import Login from './pages/Login';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { Menu, LogOut, User, ChevronDown, KeyRound } from 'lucide-react';
@@ -35,6 +36,7 @@ function PageRenderer({ page }: { page: ExtendedPage }) {
     case 'clientAccts': return <ClientAccounts />;
     case 'debts':       return <Debts />;
     case 'fixedAssets': return <FixedAssets />;
+    case 'reports':     return <Reports />;
     case 'users':       return <UsersPage />;
 
     default:            return <Dashboard />;
