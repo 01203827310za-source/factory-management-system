@@ -436,7 +436,7 @@ exports.fixedAssetsRouter = (0, express_1.Router)();
 exports.fixedAssetsRouter.use(auth_1.authenticate);
 exports.fixedAssetsRouter.get('/', async (_req, res) => {
     try {
-        return res.json(await prisma_1.default.asset.findMany({ orderBy: { id: 'asc' } }));
+        return res.json(await prisma_1.default.fixedAsset.findMany({ orderBy: { id: 'asc' } }));
     }
     catch {
         return res.status(500).json({ message: 'خطأ في جلب البيانات' });
@@ -444,7 +444,7 @@ exports.fixedAssetsRouter.get('/', async (_req, res) => {
 });
 exports.fixedAssetsRouter.post('/', auth_1.requireManager, async (req, res) => {
     try {
-        return res.status(201).json(await prisma_1.default.asset.create({ data: req.body }));
+        return res.status(201).json(await prisma_1.default.fixedAsset.create({ data: req.body }));
     }
     catch {
         return res.status(500).json({ message: 'خطأ في الإضافة' });
@@ -452,7 +452,7 @@ exports.fixedAssetsRouter.post('/', auth_1.requireManager, async (req, res) => {
 });
 exports.fixedAssetsRouter.put('/:id', auth_1.requireManager, async (req, res) => {
     try {
-        return res.json(await prisma_1.default.asset.update({ where: { id: parseInt(req.params.id) }, data: req.body }));
+        return res.json(await prisma_1.default.fixedAsset.update({ where: { id: parseInt(req.params.id) }, data: req.body }));
     }
     catch {
         return res.status(500).json({ message: 'خطأ في التحديث' });
@@ -460,7 +460,7 @@ exports.fixedAssetsRouter.put('/:id', auth_1.requireManager, async (req, res) =>
 });
 exports.fixedAssetsRouter.delete('/:id', auth_1.requireManager, async (req, res) => {
     try {
-        await prisma_1.default.asset.delete({ where: { id: parseInt(req.params.id) } });
+        await prisma_1.default.fixedAsset.delete({ where: { id: parseInt(req.params.id) } });
         return res.json({ message: 'تم الحذف' });
     }
     catch {

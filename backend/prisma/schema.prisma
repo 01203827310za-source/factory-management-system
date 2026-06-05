@@ -240,3 +240,17 @@ model Asset {
 
   @@map("assets")
 }
+
+// ===== FIXED ASSETS =====
+model FixedAsset {
+  id                Int      @id @default(autoincrement())
+  name              String
+  category          String   @default("")
+  purchase_date     String
+  purchase_price    Float    @default(0)
+  useful_life_years Int      @default(1)
+  notes             String   @default("")
+  created_at        DateTime @default(now())
+
+  @@map("fixed_assets")
+}

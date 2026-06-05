@@ -358,9 +358,11 @@ export const fixedAssetsApi = {
 
 export type FixedAssetRecord = {
   id: number;
-  date: string;
-  asset_name: string;
-  value: number;
+  name: string;
+  category: string;
+  purchase_date: string;
+  purchase_price: number;
+  useful_life_years: number;
   notes: string;
   created_at: string;
 };

@@ -1,7 +1,8 @@
 import {
   LayoutDashboard, ClipboardList, DollarSign, Package, Scissors,
-  Shirt, CreditCard, BadgeDollarSign, Boxes, X, Search, Users, Landmark
+  Shirt, CreditCard, BadgeDollarSign, Boxes, X, Search, Landmark,
 } from 'lucide-react';
+import type { Page } from '../types';
 
 interface SidebarProps {
   currentPage: string;
@@ -25,6 +26,7 @@ const menuItems: { page: Page; label: string; icon: React.ReactNode }[] = [
   { page: 'debts', label: 'الديون', icon: <CreditCard size={20} /> },
   { page: 'clientAccts', label: 'حساب عميل', icon: <BadgeDollarSign size={20} /> },
   { page: 'accessories', label: 'مخزن الإكسسوارات', icon: <Boxes size={20} /> },
+  { page: 'fixedAssets', label: 'الأصول الثابتة', icon: <Landmark size={20} /> },
 ];
 
 export default function Sidebar({ currentPage, onNavigate, sidebarOpen, onToggleSidebar, globalSearch, onSearchChange, isAdmin, onUsersPage }: SidebarProps) {
