@@ -373,6 +373,35 @@ export const reportsApi = {
     get<ReportData>(`/reports?from_date=${from_date}&to_date=${to_date}`),
 };
 
+// ===== EMPLOYEE MOVEMENTS =====
+export interface EmployeeTransaction {
+  date: string;
+  type: string;
+  description: string;
+  client: string;
+  amount: number;
+  employee: string;
+  direction: 'in' | 'out';
+}
+
+export interface EmployeeMovementsData {
+  employee: string;
+  from_date: string;
+  to_date: string;
+  summary: {
+    total_received: number;
+    total_paid: number;
+    net_balance: number;
+    transaction_count: number;
+  };
+  transactions: EmployeeTransaction[];
+}
+
+export const employeeMovementsApi = {
+  get: (employee: string, from_date: string, to_date: string) =>
+    get<EmployeeMovementsData>(`/reports/employee-movements?employee=${encodeURIComponent(employee)}&from_date=${from_date}&to_date=${to_date}`),
+};
+
 export interface CapitalSnapshot {
   stock_value: number;
   fabric_value: number;

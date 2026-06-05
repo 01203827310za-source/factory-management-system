@@ -1,9 +1,9 @@
 import { useState, useRef } from 'react';
-import { reportsApi, type ReportData, type CapitalSnapshot } from '../services/api';
+import { reportsApi, type ReportData, employeeMovementsApi, type EmployeeMovementsData } from '../services/api';
 import { useToast } from '../components/Toast';
 import {
   BarChart2, Download, Printer, RefreshCw, TrendingUp, TrendingDown,
-  ShoppingCart, DollarSign, AlertTriangle, BookOpen, Users,
+  AlertTriangle, Users,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
@@ -470,6 +470,9 @@ function ReportBody({ data, fromDate, toDate }: { data: ReportData; fromDate: st
       {/* ── Section 7: Capital Growth ── */}
       <CapitalGrowthSection growth={capital_growth} fromDate={fromDate} toDate={toDate} />
 
+      {/* ── Section 8: Employee Movements ── */}
+      <EmployeeMovementsSection />
+
     </div>
   );
 }
@@ -492,12 +495,12 @@ function CapitalGrowthSection({
     {
       label: 'النمو المالي',
       value: `${isPositive ? '+' : ''}${fmt(growth_amount)}`,
-      color: (isPositive ? 'green' : 'red') as const,
+      color: isPositive ? 'green' : 'red',
     },
     {
       label: 'نسبة النمو %',
       value: growth_percent !== null ? `${isPositive ? '+' : ''}${fmtDec(growth_percent)}%` : '—',
-      color: (isPositive ? 'green' : 'red') as const,
+      color: isPositive ? 'green' : 'red',
     },
   ];
 
@@ -579,6 +582,186 @@ function CapitalGrowthSection({
   );
 }
 
-// keep unused imports quiet
-const _keep = { BookOpen, DollarSign, ShoppingCart };
-void _keep;
+// ─── Employee Movements Section ──────────────────────────────────────────────
+
+function EmployeeMovementsSection() {
+  const toast = useToast();
+  const [employee, setEmployee] = useState('all');
+  const [fromDate, setFromDate] = useState(firstOfMonth);
+  const [toDate, setToDate] = useState(today);
+  const [data, setData] = useState<EmployeeMovementsData | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const loadData = async () => {
+    if (fromDate > toDate) { toast('error', 'تاريخ البداية يجب أن يكون قبل تاريخ النهاية'); return; }
+    setLoading(true);
+    try {
+      setData(await employeeMovementsApi.get(employee, fromDate, toDate));
+    } catch (e: unknown) {
+      toast('error', e instanceof Error ? e.message : 'خطأ في تحميل البيانات');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const printStatement = () => {
+    if (!data) return;
+    const empLabel = data.employee === 'all' ? 'جميع الموظفين' : data.employee;
+    const rows = data.transactions.map(t => `
+      <tr>
+        <td>${t.date}</td>
+        <td>${t.type}</td>
+        <td>${t.description}</td>
+        <td>${t.client || '—'}</td>
+        <td style="color:${t.direction === 'in' ? 'green' : 'red'};font-weight:bold">
+          ${t.direction === 'in' ? '+' : '−'}${t.amount.toLocaleString('ar-EG')}
+        </td>
+        <td>${t.employee}</td>
+      </tr>
+    `).join('');
+
+    const html = `<!DOCTYPE html><html dir="rtl"><head>
+      <meta charset="UTF-8">
+      <title>كشف حساب - ${empLabel}</title>
+      <style>
+        body { font-family: Arial, sans-serif; padding: 20px; direction: rtl; }
+        h2 { color: #1e3a5f; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th { background: #1e3a5f; color: white; padding: 8px 12px; text-align: right; }
+        td { padding: 7px 12px; border-bottom: 1px solid #eee; font-size: 13px; }
+        tr:nth-child(even) { background: #f9f9f9; }
+        .summary { display: flex; gap: 20px; margin: 15px 0; flex-wrap: wrap; }
+        .card { border: 1px solid #ddd; border-radius: 8px; padding: 12px 18px; min-width: 140px; }
+        .card p { margin: 0; font-size: 12px; color: #666; }
+        .card h3 { margin: 4px 0 0; font-size: 18px; }
+        .green { color: green; } .red { color: red; }
+      </style>
+    </head><body>
+      <h2>كشف حساب موظف — ${empLabel}</h2>
+      <p>الفترة: ${data.from_date} → ${data.to_date}</p>
+      <div class="summary">
+        <div class="card"><p>إجمالي المقبوضات</p><h3 class="green">${data.summary.total_received.toLocaleString('ar-EG')}</h3></div>
+        <div class="card"><p>إجمالي المدفوعات</p><h3 class="red">${data.summary.total_paid.toLocaleString('ar-EG')}</h3></div>
+        <div class="card"><p>صافي العهدة</p><h3 class="${data.summary.net_balance >= 0 ? 'green' : 'red'}">${data.summary.net_balance.toLocaleString('ar-EG')}</h3></div>
+        <div class="card"><p>عدد العمليات</p><h3>${data.summary.transaction_count}</h3></div>
+      </div>
+      <table>
+        <thead><tr><th>التاريخ</th><th>النوع</th><th>البيان</th><th>العميل</th><th>المبلغ</th><th>الموظف</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <script>window.print();</script>
+    </body></html>`;
+
+    const win = window.open('', '_blank');
+    if (win) { win.document.write(html); win.document.close(); }
+  };
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+      <SectionHeader title="8. تقرير حركة الموظفين المالية" color="purple" />
+
+      {/* Filters */}
+      <div className="p-4 border-b border-gray-100 bg-gray-50 print:hidden">
+        <div className="flex flex-wrap items-end gap-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-600 mb-1">الموظف</label>
+            <select value={employee} onChange={e => setEmployee(e.target.value)}
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400">
+              <option value="all">جميع الموظفين</option>
+              <option value="حاتم">حاتم</option>
+              <option value="ميدو">ميدو</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-600 mb-1">من تاريخ</label>
+            <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)}
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-600 mb-1">إلى تاريخ</label>
+            <input type="date" value={toDate} onChange={e => setToDate(e.target.value)}
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
+          </div>
+          <button onClick={loadData} disabled={loading}
+            className="flex items-center gap-2 px-5 py-2 bg-purple-700 text-white text-sm rounded-lg hover:bg-purple-800 disabled:opacity-60">
+            {loading ? <RefreshCw size={15} className="animate-spin" /> : <Users size={15} />}
+            عرض الحركات
+          </button>
+          {data && (
+            <button onClick={printStatement}
+              className="flex items-center gap-2 px-4 py-2 bg-gray-700 text-white text-sm rounded-lg hover:bg-gray-800">
+              <Printer size={15} /> طباعة كشف حساب
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Summary cards */}
+      {data && (
+        <div className="p-4 border-b border-gray-100">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <MiniCard label="إجمالي المقبوضات" value={data.summary.total_received} color="green" />
+            <MiniCard label="إجمالي المدفوعات" value={data.summary.total_paid} color="red" />
+            <MiniCard label="صافي العهدة" value={data.summary.net_balance} color={data.summary.net_balance >= 0 ? 'blue' : 'red'} />
+            <MiniCard label="عدد العمليات" value={data.summary.transaction_count} color="gray" />
+          </div>
+        </div>
+      )}
+
+      {/* Transactions table */}
+      {data && data.transactions.length === 0 && (
+        <p className="p-5 text-sm text-gray-400 text-center">لا توجد حركات مالية في الفترة المحددة</p>
+      )}
+
+      {data && data.transactions.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-50">
+                <th className="px-3 py-3 text-right font-semibold text-gray-600">التاريخ</th>
+                <th className="px-3 py-3 text-right font-semibold text-gray-600">النوع</th>
+                <th className="px-3 py-3 text-right font-semibold text-gray-600">البيان</th>
+                <th className="px-3 py-3 text-right font-semibold text-gray-600">العميل</th>
+                <th className="px-3 py-3 text-center font-semibold text-gray-600">المبلغ</th>
+                <th className="px-3 py-3 text-center font-semibold text-gray-600">الموظف</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.transactions.map((t, i) => (
+                <tr key={i} className={`border-t border-gray-100 hover:bg-gray-50 ${t.direction === 'out' ? 'bg-red-50/30' : ''}`}>
+                  <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">{t.date}</td>
+                  <td className="px-3 py-2.5 text-gray-700">{t.type}</td>
+                  <td className="px-3 py-2.5 text-gray-600 max-w-xs truncate">{t.description}</td>
+                  <td className="px-3 py-2.5 text-gray-600">{t.client || '—'}</td>
+                  <td className={`px-3 py-2.5 text-center font-bold ${t.direction === 'in' ? 'text-emerald-700' : 'text-red-600'}`}>
+                    {t.direction === 'in' ? '+' : '−'}{fmt(t.amount)}
+                  </td>
+                  <td className="px-3 py-2.5 text-center">
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${t.employee === 'حاتم' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
+                      {t.employee}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="bg-gray-100 border-t-2 border-gray-300 font-bold">
+                <td colSpan={4} className="px-3 py-3 text-sm text-right text-gray-700">الإجمالي</td>
+                <td className="px-3 py-3 text-center text-sm">
+                  <span className="text-emerald-700">+{fmt(data.summary.total_received)}</span>
+                  <span className="text-gray-400 mx-1">/</span>
+                  <span className="text-red-600">−{fmt(data.summary.total_paid)}</span>
+                </td>
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+
+      {!data && !loading && (
+        <p className="p-5 text-sm text-gray-400 text-center">اختر الموظف والفترة الزمنية ثم اضغط «عرض الحركات»</p>
+      )}
+    </div>
+  );
+}

@@ -288,4 +288,161 @@ router.get('/', async (req: Request, res: Response) => {
   }
 });
 
+// ─── GET /api/reports/employee-movements ─────────────────────────────────────
+
+type EmpTx = {
+  date: string;
+  type: string;
+  description: string;
+  client: string;
+  amount: number;
+  employee: string;
+  direction: 'in' | 'out';
+};
+
+router.get('/employee-movements', async (req: Request, res: Response) => {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const fromDate = (req.query.from_date as string) || today;
+    const toDate = (req.query.to_date as string) || today;
+    const employeeFilter = (req.query.employee as string) || 'all';
+
+    const employees = employeeFilter === 'all' ? ['حاتم', 'ميدو'] : [employeeFilter];
+
+    const [sales, expenses, paymentLogs, returns_] = await Promise.all([
+      prisma.sale.findMany({ orderBy: { created_at: 'asc' } }),
+      prisma.expenseRevenue.findMany({ orderBy: { date: 'asc' } }),
+      prisma.paymentLog.findMany({ orderBy: { date: 'asc' } }),
+      prisma.returnItem.findMany({ orderBy: { date: 'asc' } }),
+    ]);
+
+    const inRange = (d: string) => d >= fromDate && d <= toDate;
+    const saleD = (s: typeof sales[0]) => s.created_at.toISOString().slice(0, 10);
+
+    const transactions: EmpTx[] = [];
+
+    for (const emp of employees) {
+      // 1. Order deposits (income)
+      sales
+        .filter(s => s.deposit_receiver === emp && s.deposit_paid > 0 && inRange(saleD(s)))
+        .forEach(s => transactions.push({
+          date: saleD(s),
+          type: 'عربون أوردر',
+          description: `أوردر رقم ${s.order_number}`,
+          client: s.client,
+          amount: s.deposit_paid,
+          employee: emp,
+          direction: 'in',
+        }));
+
+      // 2. Remaining payments — attributed to حاتم per existing business rule
+      if (emp === 'حاتم') {
+        sales
+          .filter(s => s.order_status === 'تم الصرف' && s.remaining > 0 && inRange(saleD(s)))
+          .forEach(s => transactions.push({
+            date: saleD(s),
+            type: 'متبقي أوردر',
+            description: `أوردر رقم ${s.order_number} — تم الصرف`,
+            client: s.client,
+            amount: s.remaining,
+            employee: emp,
+            direction: 'in',
+          }));
+      }
+
+      // 3. Client payment collections (income from PaymentLog)
+      paymentLogs
+        .filter(p => p.receiver === emp && p.type === 'client_payment' && p.amount > 0 && inRange(p.date))
+        .forEach(p => transactions.push({
+          date: p.date,
+          type: 'تحصيل من عميل',
+          description: p.description || 'تحصيل',
+          client: '',
+          amount: p.amount,
+          employee: emp,
+          direction: 'in',
+        }));
+
+      // 4. Other income from expenses module
+      expenses
+        .filter(e => inRange(e.date) && (emp === 'حاتم' ? e.hatem_in : e.mido_in) > 0)
+        .forEach(e => {
+          const amount = emp === 'حاتم' ? e.hatem_in : e.mido_in;
+          transactions.push({
+            date: e.date,
+            type: `إيراد — ${e.operation_type}`,
+            description: e.statement,
+            client: '',
+            amount,
+            employee: emp,
+            direction: 'in',
+          });
+        });
+
+      // 5. Factory expenses / outgoing from expenses module
+      expenses
+        .filter(e => inRange(e.date) && (emp === 'حاتم' ? e.hatem_out : e.mido_out) > 0)
+        .forEach(e => {
+          const amount = emp === 'حاتم' ? e.hatem_out : e.mido_out;
+          transactions.push({
+            date: e.date,
+            type: `مصروف — ${e.operation_type}`,
+            description: e.statement,
+            client: '',
+            amount,
+            employee: emp,
+            direction: 'out',
+          });
+        });
+
+      // 6. Debt / supplier payments (outgoing from PaymentLog)
+      paymentLogs
+        .filter(p => p.receiver === emp && p.type === 'debt_payment' && p.amount > 0 && inRange(p.date))
+        .forEach(p => transactions.push({
+          date: p.date,
+          type: 'سداد دين',
+          description: p.description || 'سداد ديون',
+          client: '',
+          amount: p.amount,
+          employee: emp,
+          direction: 'out',
+        }));
+
+      // 7. Refunds paid (outgoing from ReturnItems)
+      returns_
+        .filter(r => r.paid_by === emp && r.refund_amount > 0 && inRange(r.date))
+        .forEach(r => transactions.push({
+          date: r.date,
+          type: 'مرتجع',
+          description: `مرتجع أوردر ${r.order_number}`,
+          client: r.client_name,
+          amount: r.refund_amount,
+          employee: emp,
+          direction: 'out',
+        }));
+    }
+
+    transactions.sort((a, b) => a.date.localeCompare(b.date) || a.employee.localeCompare(b.employee));
+
+    const totalReceived = transactions.filter(t => t.direction === 'in').reduce((s, t) => s + t.amount, 0);
+    const totalPaid = transactions.filter(t => t.direction === 'out').reduce((s, t) => s + t.amount, 0);
+
+    return res.json({
+      employee: employeeFilter,
+      from_date: fromDate,
+      to_date: toDate,
+      summary: {
+        total_received: totalReceived,
+        total_paid: totalPaid,
+        net_balance: totalReceived - totalPaid,
+        transaction_count: transactions.length,
+      },
+      transactions,
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'خطأ في إنشاء تقرير حركة الموظفين' });
+  }
+});
+
 export default router;
