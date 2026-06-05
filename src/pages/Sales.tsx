@@ -153,16 +153,20 @@ readyStock.forEach((s: any) => {
       delivery_method: form.delivery_method, warehouse: form.warehouse, shipping_collected: form.shipping_collected,
       row_number: sales.length + 1,
     };
-    if (editSale) {
-  await salesApi.update(editSale.id, data as any);
-  toast('success', 'تم تعديل الأوردر بنجاح');
-} else {
-  await salesApi.add(data as any);
-  toast('success', 'تم إضافة الأوردر بنجاح');
-}
-
-await loadData();
-setModalOpen(false);
+    try {
+      if (editSale) {
+        await salesApi.update(editSale.id, data as any);
+        toast('success', 'تم تعديل الأوردر بنجاح');
+      } else {
+        await salesApi.add(data as any);
+        toast('success', form.order_status === 'تم الحجز' ? 'تم إضافة الحجز بنجاح' : 'تم إضافة الأوردر بنجاح');
+      }
+      await loadData();
+      setModalOpen(false);
+      setIsReservation(false);
+    } catch (e: unknown) {
+      toast('error', e instanceof Error ? e.message : 'خطأ في الحفظ');
+    }
 };
   const handleDelete = async (id: number) => {
     await salesApi.remove(id);

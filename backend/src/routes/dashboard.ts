@@ -108,7 +108,9 @@ router.get('/', async (_req: Request, res: Response) => {
       const sold = totalSalesQty[rs.model_code] || 0;
       const returned = returnQty[rs.model_code] || 0;
       const actual = Math.max(0, rs.opening_balance + prod - sold + returned);
-      stockValue += actual * rs.cost_per_piece;
+      // Use available (not reserved) quantity for stock valuation
+      const available = Math.max(0, actual - rs.reserved_quantity);
+      stockValue += available * rs.cost_per_piece;
     });
 
     const accessoriesValue = accessories.reduce((s, a) => s + Math.max(0, a.qty_in - a.qty_consumed) * a.cost, 0);

@@ -46,6 +46,7 @@ export interface ReadyStock {
   location: string;
   mido_stock: number;
   hatem_stock: number;
+  reserved_quantity: number;
 }
 
 export interface ComputedReadyStock extends ReadyStock {

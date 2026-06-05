@@ -18,7 +18,7 @@ export default function ReadyStock() {
   const [editItem, setEditItem] = useState<ReadyStock | null>(null);
   const [search, setSearch] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
-  const emptyForm = { model_code: '', product_name: '', color: '', opening_balance: 0, cost_per_piece: 0, location: '', mido_stock: 0, hatem_stock: 0 };
+  const emptyForm = { model_code: '', product_name: '', color: '', opening_balance: 0, cost_per_piece: 0, location: '', mido_stock: 0, hatem_stock: 0, reserved_quantity: 0 };
   const [form, setForm] = useState(emptyForm);
 
   const loadData = async () => {
@@ -59,7 +59,7 @@ export default function ReadyStock() {
   }, [items, search]);
 
   const exportExcel = () => {
-    const ws = XLSX.utils.json_to_sheet(items.map(r => ({ 'كود الموديل': r.model_code, 'اسم الصنف': r.product_name, 'اللون': r.color, 'رصيد أول': r.opening_balance, 'إنتاج جديد': r.new_production, 'إجمالي المبيعات': r.total_sales, 'الرصيد الفعلي': r.actual_balance, 'تكلفة القطعة': r.cost_per_piece, 'المكان': r.location })));
+    const ws = XLSX.utils.json_to_sheet(items.map(r => ({ 'كود الموديل': r.model_code, 'اسم الصنف': r.product_name, 'اللون': r.color, 'رصيد أول': r.opening_balance, 'إنتاج جديد': r.new_production, 'إجمالي المبيعات': r.total_sales, 'المرتجعات': r.total_returns, 'الرصيد الفعلي': r.actual_balance, 'محجوز': r.reserved_quantity, 'المتاح': r.available_quantity, 'تكلفة القطعة': r.cost_per_piece, 'المكان': r.location })));
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'الاستوك'); XLSX.writeFile(wb, 'ready_stock_export.xlsx');
   };
 
@@ -80,13 +80,13 @@ export default function ReadyStock() {
         <div className="overflow-x-auto">
           <table className="w-full text-sm whitespace-nowrap">
             <thead><tr className="bg-[#1e3a5f] text-white">
-              {['#','كود الموديل','اسم الصنف','اللون','رصيد أول','إنتاج جديد 🔄','إجمالي مبيعات 🔄','المرتجعات 🔄','الرصيد الفعلي 🔄','تكلفة القطعة','المكان','إجراءات'].map(h => <th key={h} className="px-3 py-3 text-center font-semibold">{h}</th>)}
+              {['#','كود الموديل','اسم الصنف','اللون','رصيد أول','إنتاج جديد 🔄','إجمالي مبيعات 🔄','المرتجعات 🔄','الرصيد الفعلي 🔄','محجوز 🔒','المتاح ✅','تكلفة القطعة','المكان','إجراءات'].map(h => <th key={h} className="px-3 py-3 text-center font-semibold">{h}</th>)}
             </tr></thead>
             <tbody>
-              {loading && <tr><td colSpan={12} className="text-center py-8 text-gray-400"><RefreshCw size={16} className="animate-spin inline mr-2" />جارٍ التحميل...</td></tr>}
-              {!loading && filtered.length === 0 && <tr><td colSpan={12} className="text-center py-8 text-gray-400">لا توجد بيانات</td></tr>}
+              {loading && <tr><td colSpan={14} className="text-center py-8 text-gray-400"><RefreshCw size={16} className="animate-spin inline mr-2" />جارٍ التحميل...</td></tr>}
+              {!loading && filtered.length === 0 && <tr><td colSpan={14} className="text-center py-8 text-gray-400">لا توجد بيانات</td></tr>}
               {filtered.map((item, idx) => (
-                <tr key={item.id} className={`border-t border-gray-100 hover:bg-blue-50/40 transition ${item.actual_balance < 3 ? 'bg-red-50' : item.actual_balance <= 10 ? 'bg-amber-50' : ''}`}>
+                <tr key={item.id} className={`border-t border-gray-100 hover:bg-blue-50/40 transition ${item.available_quantity < 3 ? 'bg-red-50' : item.available_quantity <= 10 ? 'bg-amber-50' : ''}`}>
                   <td className="px-3 py-3 text-center text-gray-500">{idx + 1}</td>
                   <td className="px-3 py-3 font-medium">{item.model_code}</td>
                   <td className="px-3 py-3">{item.product_name}</td>
@@ -95,7 +95,15 @@ export default function ReadyStock() {
                   <td className="px-3 py-3 text-center font-semibold text-emerald-600">{item.new_production.toLocaleString('ar-EG')}</td>
                   <td className="px-3 py-3 text-center text-red-600">{item.total_sales.toLocaleString('ar-EG')}</td>
                   <td className="px-3 py-3 text-center text-emerald-600 font-semibold">{item.total_returns.toLocaleString('ar-EG')}</td>
-                  <td className={`px-3 py-3 text-center font-bold ${item.actual_balance < 3 ? 'text-red-700' : item.actual_balance <= 10 ? 'text-amber-700' : 'text-gray-800'}`}>{item.actual_balance.toLocaleString('ar-EG')}</td>
+                  <td className="px-3 py-3 text-center font-bold text-gray-700">{item.actual_balance.toLocaleString('ar-EG')}</td>
+                  <td className="px-3 py-3 text-center">
+                    {item.reserved_quantity > 0
+                      ? <span className="inline-block bg-orange-100 text-orange-700 text-xs font-semibold px-2 py-0.5 rounded-full">{item.reserved_quantity.toLocaleString('ar-EG')}</span>
+                      : <span className="text-gray-300">—</span>}
+                  </td>
+                  <td className={`px-3 py-3 text-center font-bold ${item.available_quantity < 3 ? 'text-red-700' : item.available_quantity <= 10 ? 'text-amber-700' : 'text-emerald-700'}`}>
+                    {item.available_quantity.toLocaleString('ar-EG')}
+                  </td>
                   <td className="px-3 py-3 text-center">{item.cost_per_piece.toLocaleString('ar-EG')}</td>
                   <td className="px-3 py-3 text-center text-xs">{item.location}</td>
                   <td className="px-3 py-3 text-center"><div className="flex items-center justify-center gap-1">

@@ -146,6 +146,7 @@ export type ReadyStockRecord = {
   location: string;
   mido_stock: number;
   hatem_stock: number;
+  reserved_quantity: number;
 };
 
 // ===== FABRIC =====

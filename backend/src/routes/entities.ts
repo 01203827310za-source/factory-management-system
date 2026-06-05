@@ -42,8 +42,14 @@ readyStockRouter.post('/', requireManager, async (req, res) => {
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 readyStockRouter.put('/:id', requireManager, async (req, res) => {
-  try { return res.json(await prisma.readyStock.update({ where: { id: parseInt(req.params.id as string) }, data: req.body })); }
-  catch { return res.status(500).json({ message: 'خطأ' }); }
+  try {
+    // Strip reserved_quantity — it is managed exclusively by the reservation workflow
+    const { reserved_quantity: _ignored, ...safeData } = req.body;
+    return res.json(await prisma.readyStock.update({
+      where: { id: parseInt(req.params.id as string) },
+      data: safeData,
+    }));
+  } catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 readyStockRouter.delete('/:id', requireManager, async (req, res) => {
   try { await prisma.readyStock.delete({ where: { id: parseInt(req.params.id as string) } }); return res.json({ message: 'تم' }); }

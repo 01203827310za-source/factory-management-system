@@ -86,15 +86,16 @@ model ExpenseRevenue {
 
 // ===== READY STOCK =====
 model ReadyStock {
-  id              Int    @id @default(autoincrement())
-  model_code      String
-  product_name    String
-  color           String @default("")
-  opening_balance Int    @default(0)
-  cost_per_piece  Float  @default(0)
-  location        String @default("")
-  mido_stock      Int    @default(0)
-  hatem_stock     Int    @default(0)
+  id                Int    @id @default(autoincrement())
+  model_code        String
+  product_name      String
+  color             String @default("")
+  opening_balance   Int    @default(0)
+  cost_per_piece    Float  @default(0)
+  location          String @default("")
+  mido_stock        Int    @default(0)
+  hatem_stock       Int    @default(0)
+  reserved_quantity Int    @default(0)
 
   @@map("ready_stock")
 }
