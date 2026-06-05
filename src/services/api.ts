@@ -174,6 +174,9 @@ export const fabricPurchasesApi = {
   getAll: () => get<FabricPurchaseRecord[]>('/fabric-purchases'),
   add: (data: Omit<FabricPurchaseRecord, 'id' | 'total_cost' | 'created_at'>) =>
     post<FabricPurchaseRecord>('/fabric-purchases', data),
+  update: (id: number, data: Omit<FabricPurchaseRecord, 'id' | 'total_cost' | 'created_at'>) =>
+    put<FabricPurchaseRecord>(`/fabric-purchases/${id}`, data),
+  remove: (id: number) => del<{ message: string }>(`/fabric-purchases/${id}`),
 };
 
 export type FabricPurchaseRecord = {

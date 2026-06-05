@@ -28,6 +28,8 @@ export default function FabricWarehouse() {
   const [search, setSearch] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
   const [showPurchaseLog, setShowPurchaseLog] = useState(true);
+  const [editPurchaseItem, setEditPurchaseItem] = useState<FabricPurchaseRecord | null>(null);
+  const [deletePurchaseConfirm, setDeletePurchaseConfirm] = useState<number | null>(null);
   const emptyForm = { date: '', material_type: '', color: '', qty_in: 0, cost_per_kg: 0 };
   const [form, setForm] = useState(emptyForm);
   const [purchaseForm, setPurchaseForm] = useState(emptyPurchaseForm);
@@ -96,6 +98,16 @@ export default function FabricWarehouse() {
     catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'خطأ'); }
   };
 
+  const openEditPurchase = (p: FabricPurchaseRecord) => {
+    setEditPurchaseItem(p);
+    setPurchaseForm({
+      date: p.date, fabric_type: p.fabric_type, color: p.color,
+      quantity_kg: p.quantity_kg, price_per_kg: p.price_per_kg,
+      supplier: p.supplier, invoice_no: p.invoice_no, notes: p.notes,
+    });
+    setPurchaseModalOpen(true);
+  };
+
   const handleSavePurchase = async () => {
     if (!purchaseForm.fabric_type) { toast('error', 'يرجى تحديد الصنف'); return; }
     if (purchaseForm.quantity_kg <= 0) { toast('error', 'الكمية يجب أن تكون أكبر من صفر'); return; }
@@ -103,13 +115,31 @@ export default function FabricWarehouse() {
     if (!purchaseForm.date) { toast('error', 'يرجى تحديد التاريخ'); return; }
     setSaving(true);
     try {
-      await fabricPurchasesApi.add(purchaseForm);
-      toast('success', 'تم حفظ المشتريات وتحديث المخزون');
+      if (editPurchaseItem) {
+        await fabricPurchasesApi.update(editPurchaseItem.id, purchaseForm);
+        toast('success', 'تم تعديل المشتريات وتحديث المخزون');
+      } else {
+        await fabricPurchasesApi.add(purchaseForm);
+        toast('success', 'تم حفظ المشتريات وتحديث المخزون');
+      }
       setPurchaseModalOpen(false);
+      setEditPurchaseItem(null);
       setPurchaseForm(emptyPurchaseForm);
       await loadData();
     } catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'خطأ'); }
     finally { setSaving(false); }
+  };
+
+  const handleDeletePurchase = async (id: number) => {
+    try {
+      await fabricPurchasesApi.remove(id);
+      toast('success', 'تم حذف المشتريات وتحديث المخزون');
+      setDeletePurchaseConfirm(null);
+      await loadData();
+    } catch (e: unknown) {
+      toast('error', e instanceof Error ? e.message : 'خطأ');
+      setDeletePurchaseConfirm(null);
+    }
   };
 
   const filtered = useMemo(() => {
@@ -235,13 +265,13 @@ export default function FabricWarehouse() {
             <table className="w-full text-sm whitespace-nowrap">
               <thead>
                 <tr className="bg-orange-600 text-white">
-                  {['#','التاريخ','الصنف','اللون','الكمية (كجم)','سعر الكيلو','الإجمالي','المورد','رقم الفاتورة','ملاحظات']
+                  {['#','التاريخ','الصنف','اللون','الكمية (كجم)','سعر الكيلو','الإجمالي','المورد','رقم الفاتورة','ملاحظات','إجراءات']
                     .map(h => <th key={h} className="px-4 py-3 text-center font-semibold">{h}</th>)}
                 </tr>
               </thead>
               <tbody>
                 {purchases.length === 0 && (
-                  <tr><td colSpan={10} className="text-center py-6 text-gray-400">لا توجد مشتريات مسجلة</td></tr>
+                  <tr><td colSpan={11} className="text-center py-6 text-gray-400">لا توجد مشتريات مسجلة</td></tr>
                 )}
                 {purchases.map((p, idx) => (
                   <tr key={p.id} className="border-t border-gray-100 hover:bg-orange-50/30 transition">
@@ -255,6 +285,12 @@ export default function FabricWarehouse() {
                     <td className="px-4 py-3 text-center">{p.supplier || '—'}</td>
                     <td className="px-4 py-3 text-center text-xs">{p.invoice_no || '—'}</td>
                     <td className="px-4 py-3 text-center text-xs text-gray-500">{p.notes || '—'}</td>
+                    <td className="px-4 py-3 text-center">
+                      <div className="flex items-center justify-center gap-1">
+                        <button onClick={() => openEditPurchase(p)} className="p-1.5 text-blue-600 hover:bg-blue-100 rounded-lg" title="تعديل"><Edit2 size={15} /></button>
+                        <button onClick={() => setDeletePurchaseConfirm(p.id)} className="p-1.5 text-red-600 hover:bg-red-100 rounded-lg" title="حذف"><Trash2 size={15} /></button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
                 {purchases.length > 0 && (
@@ -263,7 +299,7 @@ export default function FabricWarehouse() {
                     <td className="px-4 py-3 text-center text-emerald-700">{fmt(purchases.reduce((s, p) => s + p.quantity_kg, 0))}</td>
                     <td className="px-4 py-3"></td>
                     <td className="px-4 py-3 text-center text-blue-700">{fmt(purchases.reduce((s, p) => s + p.total_cost, 0))}</td>
-                    <td colSpan={3}></td>
+                    <td colSpan={4}></td>
                   </tr>
                 )}
               </tbody>
@@ -287,8 +323,8 @@ export default function FabricWarehouse() {
         </div>
       </Modal>
 
-      {/* Purchase modal */}
-      <Modal isOpen={purchaseModalOpen} onClose={() => setPurchaseModalOpen(false)} title="إضافة مشتريات قماش" size="lg">
+      {/* Purchase modal (add / edit) */}
+      <Modal isOpen={purchaseModalOpen} onClose={() => { setPurchaseModalOpen(false); setEditPurchaseItem(null); setPurchaseForm(emptyPurchaseForm); }} title={editPurchaseItem ? 'تعديل مشتريات قماش' : 'إضافة مشتريات قماش'} size="lg">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className={lc}>التاريخ *</label>
@@ -338,8 +374,8 @@ export default function FabricWarehouse() {
           </div>
         </div>
 
-        {/* Live preview: current stock + weighted average */}
-        {purchaseMatchRow && (
+        {/* Live preview: only shown in add mode */}
+        {!editPurchaseItem && purchaseMatchRow && (
           <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-xl text-sm space-y-1">
             <p className="font-bold text-blue-800 mb-1">📦 المخزون الحالي — {purchaseForm.fabric_type} / {purchaseForm.color || '—'}</p>
             <div className="grid grid-cols-2 gap-x-6 text-blue-700">
@@ -354,26 +390,41 @@ export default function FabricWarehouse() {
             </div>
           </div>
         )}
-        {!purchaseMatchRow && purchaseForm.fabric_type && (
+        {!editPurchaseItem && !purchaseMatchRow && purchaseForm.fabric_type && (
           <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
             ⚠️ لا يوجد صنف مطابق في المخزون — سيتم إنشاء سجل جديد تلقائياً
           </div>
         )}
+        {editPurchaseItem && (
+          <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-xl text-sm text-blue-800">
+            ℹ️ سيتم إعادة حساب متوسط التكلفة وكمية المخزون تلقائياً بعد الحفظ
+          </div>
+        )}
 
         <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-200">
-          <button onClick={() => setPurchaseModalOpen(false)} className="px-5 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">إلغاء</button>
+          <button onClick={() => { setPurchaseModalOpen(false); setEditPurchaseItem(null); setPurchaseForm(emptyPurchaseForm); }} className="px-5 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">إلغاء</button>
           <button onClick={handleSavePurchase} disabled={saving} className="px-5 py-2 text-sm bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-60">
-            {saving ? 'جارٍ الحفظ...' : 'حفظ المشتريات'}
+            {saving ? 'جارٍ الحفظ...' : editPurchaseItem ? 'حفظ التعديلات' : 'حفظ المشتريات'}
           </button>
         </div>
       </Modal>
 
-      {/* Delete confirm modal */}
+      {/* Delete confirm modal — warehouse entry */}
       <Modal isOpen={deleteConfirm !== null} onClose={() => setDeleteConfirm(null)} title="تأكيد الحذف" size="sm">
         <p className="text-gray-600">هل أنت متأكد؟</p>
         <div className="flex justify-end gap-3 mt-6">
           <button onClick={() => setDeleteConfirm(null)} className="px-5 py-2 text-sm border border-gray-300 rounded-lg">إلغاء</button>
           <button onClick={() => deleteConfirm !== null && handleDelete(deleteConfirm)} className="px-5 py-2 text-sm bg-red-600 text-white rounded-lg">حذف</button>
+        </div>
+      </Modal>
+
+      {/* Delete confirm modal — purchase record */}
+      <Modal isOpen={deletePurchaseConfirm !== null} onClose={() => setDeletePurchaseConfirm(null)} title="تأكيد حذف المشترى" size="sm">
+        <p className="text-gray-600 mb-1">هل أنت متأكد من حذف هذه العملية؟</p>
+        <p className="text-sm text-orange-700">سيتم عكس الكمية وإعادة حساب متوسط التكلفة تلقائياً.</p>
+        <div className="flex justify-end gap-3 mt-6">
+          <button onClick={() => setDeletePurchaseConfirm(null)} className="px-5 py-2 text-sm border border-gray-300 rounded-lg">إلغاء</button>
+          <button onClick={() => deletePurchaseConfirm !== null && handleDeletePurchase(deletePurchaseConfirm)} className="px-5 py-2 text-sm bg-red-600 text-white rounded-lg">حذف</button>
         </div>
       </Modal>
     </div>

@@ -347,6 +347,152 @@ fabricPurchasesRouter.post('/', requireManager, async (req: Request, res: Respon
   }
 });
 
+fabricPurchasesRouter.put('/:id', requireManager, async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id as string);
+    const { date, fabric_type, color, quantity_kg, price_per_kg, supplier, invoice_no, notes } = req.body;
+    const newQty = parseFloat(quantity_kg) || 0;
+    const newPrice = parseFloat(price_per_kg) || 0;
+    if (!fabric_type || newQty <= 0 || newPrice <= 0) {
+      return res.status(400).json({ message: 'يرجى تحديد الصنف والكمية والسعر' });
+    }
+    const cleanColor = (color || '').trim();
+
+    const result = await prisma.$transaction(async (tx) => {
+      const existing = await tx.fabricPurchase.findUnique({ where: { id } });
+      if (!existing) throw new Error('NOT_FOUND');
+
+      const warehouse = await tx.fabricWarehouse.findFirst({
+        where: { material_type: existing.fabric_type, color: existing.color },
+      });
+      if (!warehouse) throw new Error('WAREHOUSE_NOT_FOUND');
+
+      // Get all purchases to compute baseQty
+      const allPurchases = await tx.fabricPurchase.findMany({
+        where: { fabric_type: existing.fabric_type, color: existing.color },
+        orderBy: { id: 'asc' },
+      });
+      const currentPurchaseTotalQty = allPurchases.reduce((s, p) => s + p.quantity_kg, 0);
+      const baseQty = Math.max(0, warehouse.qty_in - currentPurchaseTotalQty);
+      const baseCost = warehouse.cost_per_kg;
+
+      // Safety: if reducing quantity, check cutting consumption
+      if (newQty < existing.quantity_kg) {
+        const cutting = await tx.cuttingOrder.findMany({
+          where: { material_type: existing.fabric_type, color: existing.color },
+        });
+        const totalConsumed = cutting.reduce((s, c) => s + c.kg_consumed, 0);
+        const newTotalQty = baseQty + (currentPurchaseTotalQty - existing.quantity_kg + newQty);
+        if (newTotalQty < totalConsumed) throw new Error('CONSUMED');
+      }
+
+      // Build updated purchase list: replace old with new values
+      const afterPurchases = allPurchases.map(p =>
+        p.id === id
+          ? { quantity_kg: newQty, price_per_kg: newPrice }
+          : { quantity_kg: p.quantity_kg, price_per_kg: p.price_per_kg }
+      );
+      const newPurchaseTotalQty = afterPurchases.reduce((s, p) => s + p.quantity_kg, 0);
+      const newTotalQty = baseQty + newPurchaseTotalQty;
+      const weightedSum = baseQty * baseCost + afterPurchases.reduce((s, p) => s + p.quantity_kg * p.price_per_kg, 0);
+      const newAvg = newTotalQty > 0 ? weightedSum / newTotalQty : newPrice;
+      const lastPurchase = afterPurchases[afterPurchases.length - 1];
+
+      await tx.fabricWarehouse.update({
+        where: { id: warehouse.id },
+        data: {
+          qty_in: newTotalQty,
+          avg_cost_per_kg: Math.round(newAvg * 100) / 100,
+          last_purchase_price: lastPurchase?.price_per_kg ?? baseCost,
+        },
+      });
+
+      return tx.fabricPurchase.update({
+        where: { id },
+        data: {
+          date, fabric_type, color: cleanColor,
+          quantity_kg: newQty, price_per_kg: newPrice,
+          total_cost: Math.round(newQty * newPrice * 100) / 100,
+          supplier: supplier || '', invoice_no: invoice_no || '', notes: notes || '',
+        },
+      });
+    });
+
+    return res.json(result);
+  } catch (err: unknown) {
+    if (err instanceof Error) {
+      if (err.message === 'NOT_FOUND') return res.status(404).json({ message: 'العملية غير موجودة' });
+      if (err.message === 'CONSUMED') return res.status(400).json({ message: 'لا يمكن حذف أو تقليل هذه العملية لأن جزءاً من الكمية تم استهلاكه بالفعل.' });
+      if (err.message === 'WAREHOUSE_NOT_FOUND') return res.status(404).json({ message: 'سجل المخزون غير موجود' });
+    }
+    console.error(err);
+    return res.status(500).json({ message: 'خطأ في تعديل المشترى' });
+  }
+});
+
+fabricPurchasesRouter.delete('/:id', requireManager, async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id as string);
+
+    await prisma.$transaction(async (tx) => {
+      const existing = await tx.fabricPurchase.findUnique({ where: { id } });
+      if (!existing) throw new Error('NOT_FOUND');
+
+      const warehouse = await tx.fabricWarehouse.findFirst({
+        where: { material_type: existing.fabric_type, color: existing.color },
+      });
+      if (!warehouse) throw new Error('WAREHOUSE_NOT_FOUND');
+
+      const allPurchases = await tx.fabricPurchase.findMany({
+        where: { fabric_type: existing.fabric_type, color: existing.color },
+        orderBy: { id: 'asc' },
+      });
+      const currentPurchaseTotalQty = allPurchases.reduce((s, p) => s + p.quantity_kg, 0);
+      const baseQty = Math.max(0, warehouse.qty_in - currentPurchaseTotalQty);
+      const baseCost = warehouse.cost_per_kg;
+
+      const afterPurchases = allPurchases
+        .filter(p => p.id !== id)
+        .map(p => ({ quantity_kg: p.quantity_kg, price_per_kg: p.price_per_kg }));
+
+      const newPurchaseTotalQty = afterPurchases.reduce((s, p) => s + p.quantity_kg, 0);
+      const newTotalQty = baseQty + newPurchaseTotalQty;
+
+      // Safety: ensure remaining stock covers cutting consumption
+      const cutting = await tx.cuttingOrder.findMany({
+        where: { material_type: existing.fabric_type, color: existing.color },
+      });
+      const totalConsumed = cutting.reduce((s, c) => s + c.kg_consumed, 0);
+      if (newTotalQty < totalConsumed) throw new Error('CONSUMED');
+
+      const weightedSum = baseQty * baseCost + afterPurchases.reduce((s, p) => s + p.quantity_kg * p.price_per_kg, 0);
+      const newAvg = newTotalQty > 0 ? weightedSum / newTotalQty : baseCost;
+      const lastPurchase = afterPurchases[afterPurchases.length - 1];
+
+      await tx.fabricWarehouse.update({
+        where: { id: warehouse.id },
+        data: {
+          qty_in: newTotalQty,
+          avg_cost_per_kg: Math.round(newAvg * 100) / 100,
+          last_purchase_price: lastPurchase?.price_per_kg ?? baseCost,
+        },
+      });
+
+      await tx.fabricPurchase.delete({ where: { id } });
+    });
+
+    return res.json({ message: 'تم الحذف' });
+  } catch (err: unknown) {
+    if (err instanceof Error) {
+      if (err.message === 'NOT_FOUND') return res.status(404).json({ message: 'العملية غير موجودة' });
+      if (err.message === 'CONSUMED') return res.status(400).json({ message: 'لا يمكن حذف أو تقليل هذه العملية لأن جزءاً من الكمية تم استهلاكه بالفعل.' });
+      if (err.message === 'WAREHOUSE_NOT_FOUND') return res.status(404).json({ message: 'سجل المخزون غير موجود' });
+    }
+    console.error(err);
+    return res.status(500).json({ message: 'خطأ في حذف المشترى' });
+  }
+});
+
 // ===== FIXED ASSETS =====
 export const fixedAssetsRouter = Router();
 fixedAssetsRouter.use(authenticate);
