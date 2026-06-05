@@ -698,13 +698,29 @@ function EmployeeMovementsSection() {
 
       {/* Summary cards */}
       {data && (
-        <div className="p-4 border-b border-gray-100">
+        <div className="p-4 border-b border-gray-100 space-y-4">
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <MiniCard label="إجمالي المقبوضات" value={data.summary.total_received} color="green" />
             <MiniCard label="إجمالي المدفوعات" value={data.summary.total_paid} color="red" />
             <MiniCard label="صافي العهدة" value={data.summary.net_balance} color={data.summary.net_balance >= 0 ? 'blue' : 'red'} />
             <MiniCard label="عدد العمليات" value={data.summary.transaction_count} color="gray" />
           </div>
+
+          {/* Expenses & Revenues module breakdown — for verification */}
+          {Object.keys(data.expenses_breakdown).length > 0 && (
+            <div className="bg-purple-50 border border-purple-200 rounded-xl p-3">
+              <p className="text-xs font-semibold text-purple-700 mb-2">تحقق — حصة مصاريف وإيرادات في هذه الفترة</p>
+              <div className="flex flex-wrap gap-4">
+                {Object.entries(data.expenses_breakdown).map(([emp, bd]) => (
+                  <div key={emp} className="text-xs text-purple-800 space-y-0.5">
+                    <p className="font-bold">{emp}</p>
+                    <p>وارد: <span className="font-semibold text-emerald-700">{fmt(bd.exp_in)}</span></p>
+                    <p>منصرف: <span className="font-semibold text-red-600">{fmt(bd.exp_out)}</span></p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

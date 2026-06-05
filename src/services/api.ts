@@ -394,6 +394,7 @@ export interface EmployeeMovementsData {
     net_balance: number;
     transaction_count: number;
   };
+  expenses_breakdown: Record<string, { exp_in: number; exp_out: number }>;
   transactions: EmployeeTransaction[];
 }
 

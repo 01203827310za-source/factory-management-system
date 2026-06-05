@@ -322,7 +322,9 @@ router.get('/employee-movements', async (req: Request, res: Response) => {
     const transactions: EmpTx[] = [];
 
     for (const emp of employees) {
-      // 1. Order deposits (income)
+      const isHatem = emp === 'حاتم';
+
+      // 1. Order deposits (income) — Sales module
       sales
         .filter(s => s.deposit_receiver === emp && s.deposit_paid > 0 && inRange(saleD(s)))
         .forEach(s => transactions.push({
@@ -335,8 +337,8 @@ router.get('/employee-movements', async (req: Request, res: Response) => {
           direction: 'in',
         }));
 
-      // 2. Remaining payments — attributed to حاتم per existing business rule
-      if (emp === 'حاتم') {
+      // 2. Remaining payments — attributed to حاتم per business rule
+      if (isHatem) {
         sales
           .filter(s => s.order_status === 'تم الصرف' && s.remaining > 0 && inRange(saleD(s)))
           .forEach(s => transactions.push({
@@ -350,7 +352,7 @@ router.get('/employee-movements', async (req: Request, res: Response) => {
           }));
       }
 
-      // 3. Client payment collections (income from PaymentLog)
+      // 3. Client payment collections — PaymentLog module
       paymentLogs
         .filter(p => p.receiver === emp && p.type === 'client_payment' && p.amount > 0 && inRange(p.date))
         .forEach(p => transactions.push({
@@ -363,39 +365,37 @@ router.get('/employee-movements', async (req: Request, res: Response) => {
           direction: 'in',
         }));
 
-      // 4. Other income from expenses module
+      // 4. وارد [emp] — Expenses & Revenues module (income column)
       expenses
-        .filter(e => inRange(e.date) && (emp === 'حاتم' ? e.hatem_in : e.mido_in) > 0)
+        .filter(e => inRange(e.date) && (isHatem ? e.hatem_in : e.mido_in) > 0)
         .forEach(e => {
-          const amount = emp === 'حاتم' ? e.hatem_in : e.mido_in;
           transactions.push({
             date: e.date,
-            type: `إيراد — ${e.operation_type}`,
+            type: `وارد ${emp} — ${e.operation_type}`,
             description: e.statement,
             client: '',
-            amount,
+            amount: isHatem ? e.hatem_in : e.mido_in,
             employee: emp,
             direction: 'in',
           });
         });
 
-      // 5. Factory expenses / outgoing from expenses module
+      // 5. منصرف [emp] — Expenses & Revenues module (expense column)
       expenses
-        .filter(e => inRange(e.date) && (emp === 'حاتم' ? e.hatem_out : e.mido_out) > 0)
+        .filter(e => inRange(e.date) && (isHatem ? e.hatem_out : e.mido_out) > 0)
         .forEach(e => {
-          const amount = emp === 'حاتم' ? e.hatem_out : e.mido_out;
           transactions.push({
             date: e.date,
-            type: `مصروف — ${e.operation_type}`,
+            type: `منصرف ${emp} — ${e.operation_type}`,
             description: e.statement,
             client: '',
-            amount,
+            amount: isHatem ? e.hatem_out : e.mido_out,
             employee: emp,
             direction: 'out',
           });
         });
 
-      // 6. Debt / supplier payments (outgoing from PaymentLog)
+      // 6. Debt / supplier payments — PaymentLog module
       paymentLogs
         .filter(p => p.receiver === emp && p.type === 'debt_payment' && p.amount > 0 && inRange(p.date))
         .forEach(p => transactions.push({
@@ -408,7 +408,7 @@ router.get('/employee-movements', async (req: Request, res: Response) => {
           direction: 'out',
         }));
 
-      // 7. Refunds paid (outgoing from ReturnItems)
+      // 7. Refunds paid — Returns module
       returns_
         .filter(r => r.paid_by === emp && r.refund_amount > 0 && inRange(r.date))
         .forEach(r => transactions.push({
@@ -427,6 +427,17 @@ router.get('/employee-movements', async (req: Request, res: Response) => {
     const totalReceived = transactions.filter(t => t.direction === 'in').reduce((s, t) => s + t.amount, 0);
     const totalPaid = transactions.filter(t => t.direction === 'out').reduce((s, t) => s + t.amount, 0);
 
+    // Breakdown by source — for verification against the Expenses & Revenues page
+    const expInRange = expenses.filter(e => inRange(e.date));
+    const breakdown = employees.reduce<Record<string, { exp_in: number; exp_out: number }>>((acc, emp) => {
+      const isHatem = emp === 'حاتم';
+      acc[emp] = {
+        exp_in:  expInRange.reduce((s, e) => s + (isHatem ? e.hatem_in  : e.mido_in),  0),
+        exp_out: expInRange.reduce((s, e) => s + (isHatem ? e.hatem_out : e.mido_out), 0),
+      };
+      return acc;
+    }, {});
+
     return res.json({
       employee: employeeFilter,
       from_date: fromDate,
@@ -437,6 +448,7 @@ router.get('/employee-movements', async (req: Request, res: Response) => {
         net_balance: totalReceived - totalPaid,
         transaction_count: transactions.length,
       },
+      expenses_breakdown: breakdown,
       transactions,
     });
   } catch (err) {
