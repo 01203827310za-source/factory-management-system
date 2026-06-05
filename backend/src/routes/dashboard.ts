@@ -22,8 +22,8 @@ router.get('/', async (_req: Request, res: Response) => {
     ]);
 
     // Payment logs
-    const hatemPaymentIn = paymentLogs.filter(p => p.receiver === 'حاتم').reduce((s, p) => s + p.amount, 0);
-    const midoPaymentIn = paymentLogs.filter(p => p.receiver === 'ميدو').reduce((s, p) => s + p.amount, 0);
+    const hatemPaymentIn = paymentLogs.filter(p => p.receiver === 'حاتم' && p.type === 'client_payment').reduce((s, p) => s + p.amount, 0);
+    const midoPaymentIn = paymentLogs.filter(p => p.receiver === 'ميدو' && p.type === 'client_payment').reduce((s, p) => s + p.amount, 0);
     const hatemDebtOut = paymentLogs.filter(p => p.type === 'debt_payment' && p.receiver === 'حاتم').reduce((s, p) => s + p.amount, 0);
     const midoDebtOut = paymentLogs.filter(p => p.type === 'debt_payment' && p.receiver === 'ميدو').reduce((s, p) => s + p.amount, 0);
 

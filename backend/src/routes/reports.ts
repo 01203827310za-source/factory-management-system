@@ -92,8 +92,8 @@ function computeCapitalSnapshot(db: AllData, upToDate: string) {
   const hDepIn = fSales.filter(s => s.deposit_receiver === 'حاتم').reduce((s, x) => s + x.deposit_paid, 0);
   const mDepIn = fSales.filter(s => s.deposit_receiver === 'ميدو').reduce((s, x) => s + x.deposit_paid, 0);
   const hRemIn = fSales.filter(s => s.order_status === 'تم الصرف').reduce((s, x) => s + x.remaining, 0);
-  const hPayIn = fPay.filter(p => p.receiver === 'حاتم').reduce((s, p) => s + p.amount, 0);
-  const mPayIn = fPay.filter(p => p.receiver === 'ميدو').reduce((s, p) => s + p.amount, 0);
+  const hPayIn = fPay.filter(p => p.receiver === 'حاتم' && p.type === 'client_payment').reduce((s, p) => s + p.amount, 0);
+  const mPayIn = fPay.filter(p => p.receiver === 'ميدو' && p.type === 'client_payment').reduce((s, p) => s + p.amount, 0);
   const hDebtOut = fPay.filter(p => p.type === 'debt_payment' && p.receiver === 'حاتم').reduce((s, p) => s + p.amount, 0);
   const mDebtOut = fPay.filter(p => p.type === 'debt_payment' && p.receiver === 'ميدو').reduce((s, p) => s + p.amount, 0);
   const hRetOut = fRet.filter(r => r.paid_by === 'حاتم').reduce((s, r) => s + r.refund_amount, 0);
