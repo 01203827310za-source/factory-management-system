@@ -19,6 +19,7 @@ const EMPTY: DashboardMetrics = {
   total_in: 0, total_out: 0, cash_available: 0, money_owed_to_us: 0,
   sales_by_marketer: {}, order_status_counts: {}, total_returns: 0, total_refunds: 0,
   total_current_assets: 0, fabric_value: 0, stock_value: 0, accessories_value: 0,
+  total_reservations: 0,
 };
 
 export default function Dashboard() {
@@ -70,6 +71,14 @@ export default function Dashboard() {
           <StatCard title="المتبقي من الديون" value={metrics.remaining_debts} icon={<AlertTriangle size={22} />} color="yellow" alert={metrics.remaining_debts > 0} />
         </div>
 
+        {/* Reservations Banner */}
+        {metrics.total_reservations > 0 && (
+          <div className="bg-orange-50 border border-orange-200 rounded-xl px-5 py-3 flex items-center justify-between">
+            <span className="text-sm font-medium text-orange-700">🔖 الحجوزات النشطة</span>
+            <span className="text-lg font-bold text-orange-700">إجمالي الحجوزات: {metrics.total_reservations.toLocaleString('ar-EG')}</span>
+          </div>
+        )}
+
         {/* Partners Table */}
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
           <div className="px-6 py-4 border-b border-gray-100">
@@ -114,10 +123,11 @@ export default function Dashboard() {
         </div>
 
         {/* Summary Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard title="الكاش المتاح" value={metrics.cash_available} subtitle="الوارد الكلي − الديون − المصاريف" icon={<Wallet size={22} />} color={metrics.cash_available >= 0 ? 'green' : 'red'} />
           <StatCard title="الفلوس اللي لنا برا" value={metrics.money_owed_to_us} subtitle="مبيعات غير مصروفة + حسابات عملاء" icon={<DollarSign size={22} />} color="purple" alert={metrics.money_owed_to_us > 0} />
           <StatCard title="المتبقي من الديون" value={metrics.remaining_debts} subtitle="المستحقات علينا" icon={<AlertTriangle size={22} />} color="yellow" alert={metrics.remaining_debts > 0} />
+          <StatCard title="إجمالي الحجوزات" value={metrics.total_reservations} subtitle="قيمة الأوردرات المحجوزة" icon={<ShoppingCart size={22} />} color="orange" alert={metrics.total_reservations > 0} />
         </div>
 
         {metrics.total_returns > 0 && (

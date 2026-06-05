@@ -8,11 +8,11 @@ import {
 import type { Sale, ReturnItem } from '../types';
 import Modal from '../components/Modal';
 import { useToast } from '../components/Toast';
-import { Plus, Edit2, Trash2, Filter, Download, Search, UserPlus, Printer, ArrowLeftRight, RefreshCw } from 'lucide-react';
+import { Plus, Edit2, Trash2, Filter, Download, Search, UserPlus, Printer, ArrowLeftRight, RefreshCw, CheckSquare, XCircle, BookmarkPlus } from 'lucide-react';
 
 import * as XLSX from 'xlsx';
 
-const ORDER_STATUSES: Sale['order_status'][] = ['تم الصرف', 'لم يتم الصرف', 'حساب عميل'];
+const ORDER_STATUSES: Sale['order_status'][] = ['تم الصرف', 'لم يتم الصرف', 'حساب عميل', 'تم الحجز', 'تم الإلغاء'];
 const DELIVERY_METHODS = ['ايرجنت', 'مصنع', 'البريد', 'شحن موقف'];
 
 // Marketers now stored in database via API
@@ -26,6 +26,9 @@ export default function Sales() {
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
+  const [isReservation, setIsReservation] = useState(false);
+  const [convertConfirm, setConvertConfirm] = useState<number | null>(null);
+  const [cancelReservationConfirm, setCancelReservationConfirm] = useState<number | null>(null);
 
   // Marketers
   const [marketers, setMarketers] = useState<string[]>([]);
@@ -113,7 +116,8 @@ readyStock.forEach((s: any) => {
     stockColors[s.model_code].push(s.color);
   }
 });
-  const openAdd = () => { setEditSale(null); setForm({ ...emptyForm, marketer: marketers[0] || '' }); setModalOpen(true); };
+  const openAdd = () => { setEditSale(null); setIsReservation(false); setForm({ ...emptyForm, marketer: marketers[0] || '', order_status: 'تم الصرف' }); setModalOpen(true); };
+  const openReservation = () => { setEditSale(null); setIsReservation(true); setForm({ ...emptyForm, marketer: marketers[0] || '', order_status: 'تم الحجز' }); setModalOpen(true); };
   const openEdit = (sale: Sale) => {
     setEditSale(sale);
     setForm({
@@ -163,6 +167,24 @@ setModalOpen(false);
   const handleDelete = async (id: number) => {
     await salesApi.remove(id);
 await loadData();; setDeleteConfirm(null); toast('success', 'تم حذف الأوردر');
+  };
+
+  const handleConvertReservation = async (id: number) => {
+    try {
+      await salesApi.convertReservation(id);
+      await loadData();
+      setConvertConfirm(null);
+      toast('success', 'تم صرف الحجز — تم خصم الكمية من المخزون');
+    } catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'خطأ'); }
+  };
+
+  const handleCancelReservation = async (id: number) => {
+    try {
+      await salesApi.cancelReservation(id);
+      await loadData();
+      setCancelReservationConfirm(null);
+      toast('success', 'تم إلغاء الحجز — تم تحرير الكمية المحجوزة');
+    } catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'خطأ'); }
   };
 
   // Invoice Print
@@ -276,6 +298,9 @@ await loadData();(returnForm);
           <button onClick={openReturns} className="flex items-center gap-2 px-3 py-2 text-sm bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition">
             <ArrowLeftRight size={16} /> المرتجعات ({returns.length})
           </button>
+          <button onClick={openReservation} className="flex items-center gap-2 px-4 py-2 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition shadow-sm">
+            <BookmarkPlus size={16} /> إضافة حجز
+          </button>
           <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 text-sm bg-[#1e3a5f] text-white rounded-lg hover:bg-[#16304d] transition shadow-sm">
             <Plus size={16} /> إضافة أوردر
           </button>
@@ -360,12 +385,24 @@ await loadData();(returnForm);
                   <td className="px-2 py-3 text-center">
                     <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                       sale.order_status === 'تم الصرف' ? 'bg-emerald-100 text-emerald-700' :
-                      sale.order_status === 'لم يتم الصرف' ? 'bg-red-100 text-red-700' :
+                      sale.order_status === 'تم الحجز' ? 'bg-orange-100 text-orange-700' :
+                      sale.order_status === 'تم الإلغاء' ? 'bg-red-100 text-red-700' :
+                      sale.order_status === 'لم يتم الصرف' ? 'bg-yellow-100 text-yellow-700' :
                       'bg-amber-100 text-amber-700'
                     }`}>{sale.order_status}</span>
                   </td>
                   <td className="px-2 py-3 text-center">
-                    <div className="flex items-center justify-center gap-1">
+                    <div className="flex items-center justify-center gap-1 flex-wrap">
+                      {sale.order_status === 'تم الحجز' && (
+                        <>
+                          <button onClick={() => setConvertConfirm(sale.id)} className="p-1.5 text-emerald-600 hover:bg-emerald-100 rounded-lg" title="صرف الحجز">
+                            <CheckSquare size={14} />
+                          </button>
+                          <button onClick={() => setCancelReservationConfirm(sale.id)} className="p-1.5 text-red-500 hover:bg-red-100 rounded-lg" title="إلغاء الحجز">
+                            <XCircle size={14} />
+                          </button>
+                        </>
+                      )}
                       <button onClick={() => setInvoiceSale(sale)} className="p-1.5 text-indigo-600 hover:bg-indigo-100 rounded-lg" title="فاتورة">
                         <Printer size={14} />
                       </button>
@@ -393,7 +430,7 @@ await loadData();(returnForm);
       </div>
 
       {/* Add/Edit Modal */}
-      <Modal isOpen={modalOpen} onClose={() => { setModalOpen(false); setShowAddMarketer(false); setNewMarketer(''); }} title={editSale ? 'تعديل الأوردر' : 'إضافة أوردر جديد'} size="2xl">
+      <Modal isOpen={modalOpen} onClose={() => { setModalOpen(false); setShowAddMarketer(false); setNewMarketer(''); setIsReservation(false); }} title={editSale ? 'تعديل الأوردر' : isReservation ? 'إضافة حجز جديد' : 'إضافة أوردر جديد'} size="2xl">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className={labelClass}>رقم الأوردر *</label>
@@ -512,7 +549,7 @@ await loadData();(returnForm);
         </div>
 
         <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-200">
-          <button onClick={() => { setModalOpen(false); setShowAddMarketer(false); setNewMarketer(''); }} className="px-5 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition">إلغاء</button>
+          <button onClick={() => { setModalOpen(false); setShowAddMarketer(false); setNewMarketer(''); setIsReservation(false); }} className="px-5 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition">إلغاء</button>
           <button onClick={handleSave} className="px-5 py-2 text-sm bg-[#1e3a5f] text-white rounded-lg hover:bg-[#16304d] transition">حفظ</button>
         </div>
       </Modal>
@@ -689,6 +726,24 @@ await loadData();(returnForm);
         <div className="flex justify-end gap-3 mt-6">
           <button onClick={() => setDeleteConfirm(null)} className="px-5 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">إلغاء</button>
           <button onClick={() => deleteConfirm !== null && handleDelete(deleteConfirm)} className="px-5 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700">حذف</button>
+        </div>
+      </Modal>
+
+      {/* Convert Reservation Confirm */}
+      <Modal isOpen={convertConfirm !== null} onClose={() => setConvertConfirm(null)} title="تأكيد صرف الحجز" size="sm">
+        <p className="text-gray-600">هل تريد تحويل هذا الحجز إلى أوردر مصروف؟ سيتم خصم الكميات من المخزون.</p>
+        <div className="flex justify-end gap-3 mt-6">
+          <button onClick={() => setConvertConfirm(null)} className="px-5 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">إلغاء</button>
+          <button onClick={() => convertConfirm !== null && handleConvertReservation(convertConfirm)} className="px-5 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">صرف</button>
+        </div>
+      </Modal>
+
+      {/* Cancel Reservation Confirm */}
+      <Modal isOpen={cancelReservationConfirm !== null} onClose={() => setCancelReservationConfirm(null)} title="تأكيد إلغاء الحجز" size="sm">
+        <p className="text-gray-600">هل تريد إلغاء هذا الحجز؟ سيتم تحرير الكمية المحجوزة.</p>
+        <div className="flex justify-end gap-3 mt-6">
+          <button onClick={() => setCancelReservationConfirm(null)} className="px-5 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">رجوع</button>
+          <button onClick={() => cancelReservationConfirm !== null && handleCancelReservation(cancelReservationConfirm)} className="px-5 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700">إلغاء الحجز</button>
         </div>
       </Modal>
     </div>

@@ -63,29 +63,54 @@ export const readyStockStore = {
     const newProd: Record<string, number> = {};
     modelProds.forEach(mp => { newProd[mp.model_code] = (newProd[mp.model_code] || 0) + mp.qty_received; });
 
+    // Only deduct stock for actual dispatched/pending sales — NOT reservations or cancelled
     const totalSales: Record<string, number> = {};
-    sales.forEach(s => {
-      [
-        { code: s.model1_code, qty: s.model1_qty },
-        { code: s.model2_code, qty: s.model2_qty },
-        { code: s.model3_code, qty: s.model3_qty },
-        { code: s.model4_code, qty: s.model4_qty },
-        { code: s.model5_code, qty: s.model5_qty },
-      ].forEach(({ code, qty }) => {
-        if (code && qty > 0) totalSales[code] = (totalSales[code] || 0) + qty;
+    sales
+      .filter(s => s.order_status !== 'تم الحجز' && s.order_status !== 'تم الإلغاء')
+      .forEach(s => {
+        [
+          { code: s.model1_code, qty: s.model1_qty },
+          { code: s.model2_code, qty: s.model2_qty },
+          { code: s.model3_code, qty: s.model3_qty },
+          { code: s.model4_code, qty: s.model4_qty },
+          { code: s.model5_code, qty: s.model5_qty },
+        ].forEach(({ code, qty }) => {
+          if (code && qty > 0) totalSales[code] = (totalSales[code] || 0) + qty;
+        });
       });
-    });
+
+    // Reserved quantities come from active reservations only
+    const reservedQty: Record<string, number> = {};
+    sales
+      .filter(s => s.order_status === 'تم الحجز')
+      .forEach(s => {
+        [
+          { code: s.model1_code, qty: s.model1_qty },
+          { code: s.model2_code, qty: s.model2_qty },
+          { code: s.model3_code, qty: s.model3_qty },
+          { code: s.model4_code, qty: s.model4_qty },
+          { code: s.model5_code, qty: s.model5_qty },
+        ].forEach(({ code, qty }) => {
+          if (code && qty > 0) reservedQty[code] = (reservedQty[code] || 0) + qty;
+        });
+      });
 
     const returnQty: Record<string, number> = {};
     returns_.forEach(r => { if (r.model_code) returnQty[r.model_code] = (returnQty[r.model_code] || 0) + r.model_qty; });
 
-    return stock.map(item => ({
-      ...item,
-      new_production: newProd[item.model_code] || 0,
-      total_sales: totalSales[item.model_code] || 0,
-      actual_balance: item.opening_balance + (newProd[item.model_code] || 0) - (totalSales[item.model_code] || 0) + (returnQty[item.model_code] || 0),
-      total_returns: returnQty[item.model_code] || 0,
-    })) as ComputedReadyStock[];
+    return stock.map(item => {
+      const actualBalance = item.opening_balance + (newProd[item.model_code] || 0) - (totalSales[item.model_code] || 0) + (returnQty[item.model_code] || 0);
+      const reserved = reservedQty[item.model_code] || 0;
+      return {
+        ...item,
+        new_production: newProd[item.model_code] || 0,
+        total_sales: totalSales[item.model_code] || 0,
+        actual_balance: actualBalance,
+        total_returns: returnQty[item.model_code] || 0,
+        reserved_quantity: reserved,
+        available_quantity: Math.max(0, actualBalance - reserved),
+      };
+    }) as ComputedReadyStock[];
   },
 };
 

@@ -82,6 +82,8 @@ export const salesApi = {
   add: (data: Omit<SaleRecord, 'id' | 'created_at'>) => post<SaleRecord>('/sales', data),
   update: (id: number, data: Partial<SaleRecord>) => put<SaleRecord>(`/sales/${id}`, data),
   remove: (id: number) => del<{ message: string }>(`/sales/${id}`),
+  convertReservation: (id: number) => post<SaleRecord>(`/sales/${id}/convert-reservation`, {}),
+  cancelReservation: (id: number) => post<SaleRecord>(`/sales/${id}/cancel-reservation`, {}),
 };
 
 export type SaleRecord = {
@@ -100,7 +102,7 @@ export type SaleRecord = {
   deposit_receiver: string;
   remaining: number;
   shipping_number: string;
-  order_status: string;
+  order_status: 'تم الصرف' | 'لم يتم الصرف' | 'حساب عميل' | 'تم الحجز' | 'تم الإلغاء';
   delivery_method: string;
   mobile: string;
   warehouse: string;
@@ -343,4 +345,39 @@ export interface DashboardMetrics {
   fabric_value: number;
   stock_value: number;
   accessories_value: number;
+  total_reservations: number;
+}
+// ===== FIXED ASSETS =====
+export const fixedAssetsApi = {
+  getAll: () => get<FixedAssetRecord[]>('/fixed-assets'),
+  add: (data: Omit<FixedAssetRecord, 'id' | 'created_at'>) => post<FixedAssetRecord>('/fixed-assets', data),
+  update: (id: number, data: Partial<FixedAssetRecord>) => put<FixedAssetRecord>(`/fixed-assets/${id}`, data),
+  remove: (id: number) => del<{ message: string }>(`/fixed-assets/${id}`),
+};
+
+export type FixedAssetRecord = {
+  id: number;
+  date: string;
+  asset_name: string;
+  value: number;
+  notes: string;
+  created_at: string;
+};
+
+// ===== FINANCIAL CENTER =====
+export const financialCenterApi = {
+  getData: () => get<FinancialCenterData>('/financial-center'),
+};
+
+export interface FinancialCenterData {
+  fabric_value: number;
+  stock_value: number;
+  accessories_value: number;
+  money_owed_to_us: number;
+  cash_available: number;
+  total_current_assets: number;
+  total_fixed_assets: number;
+  total_assets: number;
+  total_debts: number;
+  net_position: number;
 }

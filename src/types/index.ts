@@ -16,7 +16,7 @@ export interface Sale {
   deposit_receiver: 'حاتم' | 'ميدو' | '';
   remaining: number;
   shipping_number: string;
-  order_status: 'تم الصرف' | 'لم يتم الصرف' | 'حساب عميل';
+  order_status: 'تم الصرف' | 'لم يتم الصرف' | 'حساب عميل' | 'تم الحجز' | 'تم الإلغاء';
   delivery_method: string;
   mobile: string;
   warehouse: string;
@@ -53,6 +53,8 @@ export interface ComputedReadyStock extends ReadyStock {
   total_sales: number;
   actual_balance: number;
   total_returns: number;
+  reserved_quantity: number;
+  available_quantity: number;
 }
 
 export interface FabricWarehouse {
@@ -186,6 +188,7 @@ export interface DashboardMetrics {
   fabric_value: number;
   stock_value: number;
   accessories_value: number;
+  total_reservations: number;
 }
 
 // ===== NEW: User Types =====

@@ -3,7 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
-
+import financialCenterRouter from './routes/financialCenter';
 import authRouter from './routes/auth';
 import usersRouter from './routes/users';
 import salesRouter from './routes/sales';
@@ -11,7 +11,7 @@ import dashboardRouter from './routes/dashboard';
 import {
   expensesRouter, readyStockRouter, fabricRouter, accessoriesRouter,
   cuttingRouter, modelProdRouter, debtsRouter, clientAccountsRouter,
-  returnsRouter, paymentLogRouter, marketersRouter,
+  returnsRouter, paymentLogRouter, marketersRouter, fixedAssetsRouter,
 } from './routes/entities';
 
 const app = express();
@@ -49,7 +49,9 @@ app.use('/api/client-accounts', clientAccountsRouter);
 app.use('/api/returns', returnsRouter);
 app.use('/api/payment-log', paymentLogRouter);
 app.use('/api/marketers', marketersRouter);
+app.use('/api/fixed-assets', fixedAssetsRouter);
 app.use('/api/dashboard', dashboardRouter);
+app.use('/api/financial-center', financialCenterRouter);
 
 // ===== 404 =====
 app.use((_req, res) => {

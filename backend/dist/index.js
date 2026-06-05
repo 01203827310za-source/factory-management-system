@@ -8,6 +8,7 @@ const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const helmet_1 = __importDefault(require("helmet"));
 const morgan_1 = __importDefault(require("morgan"));
+const financialCenter_1 = __importDefault(require("./routes/financialCenter"));
 const auth_1 = __importDefault(require("./routes/auth"));
 const users_1 = __importDefault(require("./routes/users"));
 const sales_1 = __importDefault(require("./routes/sales"));
@@ -45,7 +46,9 @@ app.use('/api/client-accounts', entities_1.clientAccountsRouter);
 app.use('/api/returns', entities_1.returnsRouter);
 app.use('/api/payment-log', entities_1.paymentLogRouter);
 app.use('/api/marketers', entities_1.marketersRouter);
+app.use('/api/fixed-assets', entities_1.fixedAssetsRouter);
 app.use('/api/dashboard', dashboard_1.default);
+app.use('/api/financial-center', financialCenter_1.default);
 // ===== 404 =====
 app.use((_req, res) => {
     res.status(404).json({ message: 'المسار غير موجود' });

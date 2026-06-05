@@ -3,7 +3,7 @@ interface StatCardProps {
   value: number | string;
   subtitle?: string;
   icon: React.ReactNode;
-  color: 'blue' | 'green' | 'red' | 'yellow' | 'purple';
+  color: 'blue' | 'green' | 'red' | 'yellow' | 'purple' | 'orange';
   alert?: boolean;
 }
 
@@ -13,6 +13,7 @@ const colorMap = {
   red: 'bg-red-50 border-red-200 text-red-800',
   yellow: 'bg-amber-50 border-amber-200 text-amber-800',
   purple: 'bg-purple-50 border-purple-200 text-purple-800',
+  orange: 'bg-orange-50 border-orange-200 text-orange-800',
 };
 
 const iconColorMap = {
@@ -21,6 +22,7 @@ const iconColorMap = {
   red: 'bg-red-100 text-red-600',
   yellow: 'bg-amber-100 text-amber-600',
   purple: 'bg-purple-100 text-purple-600',
+  orange: 'bg-orange-100 text-orange-600',
 };
 
 export default function StatCard({ title, value, subtitle, icon, color, alert }: StatCardProps) {

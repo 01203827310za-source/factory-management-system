@@ -63,5 +63,47 @@ router.delete('/:id', auth_1.requireManager, async (req, res) => {
         return res.status(500).json({ message: 'خطأ في حذف الطلب' });
     }
 });
+// POST /api/sales/:id/convert-reservation — convert reservation → completed sale
+router.post('/:id/convert-reservation', auth_1.requireManager, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id);
+        const sale = await prisma_1.default.sale.findUnique({ where: { id } });
+        if (!sale)
+            return res.status(404).json({ message: 'الطلب غير موجود' });
+        if (sale.order_status !== 'تم الحجز') {
+            return res.status(400).json({ message: 'هذا الطلب ليس حجزاً' });
+        }
+        const updated = await prisma_1.default.sale.update({
+            where: { id },
+            data: { order_status: 'تم الصرف' },
+        });
+        return res.json(updated);
+    }
+    catch (err) {
+        console.error(err);
+        return res.status(500).json({ message: 'خطأ في تحويل الحجز' });
+    }
+});
+// POST /api/sales/:id/cancel-reservation — cancel reservation
+router.post('/:id/cancel-reservation', auth_1.requireManager, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id);
+        const sale = await prisma_1.default.sale.findUnique({ where: { id } });
+        if (!sale)
+            return res.status(404).json({ message: 'الطلب غير موجود' });
+        if (sale.order_status !== 'تم الحجز') {
+            return res.status(400).json({ message: 'هذا الطلب ليس حجزاً' });
+        }
+        const updated = await prisma_1.default.sale.update({
+            where: { id },
+            data: { order_status: 'تم الإلغاء' },
+        });
+        return res.json(updated);
+    }
+    catch (err) {
+        console.error(err);
+        return res.status(500).json({ message: 'خطأ في إلغاء الحجز' });
+    }
+});
 exports.default = router;
 //# sourceMappingURL=sales.js.map

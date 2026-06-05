@@ -28,6 +28,9 @@ router.get('/', async (_req: Request, res: Response) => {
     const midoDebtOut = paymentLogs.filter(p => p.type === 'debt_payment' && p.receiver === 'ميدو').reduce((s, p) => s + p.amount, 0);
 
     const totalSales = sales.reduce((s, sale) => s + sale.invoice_value, 0);
+    const totalReservations = sales
+      .filter(s => s.order_status === 'تم الحجز')
+      .reduce((s, sale) => s + sale.invoice_value, 0);
 
     const hatemDepositIn = sales.filter(s => s.deposit_receiver === 'حاتم').reduce((s, sale) => s + sale.deposit_paid, 0);
     const midoDepositIn = sales.filter(s => s.deposit_receiver === 'ميدو').reduce((s, sale) => s + sale.deposit_paid, 0);
@@ -79,18 +82,21 @@ router.get('/', async (_req: Request, res: Response) => {
       const key = `${mp.model_code}`;
       newProd[key] = (newProd[key] || 0) + mp.qty_received;
     });
+    // Only deduct stock for actual dispatched/pending sales — NOT reservations or cancelled
     const totalSalesQty: Record<string, number> = {};
-    sales.forEach(s => {
-      [
-        { code: s.model1_code, qty: s.model1_qty },
-        { code: s.model2_code, qty: s.model2_qty },
-        { code: s.model3_code, qty: s.model3_qty },
-        { code: s.model4_code, qty: s.model4_qty },
-        { code: s.model5_code, qty: s.model5_qty },
-      ].forEach(({ code, qty }) => {
-        if (code && qty > 0) totalSalesQty[code] = (totalSalesQty[code] || 0) + qty;
+    sales
+      .filter(s => s.order_status !== 'تم الحجز' && s.order_status !== 'تم الإلغاء')
+      .forEach(s => {
+        [
+          { code: s.model1_code, qty: s.model1_qty },
+          { code: s.model2_code, qty: s.model2_qty },
+          { code: s.model3_code, qty: s.model3_qty },
+          { code: s.model4_code, qty: s.model4_qty },
+          { code: s.model5_code, qty: s.model5_qty },
+        ].forEach(({ code, qty }) => {
+          if (code && qty > 0) totalSalesQty[code] = (totalSalesQty[code] || 0) + qty;
+        });
       });
-    });
     const returnQty: Record<string, number> = {};
     returns_.forEach(r => {
       if (r.model_code) returnQty[r.model_code] = (returnQty[r.model_code] || 0) + r.model_qty;
@@ -133,6 +139,7 @@ router.get('/', async (_req: Request, res: Response) => {
       fabric_value: fabricValue,
       stock_value: stockValue,
       accessories_value: accessoriesValue,
+      total_reservations: totalReservations,
     });
   } catch (err) {
     console.error(err);
