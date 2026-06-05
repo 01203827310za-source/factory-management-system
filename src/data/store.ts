@@ -97,7 +97,7 @@ export const readyStockStore = {
         actual_balance: actualBalance,
         total_returns: returnQty[item.model_code] || 0,
         reserved_quantity: reserved,
-        available_quantity: Math.max(0, actualBalance - reserved),
+        available_quantity: actualBalance - reserved,
       };
     }) as ComputedReadyStock[];
   },

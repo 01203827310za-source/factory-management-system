@@ -39,56 +39,6 @@ async function adjustReserved(models, delta) {
         });
     }
 }
-// Validate that each model slot has enough available stock.
-// available = actual_balance - reserved_quantity
-// actual_balance = opening + production - non_reservation_sales + returns
-async function validateAvailability(models) {
-    const uniqueCodes = [...new Set(models.map(m => m.code))];
-    const [stockRows, modelProds, allSales, allReturns] = await Promise.all([
-        prisma_1.default.readyStock.findMany({ where: { model_code: { in: uniqueCodes } } }),
-        prisma_1.default.modelProduction.findMany({ where: { model_code: { in: uniqueCodes } } }),
-        prisma_1.default.sale.findMany({
-            where: { NOT: { order_status: { in: ['تم الحجز', 'تم الإلغاء'] } } },
-        }),
-        prisma_1.default.returnItem.findMany({ where: { model_code: { in: uniqueCodes } } }),
-    ]);
-    // Pre-aggregate by model_code (mirrors the ReadyStock computation)
-    const newProd = {};
-    modelProds.forEach(mp => { newProd[mp.model_code] = (newProd[mp.model_code] || 0) + mp.qty_received; });
-    const totalSold = {};
-    allSales.forEach(s => {
-        [
-            { code: s.model1_code, qty: s.model1_qty },
-            { code: s.model2_code, qty: s.model2_qty },
-            { code: s.model3_code, qty: s.model3_qty },
-            { code: s.model4_code, qty: s.model4_qty },
-            { code: s.model5_code, qty: s.model5_qty },
-        ].forEach(({ code, qty }) => {
-            if (code && qty > 0)
-                totalSold[code] = (totalSold[code] || 0) + qty;
-        });
-    });
-    const totalReturns = {};
-    allReturns.forEach(r => { if (r.model_code)
-        totalReturns[r.model_code] = (totalReturns[r.model_code] || 0) + r.model_qty; });
-    const errors = [];
-    for (const m of models) {
-        // Prefer exact (code+color) match, fall back to code-only
-        const row = stockRows.find(s => s.model_code === m.code && s.color === m.color) ||
-            stockRows.find(s => s.model_code === m.code);
-        if (!row)
-            continue; // No stock entry at all — skip validation
-        const actualBalance = row.opening_balance +
-            (newProd[m.code] || 0) -
-            (totalSold[m.code] || 0) +
-            (totalReturns[m.code] || 0);
-        const available = Math.max(0, actualBalance - row.reserved_quantity);
-        if (m.qty > available) {
-            errors.push(`الموديل ${m.code}${m.color ? ` (${m.color})` : ''}: المتاح ${available} — المطلوب ${m.qty}`);
-        }
-    }
-    return errors;
-}
 // ─── routes ─────────────────────────────────────────────────────────────────
 // GET /api/sales
 router.get('/', async (_req, res) => {
@@ -104,16 +54,6 @@ router.post('/', auth_1.requireManager, async (req, res) => {
     try {
         const data = req.body;
         const isReservation = data.order_status === 'تم الحجز';
-        if (isReservation) {
-            const models = extractModels(data);
-            const errors = await validateAvailability(models);
-            if (errors.length > 0) {
-                return res.status(400).json({
-                    message: 'الكمية المطلوبة تتجاوز المتاح في المخزون',
-                    details: errors,
-                });
-            }
-        }
         const sale = await prisma_1.default.sale.create({
             data: {
                 ...data,

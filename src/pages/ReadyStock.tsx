@@ -86,7 +86,7 @@ export default function ReadyStock() {
               {loading && <tr><td colSpan={14} className="text-center py-8 text-gray-400"><RefreshCw size={16} className="animate-spin inline mr-2" />جارٍ التحميل...</td></tr>}
               {!loading && filtered.length === 0 && <tr><td colSpan={14} className="text-center py-8 text-gray-400">لا توجد بيانات</td></tr>}
               {filtered.map((item, idx) => (
-                <tr key={item.id} className={`border-t border-gray-100 hover:bg-blue-50/40 transition ${item.available_quantity < 3 ? 'bg-red-50' : item.available_quantity <= 10 ? 'bg-amber-50' : ''}`}>
+                <tr key={item.id} className={`border-t border-gray-100 hover:bg-blue-50/40 transition ${item.available_quantity < 0 ? 'bg-red-100' : item.available_quantity < 3 ? 'bg-red-50' : item.available_quantity <= 10 ? 'bg-amber-50' : ''}`}>
                   <td className="px-3 py-3 text-center text-gray-500">{idx + 1}</td>
                   <td className="px-3 py-3 font-medium">{item.model_code}</td>
                   <td className="px-3 py-3">{item.product_name}</td>
@@ -101,7 +101,7 @@ export default function ReadyStock() {
                       ? <span className="inline-block bg-orange-100 text-orange-700 text-xs font-semibold px-2 py-0.5 rounded-full">{item.reserved_quantity.toLocaleString('ar-EG')}</span>
                       : <span className="text-gray-300">—</span>}
                   </td>
-                  <td className={`px-3 py-3 text-center font-bold ${item.available_quantity < 3 ? 'text-red-700' : item.available_quantity <= 10 ? 'text-amber-700' : 'text-emerald-700'}`}>
+                  <td className={`px-3 py-3 text-center font-bold ${item.available_quantity < 0 ? 'text-red-700 font-extrabold' : item.available_quantity < 3 ? 'text-red-600' : item.available_quantity <= 10 ? 'text-amber-700' : 'text-emerald-700'}`}>
                     {item.available_quantity.toLocaleString('ar-EG')}
                   </td>
                   <td className="px-3 py-3 text-center">{item.cost_per_piece.toLocaleString('ar-EG')}</td>
