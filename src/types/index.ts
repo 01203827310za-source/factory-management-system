@@ -65,6 +65,8 @@ export interface FabricWarehouse {
   color: string;
   qty_in: number;
   cost_per_kg: number;
+  avg_cost_per_kg: number;
+  last_purchase_price: number;
   created_at: string;
 }
 

@@ -102,15 +102,34 @@ model ReadyStock {
 
 // ===== FABRIC WAREHOUSE =====
 model FabricWarehouse {
-  id            Int      @id @default(autoincrement())
-  date          String
-  material_type String
-  color         String   @default("")
-  qty_in        Float    @default(0)
-  cost_per_kg   Float    @default(0)
-  created_at    DateTime @default(now())
+  id                  Int      @id @default(autoincrement())
+  date                String
+  material_type       String
+  color               String   @default("")
+  qty_in              Float    @default(0)
+  cost_per_kg         Float    @default(0)
+  avg_cost_per_kg     Float    @default(0)
+  last_purchase_price Float    @default(0)
+  created_at          DateTime @default(now())
 
   @@map("fabric_warehouse")
+}
+
+// ===== FABRIC PURCHASES =====
+model FabricPurchase {
+  id           Int      @id @default(autoincrement())
+  date         String
+  fabric_type  String
+  color        String   @default("")
+  quantity_kg  Float    @default(0)
+  price_per_kg Float    @default(0)
+  total_cost   Float    @default(0)
+  supplier     String   @default("")
+  invoice_no   String   @default("")
+  notes        String   @default("")
+  created_at   DateTime @default(now())
+
+  @@map("fabric_purchases")
 }
 
 // ===== ACCESSORIES WAREHOUSE =====

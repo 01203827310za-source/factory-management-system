@@ -164,6 +164,29 @@ export type FabricRecord = {
   color: string;
   qty_in: number;
   cost_per_kg: number;
+  avg_cost_per_kg: number;
+  last_purchase_price: number;
+  created_at: string;
+};
+
+// ===== FABRIC PURCHASES =====
+export const fabricPurchasesApi = {
+  getAll: () => get<FabricPurchaseRecord[]>('/fabric-purchases'),
+  add: (data: Omit<FabricPurchaseRecord, 'id' | 'total_cost' | 'created_at'>) =>
+    post<FabricPurchaseRecord>('/fabric-purchases', data),
+};
+
+export type FabricPurchaseRecord = {
+  id: number;
+  date: string;
+  fabric_type: string;
+  color: string;
+  quantity_kg: number;
+  price_per_kg: number;
+  total_cost: number;
+  supplier: string;
+  invoice_no: string;
+  notes: string;
   created_at: string;
 };
 

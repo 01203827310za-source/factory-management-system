@@ -276,6 +276,77 @@ marketersRouter.delete('/:name', requireManager, async (req, res) => {
     return res.json(all.map(m => m.name));
   } catch { return res.status(500).json({ message: 'خطأ' }); }
 });
+// ===== FABRIC PURCHASES =====
+export const fabricPurchasesRouter = Router();
+fabricPurchasesRouter.use(authenticate);
+
+fabricPurchasesRouter.get('/', async (_req, res) => {
+  try { return res.json(await prisma.fabricPurchase.findMany({ orderBy: { id: 'desc' } })); }
+  catch { return res.status(500).json({ message: 'خطأ' }); }
+});
+
+fabricPurchasesRouter.post('/', requireManager, async (req: Request, res: Response) => {
+  try {
+    const { date, fabric_type, color, quantity_kg, price_per_kg, supplier, invoice_no, notes } = req.body;
+    const qty = parseFloat(quantity_kg) || 0;
+    const price = parseFloat(price_per_kg) || 0;
+    if (!fabric_type || qty <= 0 || price <= 0) {
+      return res.status(400).json({ message: 'يرجى تحديد الصنف والكمية والسعر' });
+    }
+    const total_cost = Math.round(qty * price * 100) / 100;
+    const cleanColor = (color || '').trim();
+
+    // 1. Save purchase history (immutable record)
+    const purchase = await prisma.fabricPurchase.create({
+      data: {
+        date, fabric_type, color: cleanColor,
+        quantity_kg: qty, price_per_kg: price, total_cost,
+        supplier: supplier || '', invoice_no: invoice_no || '', notes: notes || '',
+      },
+    });
+
+    // 2. Find existing warehouse row for this type + color
+    const existing = await prisma.fabricWarehouse.findFirst({
+      where: { material_type: fabric_type, color: cleanColor },
+    });
+
+    if (existing) {
+      // Weighted average: (old_qty * old_avg + new_qty * new_price) / total_qty
+      const currentAvg = existing.avg_cost_per_kg > 0 ? existing.avg_cost_per_kg : existing.cost_per_kg;
+      const totalQty = existing.qty_in + qty;
+      const newAvg = totalQty > 0
+        ? (existing.qty_in * currentAvg + qty * price) / totalQty
+        : price;
+      await prisma.fabricWarehouse.update({
+        where: { id: existing.id },
+        data: {
+          qty_in: totalQty,
+          avg_cost_per_kg: Math.round(newAvg * 100) / 100,
+          last_purchase_price: price,
+        },
+      });
+    } else {
+      // No existing row — create one
+      await prisma.fabricWarehouse.create({
+        data: {
+          date,
+          material_type: fabric_type,
+          color: cleanColor,
+          qty_in: qty,
+          cost_per_kg: price,
+          avg_cost_per_kg: price,
+          last_purchase_price: price,
+        },
+      });
+    }
+
+    return res.status(201).json(purchase);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'خطأ في حفظ المشترى' });
+  }
+});
+
 // ===== FIXED ASSETS =====
 export const fixedAssetsRouter = Router();
 fixedAssetsRouter.use(authenticate);

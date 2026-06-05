@@ -13,6 +13,7 @@ import {
   expensesRouter, readyStockRouter, fabricRouter, accessoriesRouter,
   cuttingRouter, modelProdRouter, debtsRouter, clientAccountsRouter,
   returnsRouter, paymentLogRouter, marketersRouter, fixedAssetsRouter,
+  fabricPurchasesRouter,
 } from './routes/entities';
 
 const app = express();
@@ -51,6 +52,7 @@ app.use('/api/returns', returnsRouter);
 app.use('/api/payment-log', paymentLogRouter);
 app.use('/api/marketers', marketersRouter);
 app.use('/api/fixed-assets', fixedAssetsRouter);
+app.use('/api/fabric-purchases', fabricPurchasesRouter);
 app.use('/api/reports', reportsRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/financial-center', financialCenterRouter);
