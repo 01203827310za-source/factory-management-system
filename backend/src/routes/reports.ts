@@ -320,17 +320,19 @@ router.get('/employee-movements', async (req: Request, res: Response) => {
         }));
 
       // 2. Remaining payments — attributed to حاتم per business rule
+      // Partner Summary sums ALL remaining for dispatched orders (including negative = overpayments).
+      // Negative remaining must appear as OUT here so net_balance matches hatem_net in Partner Summary.
       if (isHatem) {
         sales
-          .filter(s => s.order_status === 'تم الصرف' && s.remaining > 0 && inRange(saleD(s)))
+          .filter(s => s.order_status === 'تم الصرف' && s.remaining !== 0 && inRange(saleD(s)))
           .forEach(s => transactions.push({
             date: saleD(s),
             type: 'متبقي أوردر',
             description: `أوردر رقم ${s.order_number} — تم الصرف`,
             client: s.client,
-            amount: s.remaining,
+            amount: Math.abs(s.remaining),
             employee: emp,
-            direction: 'in',
+            direction: s.remaining > 0 ? 'in' : 'out',
           }));
       }
 
