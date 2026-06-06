@@ -510,81 +510,116 @@ export const financialCenterApi = {
 };
 
 // ===== PAYROLL =====
-export type EmployeeRecord = {
-  id: number;
-  employee_code: string;
-  employee_name: string;
-  department: string;
-  job_title: string;
-  employee_type: 'fixed' | 'piecework';
-  base_salary: number;
-  piece_category: string;
-  piece_rate: number;
-  status: 'active' | 'inactive';
-  notes: string;
-  created_at: string;
-  updated_at: string;
+
+export type PieceRateRecord = {
+  id: number; employee_id: number; category_name: string; piece_rate: number; created_at: string;
 };
 
-export type PayrollRecordFull = {
-  id: number;
-  employee_id: number;
-  employee: EmployeeRecord;
-  employee_type: string;
-  month: number;
-  year: number;
-  attendance_days: number;
-  absence_days: number;
-  absence_deduction: number;
-  advances: number;
-  additional_deductions: number;
-  bonus: number;
-  produced_qty: number;
-  production_bonus: number;
-  piece_income: number;
-  net_salary: number;
-  created_at: string;
-  updated_at: string;
+export type EmployeeRecord = {
+  id: number; employee_code: string; employee_name: string; department: string;
+  job_title: string; employee_type: 'fixed' | 'piecework'; base_salary: number;
+  piece_category: string; piece_rate: number; status: 'active' | 'inactive';
+  notes: string; created_at: string; updated_at: string;
+  piece_rates: PieceRateRecord[];
+};
+
+export type ProductionRecord = {
+  id: number; employee_id: number; employee: EmployeeRecord;
+  category_name: string; piece_rate: number; quantity: number;
+  production_value: number; date: string; notes: string; created_at: string;
+};
+
+export type AdvanceRecord = {
+  id: number; employee_id: number; employee: EmployeeRecord;
+  date: string; amount: number; notes: string; created_at: string;
+};
+
+export type DeductionRecord = {
+  id: number; employee_id: number; employee: EmployeeRecord;
+  date: string; amount: number; reason: string; created_at: string;
+};
+
+export type BonusRecord = {
+  id: number; employee_id: number; employee: EmployeeRecord;
+  date: string; amount: number; reason: string; created_at: string;
+};
+
+export type SalaryRow = {
+  employee: EmployeeRecord; production_value: number;
+  total_advances: number; total_deductions: number; total_bonuses: number;
+  net_salary: number; productions: ProductionRecord[];
 };
 
 export type PayrollReportData = {
-  total_salaries: number;
-  total_advances: number;
-  total_deductions: number;
-  total_bonuses: number;
-  net_payroll: number;
-  records: PayrollRecordFull[];
+  month: number; year: number; total_employees: number;
+  total_fixed_employees: number; total_piecework_employees: number;
+  total_fixed_salaries: number; total_piecework_salaries: number;
+  total_advances: number; total_deductions: number; total_bonuses: number;
+  total_payroll_cost: number; rows: SalaryRow[];
 };
+
+type EmployeeSaveInput = {
+  employee_code: string; employee_name: string; department: string; job_title: string;
+  employee_type: 'fixed' | 'piecework'; base_salary: number; status: 'active' | 'inactive';
+  notes: string; piece_rates?: { category_name: string; piece_rate: number }[];
+};
+
+function buildQS(p?: Record<string, number | string | undefined>) {
+  if (!p) return '';
+  const qs = new URLSearchParams();
+  Object.entries(p).forEach(([k, v]) => { if (v !== undefined) qs.set(k, String(v)); });
+  const s = qs.toString();
+  return s ? '?' + s : '';
+}
 
 export const payrollApi = {
   // Employees
   getEmployees: () => get<EmployeeRecord[]>('/payroll/employees'),
-  addEmployee: (data: Omit<EmployeeRecord, 'id' | 'created_at' | 'updated_at'>) =>
-    post<EmployeeRecord>('/payroll/employees', data),
-  updateEmployee: (id: number, data: Partial<Omit<EmployeeRecord, 'id' | 'created_at' | 'updated_at'>>) =>
-    put<EmployeeRecord>(`/payroll/employees/${id}`, data),
+  addEmployee:    (data: EmployeeSaveInput) => post<EmployeeRecord>('/payroll/employees', data),
+  updateEmployee: (id: number, data: EmployeeSaveInput) => put<EmployeeRecord>(`/payroll/employees/${id}`, data),
   removeEmployee: (id: number) => del<{ message: string }>(`/payroll/employees/${id}`),
-  // Payroll records
-  getRecords: (params?: { month?: number; year?: number; employee_id?: number }) => {
-    const qs = new URLSearchParams();
-    if (params?.month)       qs.set('month',       String(params.month));
-    if (params?.year)        qs.set('year',         String(params.year));
-    if (params?.employee_id) qs.set('employee_id',  String(params.employee_id));
-    const q = qs.toString();
-    return get<PayrollRecordFull[]>(`/payroll${q ? '?' + q : ''}`);
-  },
-  generate: (month: number, year: number) =>
-    post<{ generated: number; records: PayrollRecordFull[] }>('/payroll/generate', { month, year }),
-  updateRecord: (id: number, data: Partial<PayrollRecordFull>) =>
-    put<PayrollRecordFull>(`/payroll/${id}`, data),
-  deleteRecord: (id: number) => del<{ message: string }>(`/payroll/${id}`),
-  getReport: (params?: { month?: number; year?: number }) => {
-    const qs = new URLSearchParams();
-    if (params?.month) qs.set('month', String(params.month));
-    if (params?.year)  qs.set('year',  String(params.year));
-    const q = qs.toString();
-    return get<PayrollReportData>(`/payroll/report${q ? '?' + q : ''}`);
-  },
+
+  // Production
+  getProduction: (p?: { month?: number; year?: number; employee_id?: number }) =>
+    get<ProductionRecord[]>('/payroll/production' + buildQS(p)),
+  addProduction: (data: { employee_id: number; category_name: string; piece_rate: number; quantity: number; date: string; notes?: string }) =>
+    post<ProductionRecord>('/payroll/production', data),
+  updateProduction: (id: number, data: Partial<{ employee_id: number; category_name: string; piece_rate: number; quantity: number; date: string; notes: string }>) =>
+    put<ProductionRecord>(`/payroll/production/${id}`, data),
+  removeProduction: (id: number) => del<{ message: string }>(`/payroll/production/${id}`),
+
+  // Advances
+  getAdvances: (p?: { month?: number; year?: number; employee_id?: number }) =>
+    get<AdvanceRecord[]>('/payroll/advances' + buildQS(p)),
+  addAdvance:    (data: { employee_id: number; date: string; amount: number; notes?: string }) =>
+    post<AdvanceRecord>('/payroll/advances', data),
+  updateAdvance: (id: number, data: Partial<{ employee_id: number; date: string; amount: number; notes: string }>) =>
+    put<AdvanceRecord>(`/payroll/advances/${id}`, data),
+  removeAdvance: (id: number) => del<{ message: string }>(`/payroll/advances/${id}`),
+
+  // Deductions
+  getDeductions: (p?: { month?: number; year?: number; employee_id?: number }) =>
+    get<DeductionRecord[]>('/payroll/deductions' + buildQS(p)),
+  addDeduction:    (data: { employee_id: number; date: string; amount: number; reason?: string }) =>
+    post<DeductionRecord>('/payroll/deductions', data),
+  updateDeduction: (id: number, data: Partial<{ employee_id: number; date: string; amount: number; reason: string }>) =>
+    put<DeductionRecord>(`/payroll/deductions/${id}`, data),
+  removeDeduction: (id: number) => del<{ message: string }>(`/payroll/deductions/${id}`),
+
+  // Bonuses
+  getBonuses: (p?: { month?: number; year?: number; employee_id?: number }) =>
+    get<BonusRecord[]>('/payroll/bonuses' + buildQS(p)),
+  addBonus:    (data: { employee_id: number; date: string; amount: number; reason?: string }) =>
+    post<BonusRecord>('/payroll/bonuses', data),
+  updateBonus: (id: number, data: Partial<{ employee_id: number; date: string; amount: number; reason: string }>) =>
+    put<BonusRecord>(`/payroll/bonuses/${id}`, data),
+  removeBonus: (id: number) => del<{ message: string }>(`/payroll/bonuses/${id}`),
+
+  // Salary & Report
+  getSalary: (month: number, year: number) =>
+    get<SalaryRow[]>(`/payroll/salary?month=${month}&year=${year}`),
+  getReport:  (month: number, year: number) =>
+    get<PayrollReportData>(`/payroll/report?month=${month}&year=${year}`),
 };
 
 // ===== AUDIT LOG =====

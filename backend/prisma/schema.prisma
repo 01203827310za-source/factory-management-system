@@ -276,47 +276,121 @@ model FixedAsset {
 
 // ===== PAYROLL: EMPLOYEES =====
 model Employee {
-  id              Int             @id @default(autoincrement())
-  employee_code   String          @unique
+  id              Int                  @id @default(autoincrement())
+  employee_code   String               @unique
   employee_name   String
-  department      String          @default("")
-  job_title       String          @default("")
-  employee_type   String          @default("fixed") // "fixed" | "piecework"
-  base_salary     Float           @default(0)
-  piece_category  String          @default("")
-  piece_rate      Float           @default(0)
-  status          String          @default("active") // "active" | "inactive"
-  notes           String          @default("")
-  created_at      DateTime        @default(now())
-  updated_at      DateTime        @updatedAt
+  department      String               @default("")
+  job_title       String               @default("")
+  employee_type   String               @default("fixed")
+  base_salary     Float                @default(0)
+  piece_category  String               @default("")
+  piece_rate      Float                @default(0)
+  status          String               @default("active")
+  notes           String               @default("")
+  created_at      DateTime             @default(now())
+  updated_at      DateTime             @updatedAt
   payroll_records PayrollRecord[]
+  piece_rates     EmployeePieceRate[]
+  productions     EmployeeProduction[]
+  advances        EmployeeAdvance[]
+  deductions      EmployeeDeduction[]
+  bonuses         EmployeeBonus[]
 
   @@map("employees")
 }
 
-// ===== PAYROLL: MONTHLY RECORDS =====
+// ===== PAYROLL: PIECE RATES (multi-category) =====
+model EmployeePieceRate {
+  id            Int      @id @default(autoincrement())
+  employee_id   Int
+  employee      Employee @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  category_name String
+  piece_rate    Float    @default(0)
+  created_at    DateTime @default(now())
+
+  @@unique([employee_id, category_name])
+  @@map("employee_piece_rates")
+}
+
+// ===== PAYROLL: PRODUCTION RECORDS =====
+model EmployeeProduction {
+  id               Int      @id @default(autoincrement())
+  employee_id      Int
+  employee         Employee @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  category_name    String
+  piece_rate       Float    @default(0)
+  quantity         Float    @default(0)
+  production_value Float    @default(0)
+  date             String
+  notes            String   @default("")
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  @@map("employee_productions")
+}
+
+// ===== PAYROLL: ADVANCES =====
+model EmployeeAdvance {
+  id          Int      @id @default(autoincrement())
+  employee_id Int
+  employee    Employee @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  date        String
+  amount      Float    @default(0)
+  notes       String   @default("")
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  @@map("employee_advances")
+}
+
+// ===== PAYROLL: DEDUCTIONS =====
+model EmployeeDeduction {
+  id          Int      @id @default(autoincrement())
+  employee_id Int
+  employee    Employee @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  date        String
+  amount      Float    @default(0)
+  reason      String   @default("")
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  @@map("employee_deductions")
+}
+
+// ===== PAYROLL: BONUSES =====
+model EmployeeBonus {
+  id          Int      @id @default(autoincrement())
+  employee_id Int
+  employee    Employee @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  date        String
+  amount      Float    @default(0)
+  reason      String   @default("")
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  @@map("employee_bonuses")
+}
+
+// ===== PAYROLL: MONTHLY RECORDS (legacy — kept for migration safety) =====
 model PayrollRecord {
-  id                   Int      @id @default(autoincrement())
-  employee_id          Int
-  employee             Employee @relation(fields: [employee_id], references: [id])
-  employee_type        String   @default("fixed")
-  month                Int
-  year                 Int
-  // Fixed salary fields
-  attendance_days      Float    @default(0)
-  absence_days         Float    @default(0)
-  absence_deduction    Float    @default(0)
-  advances             Float    @default(0)
-  additional_deductions Float   @default(0)
-  bonus                Float    @default(0)
-  // Piecework fields
-  produced_qty         Float    @default(0)
-  production_bonus     Float    @default(0)
-  piece_income         Float    @default(0)
-  // Result
-  net_salary           Float    @default(0)
-  created_at           DateTime @default(now())
-  updated_at           DateTime @updatedAt
+  id                    Int      @id @default(autoincrement())
+  employee_id           Int
+  employee              Employee @relation(fields: [employee_id], references: [id])
+  employee_type         String   @default("fixed")
+  month                 Int
+  year                  Int
+  attendance_days       Float    @default(0)
+  absence_days          Float    @default(0)
+  absence_deduction     Float    @default(0)
+  advances              Float    @default(0)
+  additional_deductions Float    @default(0)
+  bonus                 Float    @default(0)
+  produced_qty          Float    @default(0)
+  production_bonus      Float    @default(0)
+  piece_income          Float    @default(0)
+  net_salary            Float    @default(0)
+  created_at            DateTime @default(now())
+  updated_at            DateTime @updatedAt
 
   @@unique([employee_id, month, year])
   @@map("payroll_records")

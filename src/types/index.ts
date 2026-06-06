@@ -210,6 +210,14 @@ export interface AppUser {
 export type Page = 'dashboard' | 'sales' | 'expenses' | 'readyStock' | 'fabric' | 'accessories' | 'cutting' | 'modelProd' | 'clientAccts' | 'debts' | 'financialCenter' | 'fixedAssets' | 'reports' | 'payroll' | 'auditLog';
 
 // ===== PAYROLL =====
+export interface PieceRateItem {
+  id: number;
+  employee_id: number;
+  category_name: string;
+  piece_rate: number;
+  created_at: string;
+}
+
 export interface Employee {
   id: number;
   employee_code: string;
@@ -224,36 +232,75 @@ export interface Employee {
   notes: string;
   created_at: string;
   updated_at: string;
+  piece_rates: PieceRateItem[];
 }
 
-export interface PayrollRecord {
+export interface ProductionRecord {
   id: number;
   employee_id: number;
   employee: Employee;
-  employee_type: string;
-  month: number;
-  year: number;
-  attendance_days: number;
-  absence_days: number;
-  absence_deduction: number;
-  advances: number;
-  additional_deductions: number;
-  bonus: number;
-  produced_qty: number;
-  production_bonus: number;
-  piece_income: number;
-  net_salary: number;
+  category_name: string;
+  piece_rate: number;
+  quantity: number;
+  production_value: number;
+  date: string;
+  notes: string;
   created_at: string;
-  updated_at: string;
 }
 
-export interface PayrollReport {
-  total_salaries: number;
+export interface AdvanceRecord {
+  id: number;
+  employee_id: number;
+  employee: Employee;
+  date: string;
+  amount: number;
+  notes: string;
+  created_at: string;
+}
+
+export interface DeductionRecord {
+  id: number;
+  employee_id: number;
+  employee: Employee;
+  date: string;
+  amount: number;
+  reason: string;
+  created_at: string;
+}
+
+export interface BonusRecord {
+  id: number;
+  employee_id: number;
+  employee: Employee;
+  date: string;
+  amount: number;
+  reason: string;
+  created_at: string;
+}
+
+export interface SalaryRow {
+  employee: Employee;
+  production_value: number;
   total_advances: number;
   total_deductions: number;
   total_bonuses: number;
-  net_payroll: number;
-  records: PayrollRecord[];
+  net_salary: number;
+  productions: ProductionRecord[];
+}
+
+export interface PayrollReportData {
+  month: number;
+  year: number;
+  total_employees: number;
+  total_fixed_employees: number;
+  total_piecework_employees: number;
+  total_fixed_salaries: number;
+  total_piecework_salaries: number;
+  total_advances: number;
+  total_deductions: number;
+  total_bonuses: number;
+  total_payroll_cost: number;
+  rows: SalaryRow[];
 }
 
 // ===== AUDIT LOG =====
