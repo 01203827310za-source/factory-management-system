@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, ClipboardList, DollarSign, Package, Scissors,
   Shirt, CreditCard, BadgeDollarSign, Boxes, X, Search, Landmark, BarChart2,
-  Wallet, ClipboardCheck,
+  Wallet, ClipboardCheck, Sparkles,
 } from 'lucide-react';
 import type { Page } from '../types';
 
@@ -28,8 +28,9 @@ const menuItems: { page: Page; label: string; icon: React.ReactNode }[] = [
   { page: 'clientAccts', label: 'حساب عميل', icon: <BadgeDollarSign size={20} /> },
   { page: 'accessories', label: 'مخزن الإكسسوارات', icon: <Boxes size={20} /> },
   { page: 'fixedAssets', label: 'الأصول الثابتة', icon: <Landmark size={20} /> },
-  { page: 'reports', label: 'التقارير', icon: <BarChart2 size={20} /> },
-  { page: 'payroll', label: 'المرتبات', icon: <Wallet size={20} /> },
+  { page: 'reports',      label: 'التقارير',       icon: <BarChart2 size={20} /> },
+  { page: 'aiAssistant', label: 'المستشار الذكي', icon: <Sparkles size={20} /> },
+  { page: 'payroll',     label: 'المرتبات',        icon: <Wallet size={20} /> },
   { page: 'auditLog', label: 'سجل التعديلات', icon: <ClipboardCheck size={20} /> },
 ];
 

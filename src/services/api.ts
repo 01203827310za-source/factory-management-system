@@ -667,6 +667,16 @@ export const auditLogApi = {
   getDetail: (id: number) => get<AuditLogRecord>(`/audit-log/${id}`),
 };
 
+// ===== AI ASSISTANT =====
+export type AiAssistantResponse = { answer: string; topics_used: string[] };
+
+export const aiAssistantApi = {
+  ask: (question: string) =>
+    post<AiAssistantResponse>('/ai-assistant', { question, mode: 'chat' }),
+  analyzeFactory: () =>
+    post<AiAssistantResponse>('/ai-assistant', { question: 'تحليل شامل', mode: 'analyze' }),
+};
+
 export interface FinancialCenterData {
   fabric_value: number;
   stock_value: number;

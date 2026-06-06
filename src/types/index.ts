@@ -207,7 +207,7 @@ export interface AppUser {
   created_at: string;
 }
 
-export type Page = 'dashboard' | 'sales' | 'expenses' | 'readyStock' | 'fabric' | 'accessories' | 'cutting' | 'modelProd' | 'clientAccts' | 'debts' | 'financialCenter' | 'fixedAssets' | 'reports' | 'payroll' | 'auditLog';
+export type Page = 'dashboard' | 'sales' | 'expenses' | 'readyStock' | 'fabric' | 'accessories' | 'cutting' | 'modelProd' | 'clientAccts' | 'debts' | 'financialCenter' | 'fixedAssets' | 'reports' | 'payroll' | 'auditLog' | 'aiAssistant';
 
 // ===== PAYROLL =====
 export interface PieceRateItem {
