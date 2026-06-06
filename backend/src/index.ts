@@ -78,5 +78,6 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 app.listen(PORT, () => {
   console.log(`\n🚀 Server running on http://localhost:${PORT}`);
   console.log(`📚 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🗄️  Database: ${process.env.DATABASE_URL?.split('@')[1] || 'configured'}\n`);
+  console.log(`🗄️  Database: ${process.env.DATABASE_URL?.split('@')[1] || 'configured'}`);
+  console.log(`🤖 AI Model: gemini-2.5-flash (key ${process.env.GEMINI_API_KEY ? 'set ✅' : 'NOT SET ⚠️'})\n`);
 });

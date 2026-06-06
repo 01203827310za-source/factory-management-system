@@ -222,7 +222,7 @@ export default function AiAssistant() {
           </div>
           <div>
             <h1 className="text-xl font-bold text-gray-900">المستشار الذكي</h1>
-            <p className="text-xs text-gray-400">مدعوم بـ Gemini 2.5 Pro · قراءة فقط</p>
+            <p className="text-xs text-gray-400">مدعوم بـ Gemini 2.5 Flash · قراءة فقط</p>
           </div>
         </div>
 

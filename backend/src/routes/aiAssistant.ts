@@ -33,7 +33,7 @@ function getGemini() {
     const err = new Error('MISSING_KEY');
     throw err;
   }
-  return new GoogleGenerativeAI(key).getGenerativeModel({ model: 'gemini-2.5-pro' });
+  return new GoogleGenerativeAI(key).getGenerativeModel({ model: 'gemini-2.5-flash' });
 }
 
 // ─── Arabic error messages ────────────────────────────────────────────────────
