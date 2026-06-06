@@ -16,6 +16,8 @@ import UsersPage from './pages/Users';
 import FixedAssets from './pages/FixedAssets';
 import Reports from './pages/Reports';
 import Login from './pages/Login';
+import Payroll from './pages/Payroll';
+import AuditLog from './pages/AuditLog';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { Menu, LogOut, User, ChevronDown, KeyRound } from 'lucide-react';
 import { authApi } from './services/api';
@@ -37,6 +39,8 @@ function PageRenderer({ page }: { page: ExtendedPage }) {
     case 'debts':       return <Debts />;
     case 'fixedAssets': return <FixedAssets />;
     case 'reports':     return <Reports />;
+    case 'payroll':     return <Payroll />;
+    case 'auditLog':    return <AuditLog />;
     case 'users':       return <UsersPage />;
 
     default:            return <Dashboard />;

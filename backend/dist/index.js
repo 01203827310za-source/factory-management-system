@@ -14,6 +14,8 @@ const auth_1 = __importDefault(require("./routes/auth"));
 const users_1 = __importDefault(require("./routes/users"));
 const sales_1 = __importDefault(require("./routes/sales"));
 const dashboard_1 = __importDefault(require("./routes/dashboard"));
+const payroll_1 = __importDefault(require("./routes/payroll"));
+const auditLog_1 = __importDefault(require("./routes/auditLog"));
 const entities_1 = require("./routes/entities");
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 3001;
@@ -52,6 +54,8 @@ app.use('/api/fabric-purchases', entities_1.fabricPurchasesRouter);
 app.use('/api/reports', reports_1.default);
 app.use('/api/dashboard', dashboard_1.default);
 app.use('/api/financial-center', financialCenter_1.default);
+app.use('/api/payroll', payroll_1.default);
+app.use('/api/audit-log', auditLog_1.default);
 // ===== 404 =====
 app.use((_req, res) => {
     res.status(404).json({ message: 'المسار غير موجود' });

@@ -207,4 +207,72 @@ export interface AppUser {
   created_at: string;
 }
 
-export type Page = 'dashboard' | 'sales' | 'expenses' | 'readyStock' | 'fabric' | 'accessories' | 'cutting' | 'modelProd' | 'clientAccts' | 'debts' | 'financialCenter' | 'fixedAssets' | 'reports';
+export type Page = 'dashboard' | 'sales' | 'expenses' | 'readyStock' | 'fabric' | 'accessories' | 'cutting' | 'modelProd' | 'clientAccts' | 'debts' | 'financialCenter' | 'fixedAssets' | 'reports' | 'payroll' | 'auditLog';
+
+// ===== PAYROLL =====
+export interface Employee {
+  id: number;
+  employee_code: string;
+  employee_name: string;
+  department: string;
+  job_title: string;
+  employee_type: 'fixed' | 'piecework';
+  base_salary: number;
+  piece_category: string;
+  piece_rate: number;
+  status: 'active' | 'inactive';
+  notes: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PayrollRecord {
+  id: number;
+  employee_id: number;
+  employee: Employee;
+  employee_type: string;
+  month: number;
+  year: number;
+  attendance_days: number;
+  absence_days: number;
+  absence_deduction: number;
+  advances: number;
+  additional_deductions: number;
+  bonus: number;
+  produced_qty: number;
+  production_bonus: number;
+  piece_income: number;
+  net_salary: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PayrollReport {
+  total_salaries: number;
+  total_advances: number;
+  total_deductions: number;
+  total_bonuses: number;
+  net_payroll: number;
+  records: PayrollRecord[];
+}
+
+// ===== AUDIT LOG =====
+export interface AuditLog {
+  id: number;
+  timestamp: string;
+  user_id: number;
+  user_name: string;
+  module: string;
+  action: 'CREATE' | 'UPDATE' | 'DELETE';
+  record_id: string;
+  before_data: string | null;
+  after_data: string | null;
+  description: string;
+}
+
+export interface AuditLogResponse {
+  total: number;
+  page: number;
+  limit: number;
+  logs: AuditLog[];
+}

@@ -9,6 +9,8 @@ import authRouter from './routes/auth';
 import usersRouter from './routes/users';
 import salesRouter from './routes/sales';
 import dashboardRouter from './routes/dashboard';
+import payrollRouter from './routes/payroll';
+import auditLogRouter from './routes/auditLog';
 import {
   expensesRouter, readyStockRouter, fabricRouter, accessoriesRouter,
   cuttingRouter, modelProdRouter, debtsRouter, clientAccountsRouter,
@@ -56,6 +58,8 @@ app.use('/api/fabric-purchases', fabricPurchasesRouter);
 app.use('/api/reports', reportsRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/financial-center', financialCenterRouter);
+app.use('/api/payroll', payrollRouter);
+app.use('/api/audit-log', auditLogRouter);
 
 // ===== 404 =====
 app.use((_req, res) => {

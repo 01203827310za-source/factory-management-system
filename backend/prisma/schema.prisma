@@ -273,3 +273,67 @@ model FixedAsset {
 
   @@map("fixed_assets")
 }
+
+// ===== PAYROLL: EMPLOYEES =====
+model Employee {
+  id              Int             @id @default(autoincrement())
+  employee_code   String          @unique
+  employee_name   String
+  department      String          @default("")
+  job_title       String          @default("")
+  employee_type   String          @default("fixed") // "fixed" | "piecework"
+  base_salary     Float           @default(0)
+  piece_category  String          @default("")
+  piece_rate      Float           @default(0)
+  status          String          @default("active") // "active" | "inactive"
+  notes           String          @default("")
+  created_at      DateTime        @default(now())
+  updated_at      DateTime        @updatedAt
+  payroll_records PayrollRecord[]
+
+  @@map("employees")
+}
+
+// ===== PAYROLL: MONTHLY RECORDS =====
+model PayrollRecord {
+  id                   Int      @id @default(autoincrement())
+  employee_id          Int
+  employee             Employee @relation(fields: [employee_id], references: [id])
+  employee_type        String   @default("fixed")
+  month                Int
+  year                 Int
+  // Fixed salary fields
+  attendance_days      Float    @default(0)
+  absence_days         Float    @default(0)
+  absence_deduction    Float    @default(0)
+  advances             Float    @default(0)
+  additional_deductions Float   @default(0)
+  bonus                Float    @default(0)
+  // Piecework fields
+  produced_qty         Float    @default(0)
+  production_bonus     Float    @default(0)
+  piece_income         Float    @default(0)
+  // Result
+  net_salary           Float    @default(0)
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+
+  @@unique([employee_id, month, year])
+  @@map("payroll_records")
+}
+
+// ===== AUDIT LOG =====
+model AuditLog {
+  id          Int      @id @default(autoincrement())
+  timestamp   DateTime @default(now())
+  user_id     Int      @default(0)
+  user_name   String   @default("")
+  module      String
+  action      String   // CREATE | UPDATE | DELETE
+  record_id   String   @default("")
+  before_data String?  @db.Text
+  after_data  String?  @db.Text
+  description String   @default("")
+
+  @@map("audit_logs")
+}

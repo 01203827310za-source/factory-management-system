@@ -509,6 +509,129 @@ export const financialCenterApi = {
   getData: () => get<FinancialCenterData>('/financial-center'),
 };
 
+// ===== PAYROLL =====
+export type EmployeeRecord = {
+  id: number;
+  employee_code: string;
+  employee_name: string;
+  department: string;
+  job_title: string;
+  employee_type: 'fixed' | 'piecework';
+  base_salary: number;
+  piece_category: string;
+  piece_rate: number;
+  status: 'active' | 'inactive';
+  notes: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PayrollRecordFull = {
+  id: number;
+  employee_id: number;
+  employee: EmployeeRecord;
+  employee_type: string;
+  month: number;
+  year: number;
+  attendance_days: number;
+  absence_days: number;
+  absence_deduction: number;
+  advances: number;
+  additional_deductions: number;
+  bonus: number;
+  produced_qty: number;
+  production_bonus: number;
+  piece_income: number;
+  net_salary: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PayrollReportData = {
+  total_salaries: number;
+  total_advances: number;
+  total_deductions: number;
+  total_bonuses: number;
+  net_payroll: number;
+  records: PayrollRecordFull[];
+};
+
+export const payrollApi = {
+  // Employees
+  getEmployees: () => get<EmployeeRecord[]>('/payroll/employees'),
+  addEmployee: (data: Omit<EmployeeRecord, 'id' | 'created_at' | 'updated_at'>) =>
+    post<EmployeeRecord>('/payroll/employees', data),
+  updateEmployee: (id: number, data: Partial<Omit<EmployeeRecord, 'id' | 'created_at' | 'updated_at'>>) =>
+    put<EmployeeRecord>(`/payroll/employees/${id}`, data),
+  removeEmployee: (id: number) => del<{ message: string }>(`/payroll/employees/${id}`),
+  // Payroll records
+  getRecords: (params?: { month?: number; year?: number; employee_id?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.month)       qs.set('month',       String(params.month));
+    if (params?.year)        qs.set('year',         String(params.year));
+    if (params?.employee_id) qs.set('employee_id',  String(params.employee_id));
+    const q = qs.toString();
+    return get<PayrollRecordFull[]>(`/payroll${q ? '?' + q : ''}`);
+  },
+  generate: (month: number, year: number) =>
+    post<{ generated: number; records: PayrollRecordFull[] }>('/payroll/generate', { month, year }),
+  updateRecord: (id: number, data: Partial<PayrollRecordFull>) =>
+    put<PayrollRecordFull>(`/payroll/${id}`, data),
+  deleteRecord: (id: number) => del<{ message: string }>(`/payroll/${id}`),
+  getReport: (params?: { month?: number; year?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.month) qs.set('month', String(params.month));
+    if (params?.year)  qs.set('year',  String(params.year));
+    const q = qs.toString();
+    return get<PayrollReportData>(`/payroll/report${q ? '?' + q : ''}`);
+  },
+};
+
+// ===== AUDIT LOG =====
+export type AuditLogRecord = {
+  id: number;
+  timestamp: string;
+  user_id: number;
+  user_name: string;
+  module: string;
+  action: 'CREATE' | 'UPDATE' | 'DELETE';
+  record_id: string;
+  before_data: string | null;
+  after_data: string | null;
+  description: string;
+};
+
+export type AuditLogResponse = {
+  total: number;
+  page: number;
+  limit: number;
+  logs: AuditLogRecord[];
+};
+
+export const auditLogApi = {
+  getLogs: (params?: {
+    from_date?: string;
+    to_date?: string;
+    user_name?: string;
+    module?: string;
+    action?: string;
+    page?: number;
+    limit?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    if (params?.from_date) qs.set('from_date', params.from_date);
+    if (params?.to_date)   qs.set('to_date',   params.to_date);
+    if (params?.user_name) qs.set('user_name', params.user_name);
+    if (params?.module)    qs.set('module',    params.module);
+    if (params?.action)    qs.set('action',    params.action);
+    if (params?.page)      qs.set('page',      String(params.page));
+    if (params?.limit)     qs.set('limit',     String(params.limit));
+    const q = qs.toString();
+    return get<AuditLogResponse>(`/audit-log${q ? '?' + q : ''}`);
+  },
+  getDetail: (id: number) => get<AuditLogRecord>(`/audit-log/${id}`),
+};
+
 export interface FinancialCenterData {
   fabric_value: number;
   stock_value: number;
