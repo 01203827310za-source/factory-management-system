@@ -24,8 +24,8 @@ router.get('/', async (_req, res) => {
             prisma_1.default.accessoriesWarehouse.findMany(),
         ]);
         // Payment logs
-        const hatemPaymentIn = paymentLogs.filter(p => p.receiver === 'حاتم').reduce((s, p) => s + p.amount, 0);
-        const midoPaymentIn = paymentLogs.filter(p => p.receiver === 'ميدو').reduce((s, p) => s + p.amount, 0);
+        const hatemPaymentIn = paymentLogs.filter(p => p.receiver === 'حاتم' && p.type === 'client_payment').reduce((s, p) => s + p.amount, 0);
+        const midoPaymentIn = paymentLogs.filter(p => p.receiver === 'ميدو' && p.type === 'client_payment').reduce((s, p) => s + p.amount, 0);
         const hatemDebtOut = paymentLogs.filter(p => p.type === 'debt_payment' && p.receiver === 'حاتم').reduce((s, p) => s + p.amount, 0);
         const midoDebtOut = paymentLogs.filter(p => p.type === 'debt_payment' && p.receiver === 'ميدو').reduce((s, p) => s + p.amount, 0);
         const totalSales = sales.reduce((s, sale) => s + sale.invoice_value, 0);

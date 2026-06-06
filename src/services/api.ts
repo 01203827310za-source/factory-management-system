@@ -440,6 +440,18 @@ export interface CapitalSnapshot {
   net_assets: number;
 }
 
+export interface PartnerSummary {
+  hatem_total_in: number;
+  hatem_total_out: number;
+  hatem_net: number;
+  mido_total_in: number;
+  mido_total_out: number;
+  mido_net: number;
+  total_in: number;
+  total_out: number;
+  total_net: number;
+}
+
 export interface ReportData {
   summary: {
     total_sales: number;
@@ -472,6 +484,7 @@ export interface ReportData {
     total_expenses: number;
     net_profit: number;
   };
+  partner_summary: PartnerSummary;
   customers_report: {
     top_clients: { client: string; value: number; remaining: number }[];
     total_outstanding: number;

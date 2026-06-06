@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate } from '../middleware/auth';
+import { computePartnerSummary } from '../services/financialMetrics';
 
 const router = Router();
 router.use(authenticate);
@@ -84,26 +85,8 @@ function computeCapitalSnapshot(db: AllData, upToDate: string) {
   const moneyOwed = salesRemaining + clientBalance;
 
   // --- Cash (net partners up to date) ---
-  const fSales = sales.filter(s => sd(s) <= upToDate);
-  const fExp = expenses.filter(e => e.date <= upToDate);
-  const fPay = paymentLogs.filter(p => p.date <= upToDate);
-  const fRet = returns_.filter(r => r.date <= upToDate);
-
-  const hDepIn = fSales.filter(s => s.deposit_receiver === 'حاتم').reduce((s, x) => s + x.deposit_paid, 0);
-  const mDepIn = fSales.filter(s => s.deposit_receiver === 'ميدو').reduce((s, x) => s + x.deposit_paid, 0);
-  const hRemIn = fSales.filter(s => s.order_status === 'تم الصرف').reduce((s, x) => s + x.remaining, 0);
-  const hPayIn = fPay.filter(p => p.receiver === 'حاتم' && p.type === 'client_payment').reduce((s, p) => s + p.amount, 0);
-  const mPayIn = fPay.filter(p => p.receiver === 'ميدو' && p.type === 'client_payment').reduce((s, p) => s + p.amount, 0);
-  const hDebtOut = fPay.filter(p => p.type === 'debt_payment' && p.receiver === 'حاتم').reduce((s, p) => s + p.amount, 0);
-  const mDebtOut = fPay.filter(p => p.type === 'debt_payment' && p.receiver === 'ميدو').reduce((s, p) => s + p.amount, 0);
-  const hRetOut = fRet.filter(r => r.paid_by === 'حاتم').reduce((s, r) => s + r.refund_amount, 0);
-  const mRetOut = fRet.filter(r => r.paid_by === 'ميدو').reduce((s, r) => s + r.refund_amount, 0);
-
-  const hIn = fExp.reduce((s, e) => s + e.hatem_in, 0) + hDepIn + hRemIn + hPayIn;
-  const hOut = fExp.reduce((s, e) => s + e.hatem_out, 0) + hDebtOut + hRetOut;
-  const mIn = fExp.reduce((s, e) => s + e.mido_in, 0) + mDepIn + mPayIn;
-  const mOut = fExp.reduce((s, e) => s + e.mido_out, 0) + mDebtOut + mRetOut;
-  const cashNet = (hIn - hOut) + (mIn - mOut);
+  const partnerSummary = computePartnerSummary({ sales, expenses, returns_, paymentLogs }, { toDate: upToDate });
+  const cashNet = partnerSummary.total_net;
 
   // --- Debts ---
   const totalDebts = debts.filter(d => d.date <= upToDate).reduce((s, d) => s + d.remaining, 0);
@@ -123,9 +106,10 @@ router.get('/', async (req: Request, res: Response) => {
     const toDate = (req.query.to_date as string) || today;
 
     const db = await fetchAll();
-    const { sales, expenses, debts, clientAccts, returns_, fabric, readyStock, accessories, modelProds, cuttingOrders } = db;
+    const { sales, expenses, debts, clientAccts, returns_, paymentLogs, fabric, readyStock, accessories, modelProds, cuttingOrders } = db;
 
     const inRange = (d: string) => d >= fromDate && d <= toDate;
+    const partnerSummary = computePartnerSummary({ sales, expenses, returns_, paymentLogs });
 
     // ─── Section 1 + 4: Sales & Marketers (date filtered) ────────────────────
     const salesInRange = sales.filter(s => inRange(sd(s)));
@@ -197,10 +181,9 @@ router.get('/', async (req: Request, res: Response) => {
       accessoriesBalance += avail;
     });
 
-    // ─── Section 3: Financial (date filtered) ────────────────────────────────
-    const expInRange = expenses.filter(e => inRange(e.date));
-    const totalRevenues = expInRange.reduce((s, e) => s + e.hatem_in + e.mido_in, 0);
-    const totalExpInRange = expInRange.reduce((s, e) => s + e.hatem_out + e.mido_out, 0);
+    // ─── Section 3: Financial (partner summary, all-time) ────────────────────
+    const totalRevenues = partnerSummary.total_in;
+    const totalExpInRange = partnerSummary.total_out;
 
     // ─── Section 5: Customers (date filtered) ────────────────────────────────
     const clientMap: Record<string, { value: number; remaining: number }> = {};
@@ -222,8 +205,6 @@ router.get('/', async (req: Request, res: Response) => {
 
     // ─── Summary cards (all-time totals + current state) ─────────────────────
     const allSalesValue = sales.reduce((s, x) => s + x.invoice_value, 0);
-    const allExpOut = expenses.reduce((s, e) => s + e.hatem_out + e.mido_out, 0);
-    const allExpIn = expenses.reduce((s, e) => s + e.hatem_in + e.mido_in, 0);
     const allDebts = debts.reduce((s, d) => s + d.remaining, 0);
 
     // ─── Section 7: Capital Growth ────────────────────────────────────────────
@@ -235,8 +216,8 @@ router.get('/', async (req: Request, res: Response) => {
     return res.json({
       summary: {
         total_sales: allSalesValue,
-        total_expenses: allExpOut,
-        net_profit: allExpIn - allExpOut,
+        total_expenses: partnerSummary.total_out,
+        net_profit: partnerSummary.total_net,
         total_reservations: reservValue,
         total_debts: allDebts,
       },
@@ -262,8 +243,9 @@ router.get('/', async (req: Request, res: Response) => {
       financial_report: {
         total_revenues: totalRevenues,
         total_expenses: totalExpInRange,
-        net_profit: totalRevenues - totalExpInRange,
+        net_profit: partnerSummary.total_net,
       },
+      partner_summary: partnerSummary,
       customers_report: {
         top_clients: topClients,
         total_outstanding: totalOutstanding,

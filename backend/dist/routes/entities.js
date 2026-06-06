@@ -8,10 +8,33 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.fixedAssetsRouter = exports.marketersRouter = exports.paymentLogRouter = exports.returnsRouter = exports.clientAccountsRouter = exports.debtsRouter = exports.modelProdRouter = exports.cuttingRouter = exports.accessoriesRouter = exports.fabricRouter = exports.readyStockRouter = exports.expensesRouter = void 0;
+exports.fixedAssetsRouter = exports.fabricPurchasesRouter = exports.marketersRouter = exports.paymentLogRouter = exports.returnsRouter = exports.clientAccountsRouter = exports.debtsRouter = exports.modelProdRouter = exports.cuttingRouter = exports.accessoriesRouter = exports.fabricRouter = exports.readyStockRouter = exports.expensesRouter = void 0;
 const express_1 = require("express");
 const prisma_1 = __importDefault(require("../lib/prisma"));
 const auth_1 = require("../middleware/auth");
+// Remove PaymentLog entries when a debt/client-account paid amount is reduced.
+// Deletes from newest first; if a single log exceeds the remaining delta, trims it.
+async function purgePaymentLogs(type, descPrefix, amountToRemove) {
+    if (amountToRemove <= 0)
+        return;
+    const logs = await prisma_1.default.paymentLog.findMany({
+        where: { type, description: { startsWith: descPrefix } },
+        orderBy: { id: 'desc' },
+    });
+    let toRemove = amountToRemove;
+    for (const log of logs) {
+        if (toRemove <= 0)
+            break;
+        if (log.amount <= toRemove) {
+            await prisma_1.default.paymentLog.delete({ where: { id: log.id } });
+            toRemove -= log.amount;
+        }
+        else {
+            await prisma_1.default.paymentLog.update({ where: { id: log.id }, data: { amount: log.amount - toRemove } });
+            toRemove = 0;
+        }
+    }
+}
 // ===== EXPENSES =====
 exports.expensesRouter = (0, express_1.Router)();
 exports.expensesRouter.use(auth_1.authenticate);
@@ -260,13 +283,18 @@ exports.debtsRouter.put('/:id', auth_1.requireManager, async (req, res) => {
     try {
         const id = parseInt(req.params.id);
         const data = req.body;
-        if (data.total_amount !== undefined || data.amount_paid !== undefined) {
-            const cur = await prisma_1.default.debt.findUnique({ where: { id } });
-            const total = data.total_amount ?? cur?.total_amount ?? 0;
-            const paid = data.amount_paid ?? cur?.amount_paid ?? 0;
-            data.remaining = total - paid;
+        const cur = await prisma_1.default.debt.findUnique({ where: { id } });
+        if (!cur)
+            return res.status(404).json({ message: 'الدين غير موجود' });
+        const newPaid = data.amount_paid !== undefined ? Number(data.amount_paid) : cur.amount_paid;
+        const newTotal = data.total_amount !== undefined ? Number(data.total_amount) : cur.total_amount;
+        data.remaining = newTotal - newPaid;
+        const result = await prisma_1.default.debt.update({ where: { id }, data });
+        const delta = newPaid - cur.amount_paid;
+        if (delta < 0) {
+            await purgePaymentLogs('debt_payment', `سداد دين: ${cur.name}`, -delta);
         }
-        return res.json(await prisma_1.default.debt.update({ where: { id }, data }));
+        return res.json(result);
     }
     catch {
         return res.status(500).json({ message: 'خطأ' });
@@ -274,7 +302,14 @@ exports.debtsRouter.put('/:id', auth_1.requireManager, async (req, res) => {
 });
 exports.debtsRouter.delete('/:id', auth_1.requireManager, async (req, res) => {
     try {
-        await prisma_1.default.debt.delete({ where: { id: parseInt(req.params.id) } });
+        const id = parseInt(req.params.id);
+        const cur = await prisma_1.default.debt.findUnique({ where: { id } });
+        if (cur && cur.amount_paid > 0) {
+            await prisma_1.default.paymentLog.deleteMany({
+                where: { type: 'debt_payment', description: { startsWith: `سداد دين: ${cur.name}` } },
+            });
+        }
+        await prisma_1.default.debt.delete({ where: { id } });
         return res.json({ message: 'تم' });
     }
     catch {
@@ -307,13 +342,18 @@ exports.clientAccountsRouter.put('/:id', auth_1.requireManager, async (req, res)
     try {
         const id = parseInt(req.params.id);
         const data = req.body;
-        if (data.total_amount !== undefined || data.amount_paid !== undefined) {
-            const cur = await prisma_1.default.clientAccount.findUnique({ where: { id } });
-            const total = data.total_amount ?? cur?.total_amount ?? 0;
-            const paid = data.amount_paid ?? cur?.amount_paid ?? 0;
-            data.remaining = total - paid;
+        const cur = await prisma_1.default.clientAccount.findUnique({ where: { id } });
+        if (!cur)
+            return res.status(404).json({ message: 'الحساب غير موجود' });
+        const newPaid = data.amount_paid !== undefined ? Number(data.amount_paid) : cur.amount_paid;
+        const newTotal = data.total_amount !== undefined ? Number(data.total_amount) : cur.total_amount;
+        data.remaining = newTotal - newPaid;
+        const result = await prisma_1.default.clientAccount.update({ where: { id }, data });
+        const delta = newPaid - cur.amount_paid;
+        if (delta < 0) {
+            await purgePaymentLogs('client_payment', `دفعة عميل: ${cur.client_name}`, -delta);
         }
-        return res.json(await prisma_1.default.clientAccount.update({ where: { id }, data }));
+        return res.json(result);
     }
     catch {
         return res.status(500).json({ message: 'خطأ' });
@@ -321,7 +361,14 @@ exports.clientAccountsRouter.put('/:id', auth_1.requireManager, async (req, res)
 });
 exports.clientAccountsRouter.delete('/:id', auth_1.requireManager, async (req, res) => {
     try {
-        await prisma_1.default.clientAccount.delete({ where: { id: parseInt(req.params.id) } });
+        const id = parseInt(req.params.id);
+        const cur = await prisma_1.default.clientAccount.findUnique({ where: { id } });
+        if (cur && cur.amount_paid > 0) {
+            await prisma_1.default.paymentLog.deleteMany({
+                where: { type: 'client_payment', description: { startsWith: `دفعة عميل: ${cur.client_name}` } },
+            });
+        }
+        await prisma_1.default.clientAccount.delete({ where: { id } });
         return res.json({ message: 'تم' });
     }
     catch {
@@ -429,6 +476,214 @@ exports.marketersRouter.delete('/:name', auth_1.requireManager, async (req, res)
     }
     catch {
         return res.status(500).json({ message: 'خطأ' });
+    }
+});
+// ===== FABRIC PURCHASES =====
+exports.fabricPurchasesRouter = (0, express_1.Router)();
+exports.fabricPurchasesRouter.use(auth_1.authenticate);
+exports.fabricPurchasesRouter.get('/', async (_req, res) => {
+    try {
+        return res.json(await prisma_1.default.fabricPurchase.findMany({ orderBy: { id: 'desc' } }));
+    }
+    catch {
+        return res.status(500).json({ message: 'خطأ' });
+    }
+});
+exports.fabricPurchasesRouter.post('/', auth_1.requireManager, async (req, res) => {
+    try {
+        const { date, fabric_type, color, quantity_kg, price_per_kg, supplier, invoice_no, notes } = req.body;
+        const qty = parseFloat(quantity_kg) || 0;
+        const price = parseFloat(price_per_kg) || 0;
+        if (!fabric_type || qty <= 0 || price <= 0) {
+            return res.status(400).json({ message: 'يرجى تحديد الصنف والكمية والسعر' });
+        }
+        const total_cost = Math.round(qty * price * 100) / 100;
+        const cleanColor = (color || '').trim();
+        // 1. Save purchase history (immutable record)
+        const purchase = await prisma_1.default.fabricPurchase.create({
+            data: {
+                date, fabric_type, color: cleanColor,
+                quantity_kg: qty, price_per_kg: price, total_cost,
+                supplier: supplier || '', invoice_no: invoice_no || '', notes: notes || '',
+            },
+        });
+        // 2. Find existing warehouse row for this type + color
+        const existing = await prisma_1.default.fabricWarehouse.findFirst({
+            where: { material_type: fabric_type, color: cleanColor },
+        });
+        if (existing) {
+            // Weighted average: (old_qty * old_avg + new_qty * new_price) / total_qty
+            const currentAvg = existing.avg_cost_per_kg > 0 ? existing.avg_cost_per_kg : existing.cost_per_kg;
+            const totalQty = existing.qty_in + qty;
+            const newAvg = totalQty > 0
+                ? (existing.qty_in * currentAvg + qty * price) / totalQty
+                : price;
+            await prisma_1.default.fabricWarehouse.update({
+                where: { id: existing.id },
+                data: {
+                    qty_in: totalQty,
+                    avg_cost_per_kg: Math.round(newAvg * 100) / 100,
+                    last_purchase_price: price,
+                },
+            });
+        }
+        else {
+            // No existing row — create one
+            await prisma_1.default.fabricWarehouse.create({
+                data: {
+                    date,
+                    material_type: fabric_type,
+                    color: cleanColor,
+                    qty_in: qty,
+                    cost_per_kg: price,
+                    avg_cost_per_kg: price,
+                    last_purchase_price: price,
+                },
+            });
+        }
+        return res.status(201).json(purchase);
+    }
+    catch (err) {
+        console.error(err);
+        return res.status(500).json({ message: 'خطأ في حفظ المشترى' });
+    }
+});
+exports.fabricPurchasesRouter.put('/:id', auth_1.requireManager, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id);
+        const { date, fabric_type, color, quantity_kg, price_per_kg, supplier, invoice_no, notes } = req.body;
+        const newQty = parseFloat(quantity_kg) || 0;
+        const newPrice = parseFloat(price_per_kg) || 0;
+        if (!fabric_type || newQty <= 0 || newPrice <= 0) {
+            return res.status(400).json({ message: 'يرجى تحديد الصنف والكمية والسعر' });
+        }
+        const cleanColor = (color || '').trim();
+        const result = await prisma_1.default.$transaction(async (tx) => {
+            const existing = await tx.fabricPurchase.findUnique({ where: { id } });
+            if (!existing)
+                throw new Error('NOT_FOUND');
+            const warehouse = await tx.fabricWarehouse.findFirst({
+                where: { material_type: existing.fabric_type, color: existing.color },
+            });
+            if (!warehouse)
+                throw new Error('WAREHOUSE_NOT_FOUND');
+            // Get all purchases to compute baseQty
+            const allPurchases = await tx.fabricPurchase.findMany({
+                where: { fabric_type: existing.fabric_type, color: existing.color },
+                orderBy: { id: 'asc' },
+            });
+            const currentPurchaseTotalQty = allPurchases.reduce((s, p) => s + p.quantity_kg, 0);
+            const baseQty = Math.max(0, warehouse.qty_in - currentPurchaseTotalQty);
+            const baseCost = warehouse.cost_per_kg;
+            // Safety: if reducing quantity, check cutting consumption
+            if (newQty < existing.quantity_kg) {
+                const cutting = await tx.cuttingOrder.findMany({
+                    where: { material_type: existing.fabric_type, color: existing.color },
+                });
+                const totalConsumed = cutting.reduce((s, c) => s + c.kg_consumed, 0);
+                const newTotalQty = baseQty + (currentPurchaseTotalQty - existing.quantity_kg + newQty);
+                if (newTotalQty < totalConsumed)
+                    throw new Error('CONSUMED');
+            }
+            // Build updated purchase list: replace old with new values
+            const afterPurchases = allPurchases.map(p => p.id === id
+                ? { quantity_kg: newQty, price_per_kg: newPrice }
+                : { quantity_kg: p.quantity_kg, price_per_kg: p.price_per_kg });
+            const newPurchaseTotalQty = afterPurchases.reduce((s, p) => s + p.quantity_kg, 0);
+            const newTotalQty = baseQty + newPurchaseTotalQty;
+            const weightedSum = baseQty * baseCost + afterPurchases.reduce((s, p) => s + p.quantity_kg * p.price_per_kg, 0);
+            const newAvg = newTotalQty > 0 ? weightedSum / newTotalQty : newPrice;
+            const lastPurchase = afterPurchases[afterPurchases.length - 1];
+            await tx.fabricWarehouse.update({
+                where: { id: warehouse.id },
+                data: {
+                    qty_in: newTotalQty,
+                    avg_cost_per_kg: Math.round(newAvg * 100) / 100,
+                    last_purchase_price: lastPurchase?.price_per_kg ?? baseCost,
+                },
+            });
+            return tx.fabricPurchase.update({
+                where: { id },
+                data: {
+                    date, fabric_type, color: cleanColor,
+                    quantity_kg: newQty, price_per_kg: newPrice,
+                    total_cost: Math.round(newQty * newPrice * 100) / 100,
+                    supplier: supplier || '', invoice_no: invoice_no || '', notes: notes || '',
+                },
+            });
+        });
+        return res.json(result);
+    }
+    catch (err) {
+        if (err instanceof Error) {
+            if (err.message === 'NOT_FOUND')
+                return res.status(404).json({ message: 'العملية غير موجودة' });
+            if (err.message === 'CONSUMED')
+                return res.status(400).json({ message: 'لا يمكن حذف أو تقليل هذه العملية لأن جزءاً من الكمية تم استهلاكه بالفعل.' });
+            if (err.message === 'WAREHOUSE_NOT_FOUND')
+                return res.status(404).json({ message: 'سجل المخزون غير موجود' });
+        }
+        console.error(err);
+        return res.status(500).json({ message: 'خطأ في تعديل المشترى' });
+    }
+});
+exports.fabricPurchasesRouter.delete('/:id', auth_1.requireManager, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id);
+        await prisma_1.default.$transaction(async (tx) => {
+            const existing = await tx.fabricPurchase.findUnique({ where: { id } });
+            if (!existing)
+                throw new Error('NOT_FOUND');
+            const warehouse = await tx.fabricWarehouse.findFirst({
+                where: { material_type: existing.fabric_type, color: existing.color },
+            });
+            if (!warehouse)
+                throw new Error('WAREHOUSE_NOT_FOUND');
+            const allPurchases = await tx.fabricPurchase.findMany({
+                where: { fabric_type: existing.fabric_type, color: existing.color },
+                orderBy: { id: 'asc' },
+            });
+            const currentPurchaseTotalQty = allPurchases.reduce((s, p) => s + p.quantity_kg, 0);
+            const baseQty = Math.max(0, warehouse.qty_in - currentPurchaseTotalQty);
+            const baseCost = warehouse.cost_per_kg;
+            const afterPurchases = allPurchases
+                .filter(p => p.id !== id)
+                .map(p => ({ quantity_kg: p.quantity_kg, price_per_kg: p.price_per_kg }));
+            const newPurchaseTotalQty = afterPurchases.reduce((s, p) => s + p.quantity_kg, 0);
+            const newTotalQty = baseQty + newPurchaseTotalQty;
+            // Safety: ensure remaining stock covers cutting consumption
+            const cutting = await tx.cuttingOrder.findMany({
+                where: { material_type: existing.fabric_type, color: existing.color },
+            });
+            const totalConsumed = cutting.reduce((s, c) => s + c.kg_consumed, 0);
+            if (newTotalQty < totalConsumed)
+                throw new Error('CONSUMED');
+            const weightedSum = baseQty * baseCost + afterPurchases.reduce((s, p) => s + p.quantity_kg * p.price_per_kg, 0);
+            const newAvg = newTotalQty > 0 ? weightedSum / newTotalQty : baseCost;
+            const lastPurchase = afterPurchases[afterPurchases.length - 1];
+            await tx.fabricWarehouse.update({
+                where: { id: warehouse.id },
+                data: {
+                    qty_in: newTotalQty,
+                    avg_cost_per_kg: Math.round(newAvg * 100) / 100,
+                    last_purchase_price: lastPurchase?.price_per_kg ?? baseCost,
+                },
+            });
+            await tx.fabricPurchase.delete({ where: { id } });
+        });
+        return res.json({ message: 'تم الحذف' });
+    }
+    catch (err) {
+        if (err instanceof Error) {
+            if (err.message === 'NOT_FOUND')
+                return res.status(404).json({ message: 'العملية غير موجودة' });
+            if (err.message === 'CONSUMED')
+                return res.status(400).json({ message: 'لا يمكن حذف أو تقليل هذه العملية لأن جزءاً من الكمية تم استهلاكه بالفعل.' });
+            if (err.message === 'WAREHOUSE_NOT_FOUND')
+                return res.status(404).json({ message: 'سجل المخزون غير موجود' });
+        }
+        console.error(err);
+        return res.status(500).json({ message: 'خطأ في حذف المشترى' });
     }
 });
 // ===== FIXED ASSETS =====

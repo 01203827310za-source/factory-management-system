@@ -48,6 +48,7 @@ app.use('/api/returns', entities_1.returnsRouter);
 app.use('/api/payment-log', entities_1.paymentLogRouter);
 app.use('/api/marketers', entities_1.marketersRouter);
 app.use('/api/fixed-assets', entities_1.fixedAssetsRouter);
+app.use('/api/fabric-purchases', entities_1.fabricPurchasesRouter);
 app.use('/api/reports', reports_1.default);
 app.use('/api/dashboard', dashboard_1.default);
 app.use('/api/financial-center', financialCenter_1.default);

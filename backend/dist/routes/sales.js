@@ -75,13 +75,26 @@ router.put('/:id', auth_1.requireManager, async (req, res) => {
     try {
         const id = parseInt(req.params.id);
         const data = req.body;
+        const oldSale = await prisma_1.default.sale.findUnique({ where: { id } });
+        if (!oldSale)
+            return res.status(404).json({ message: 'الطلب غير موجود' });
+        const wasReservation = oldSale.order_status === 'تم الحجز';
+        const newStatus = data.order_status ?? oldSale.order_status;
+        const willBeReservation = newStatus === 'تم الحجز';
         if (data.invoice_value !== undefined || data.deposit_paid !== undefined) {
-            const current = await prisma_1.default.sale.findUnique({ where: { id } });
-            const inv = Number(data.invoice_value ?? current?.invoice_value ?? 0);
-            const dep = Number(data.deposit_paid ?? current?.deposit_paid ?? 0);
+            const inv = Number(data.invoice_value ?? oldSale.invoice_value ?? 0);
+            const dep = Number(data.deposit_paid ?? oldSale.deposit_paid ?? 0);
             data.remaining = inv - dep;
         }
+        // Reverse old reservation quantities before saving
+        if (wasReservation) {
+            await adjustReserved(extractModels(oldSale), -1);
+        }
         const sale = await prisma_1.default.sale.update({ where: { id }, data });
+        // Apply new reservation quantities after saving
+        if (willBeReservation) {
+            await adjustReserved(extractModels(data), +1);
+        }
         return res.json(sale);
     }
     catch {

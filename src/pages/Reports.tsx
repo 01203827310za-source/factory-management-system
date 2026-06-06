@@ -117,6 +117,13 @@ export default function Reports() {
       { 'البند': 'إجمالي الديون', 'القيمة': data.summary.total_debts },
     ]), 'الملخص');
 
+    // Sheet 1b: Partner Summary
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([
+      { 'الشريك': 'حاتم', 'إجمالي الوارد': data.partner_summary.hatem_total_in, 'إجمالي المصروفات': data.partner_summary.hatem_total_out, 'الصافي': data.partner_summary.hatem_net },
+      { 'الشريك': 'ميدو', 'إجمالي الوارد': data.partner_summary.mido_total_in, 'إجمالي المصروفات': data.partner_summary.mido_total_out, 'الصافي': data.partner_summary.mido_net },
+      { 'الشريك': 'الإجمالي', 'إجمالي الوارد': data.partner_summary.total_in, 'إجمالي المصروفات': data.partner_summary.total_out, 'الصافي': data.partner_summary.total_net },
+    ]), 'ملخص الشركاء');
+
     // Sheet 2: Sales
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([
       { 'البند': 'عدد الأوردرات', 'القيمة': data.sales_report.total_orders },
@@ -254,7 +261,7 @@ export default function Reports() {
 // ─── All report sections ──────────────────────────────────────────────────────
 
 function ReportBody({ data, fromDate, toDate }: { data: ReportData; fromDate: string; toDate: string }) {
-  const { summary, sales_report, inventory_report, financial_report, customers_report, reservations_report, capital_growth } = data;
+  const { summary, sales_report, inventory_report, financial_report, partner_summary, customers_report, reservations_report, capital_growth } = data;
   const hasShortages = reservations_report.shortages.length > 0;
 
   return (
@@ -270,7 +277,7 @@ function ReportBody({ data, fromDate, toDate }: { data: ReportData; fromDate: st
       </div>
 
       <p className="text-xs text-gray-400 -mt-2">
-        * ملاحظة: بيانات المبيعات والمالية والمسوقين والعملاء مُصفَّاة للفترة ({fromDate} → {toDate}). المخزون والحجوزات تعكس الوضع الحالي.
+        * ملاحظة: بيانات المبيعات والمسوقين والعملاء مُصفَّاة للفترة ({fromDate} → {toDate}). ملخص الشركاء والمخزون والحجوزات يعكس الوضع الحالي.
       </p>
 
       {/* ── Section 1: Sales ── */}
@@ -319,10 +326,43 @@ function ReportBody({ data, fromDate, toDate }: { data: ReportData; fromDate: st
       {/* ── Section 3: Financial ── */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         <SectionHeader title="3. التقرير المالي" color="green" />
-        <div className="p-5 grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <MiniCard label="إجمالي الإيرادات" value={financial_report.total_revenues} color="green" />
-          <MiniCard label="إجمالي المصروفات" value={financial_report.total_expenses} color="red" />
-          <MiniCard label="صافي الربح" value={financial_report.net_profit} color={financial_report.net_profit >= 0 ? 'green' : 'red'} />
+        <div className="p-5 space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <MiniCard label="إجمالي الوارد" value={financial_report.total_revenues} color="green" />
+            <MiniCard label="إجمالي المصروفات" value={financial_report.total_expenses} color="red" />
+            <MiniCard label="صافي الشركاء" value={financial_report.net_profit} color={financial_report.net_profit >= 0 ? 'green' : 'red'} />
+          </div>
+          <div className="overflow-x-auto rounded-xl border border-gray-200">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50">
+                  <th className="px-4 py-3 text-right font-semibold text-gray-600">الشريك</th>
+                  <th className="px-4 py-3 text-center font-semibold text-gray-600">إجمالي الوارد</th>
+                  <th className="px-4 py-3 text-center font-semibold text-gray-600">إجمالي المصروفات</th>
+                  <th className="px-4 py-3 text-center font-semibold text-gray-600">الصافي</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  { name: 'ميدو', inn: partner_summary.mido_total_in, out: partner_summary.mido_total_out, net: partner_summary.mido_net },
+                  { name: 'حاتم', inn: partner_summary.hatem_total_in, out: partner_summary.hatem_total_out, net: partner_summary.hatem_net },
+                ].map(p => (
+                  <tr key={p.name} className="border-t border-gray-100 hover:bg-gray-50">
+                    <td className="px-4 py-3 font-medium text-gray-800">{p.name}</td>
+                    <td className="px-4 py-3 text-center font-semibold text-emerald-700">{fmt(p.inn)}</td>
+                    <td className="px-4 py-3 text-center font-semibold text-red-600">{fmt(p.out)}</td>
+                    <td className={`px-4 py-3 text-center font-bold ${p.net >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{fmt(p.net)}</td>
+                  </tr>
+                ))}
+                <tr className="border-t-2 border-gray-200 bg-gray-50 font-bold">
+                  <td className="px-4 py-3 text-gray-800">الإجمالي</td>
+                  <td className="px-4 py-3 text-center text-emerald-700">{fmt(partner_summary.total_in)}</td>
+                  <td className="px-4 py-3 text-center text-red-600">{fmt(partner_summary.total_out)}</td>
+                  <td className={`px-4 py-3 text-center ${partner_summary.total_net >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{fmt(partner_summary.total_net)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
