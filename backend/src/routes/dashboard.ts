@@ -79,8 +79,8 @@ router.get('/', async (_req: Request, res: Response) => {
     const modelProds = await prisma.modelProduction.findMany();
     const newProd: Record<string, number> = {};
     modelProds.forEach(mp => {
-      const key = `${mp.model_code}`;
-      newProd[key] = (newProd[key] || 0) + mp.qty_received;
+      const k = `${mp.model_code}|${mp.color || ''}`;
+      newProd[k] = (newProd[k] || 0) + mp.qty_received;
     });
     // Only deduct stock for actual dispatched/pending sales — NOT reservations or cancelled
     const totalSalesQty: Record<string, number> = {};
@@ -88,25 +88,26 @@ router.get('/', async (_req: Request, res: Response) => {
       .filter(s => s.order_status !== 'تم الحجز' && s.order_status !== 'تم الإلغاء')
       .forEach(s => {
         [
-          { code: s.model1_code, qty: s.model1_qty },
-          { code: s.model2_code, qty: s.model2_qty },
-          { code: s.model3_code, qty: s.model3_qty },
-          { code: s.model4_code, qty: s.model4_qty },
-          { code: s.model5_code, qty: s.model5_qty },
-        ].forEach(({ code, qty }) => {
-          if (code && qty > 0) totalSalesQty[code] = (totalSalesQty[code] || 0) + qty;
+          { code: s.model1_code, qty: s.model1_qty, color: s.model1_color },
+          { code: s.model2_code, qty: s.model2_qty, color: s.model2_color },
+          { code: s.model3_code, qty: s.model3_qty, color: s.model3_color },
+          { code: s.model4_code, qty: s.model4_qty, color: s.model4_color },
+          { code: s.model5_code, qty: s.model5_qty, color: s.model5_color },
+        ].forEach(({ code, qty, color }) => {
+          if (code && qty > 0) { const k = `${code}|${color || ''}`; totalSalesQty[k] = (totalSalesQty[k] || 0) + qty; }
         });
       });
     const returnQty: Record<string, number> = {};
     returns_.forEach(r => {
-      if (r.model_code) returnQty[r.model_code] = (returnQty[r.model_code] || 0) + r.model_qty;
+      if (r.model_code) { const k = `${r.model_code}|${r.model_color || ''}`; returnQty[k] = (returnQty[k] || 0) + r.model_qty; }
     });
 
     let stockValue = 0;
     readyStock.forEach(rs => {
-      const prod = newProd[rs.model_code] || 0;
-      const sold = totalSalesQty[rs.model_code] || 0;
-      const returned = returnQty[rs.model_code] || 0;
+      const k = `${rs.model_code}|${rs.color || ''}`;
+      const prod = newProd[k] || 0;
+      const sold = totalSalesQty[k] || 0;
+      const returned = returnQty[k] || 0;
       const actual = Math.max(0, rs.opening_balance + prod - sold + returned);
       // Use available (not reserved) quantity for stock valuation
       const available = Math.max(0, actual - rs.reserved_quantity);

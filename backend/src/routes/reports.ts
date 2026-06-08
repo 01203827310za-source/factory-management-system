@@ -37,26 +37,30 @@ function computeCapitalSnapshot(db: AllData, upToDate: string) {
   // --- Stock ---
   const newProd: Record<string, number> = {};
   modelProds.filter(mp => mp.date <= upToDate).forEach(mp => {
-    newProd[mp.model_code] = (newProd[mp.model_code] || 0) + mp.qty_received;
+    const k = `${mp.model_code}|${mp.color || ''}`;
+    newProd[k] = (newProd[k] || 0) + mp.qty_received;
   });
 
   const soldQty: Record<string, number> = {};
   sales.filter(s => sd(s) <= upToDate && s.order_status !== 'تم الحجز' && s.order_status !== 'تم الإلغاء').forEach(s => {
-    [{ c: s.model1_code, q: s.model1_qty }, { c: s.model2_code, q: s.model2_qty },
-     { c: s.model3_code, q: s.model3_qty }, { c: s.model4_code, q: s.model4_qty },
-     { c: s.model5_code, q: s.model5_qty }].forEach(({ c, q }) => {
-      if (c && q > 0) soldQty[c] = (soldQty[c] || 0) + q;
+    [{ c: s.model1_code, q: s.model1_qty, col: s.model1_color },
+     { c: s.model2_code, q: s.model2_qty, col: s.model2_color },
+     { c: s.model3_code, q: s.model3_qty, col: s.model3_color },
+     { c: s.model4_code, q: s.model4_qty, col: s.model4_color },
+     { c: s.model5_code, q: s.model5_qty, col: s.model5_color }].forEach(({ c, q, col }) => {
+      if (c && q > 0) { const k = `${c}|${col || ''}`; soldQty[k] = (soldQty[k] || 0) + q; }
     });
   });
 
   const retQty: Record<string, number> = {};
   returns_.filter(r => r.date <= upToDate).forEach(r => {
-    if (r.model_code) retQty[r.model_code] = (retQty[r.model_code] || 0) + r.model_qty;
+    if (r.model_code) { const k = `${r.model_code}|${r.model_color || ''}`; retQty[k] = (retQty[k] || 0) + r.model_qty; }
   });
 
   let stockValue = 0;
   readyStock.forEach(rs => {
-    const actual = Math.max(0, rs.opening_balance + (newProd[rs.model_code] || 0) - (soldQty[rs.model_code] || 0) + (retQty[rs.model_code] || 0));
+    const k = `${rs.model_code}|${rs.color || ''}`;
+    const actual = Math.max(0, rs.opening_balance + (newProd[k] || 0) - (soldQty[k] || 0) + (retQty[k] || 0));
     const available = Math.max(0, actual - rs.reserved_quantity);
     stockValue += available * rs.cost_per_piece;
   });
@@ -137,22 +141,30 @@ router.get('/', async (req: Request, res: Response) => {
 
     // ─── Section 2: Inventory (current state, no date filter) ────────────────
     const newProdAll: Record<string, number> = {};
-    modelProds.forEach(mp => { newProdAll[mp.model_code] = (newProdAll[mp.model_code] || 0) + mp.qty_received; });
+    modelProds.forEach(mp => {
+      const k = `${mp.model_code}|${mp.color || ''}`;
+      newProdAll[k] = (newProdAll[k] || 0) + mp.qty_received;
+    });
 
     const soldQtyAll: Record<string, number> = {};
     sales.filter(s => s.order_status !== 'تم الحجز' && s.order_status !== 'تم الإلغاء').forEach(s => {
-      [{ c: s.model1_code, q: s.model1_qty }, { c: s.model2_code, q: s.model2_qty },
-       { c: s.model3_code, q: s.model3_qty }, { c: s.model4_code, q: s.model4_qty },
-       { c: s.model5_code, q: s.model5_qty }].forEach(({ c, q }) => {
-        if (c && q > 0) soldQtyAll[c] = (soldQtyAll[c] || 0) + q;
+      [{ c: s.model1_code, q: s.model1_qty, col: s.model1_color },
+       { c: s.model2_code, q: s.model2_qty, col: s.model2_color },
+       { c: s.model3_code, q: s.model3_qty, col: s.model3_color },
+       { c: s.model4_code, q: s.model4_qty, col: s.model4_color },
+       { c: s.model5_code, q: s.model5_qty, col: s.model5_color }].forEach(({ c, q, col }) => {
+        if (c && q > 0) { const k = `${c}|${col || ''}`; soldQtyAll[k] = (soldQtyAll[k] || 0) + q; }
       });
     });
 
     const retQtyAll: Record<string, number> = {};
-    returns_.forEach(r => { if (r.model_code) retQtyAll[r.model_code] = (retQtyAll[r.model_code] || 0) + r.model_qty; });
+    returns_.forEach(r => {
+      if (r.model_code) { const k = `${r.model_code}|${r.model_color || ''}`; retQtyAll[k] = (retQtyAll[k] || 0) + r.model_qty; }
+    });
 
     const stockDetails = readyStock.map(rs => {
-      const actual = rs.opening_balance + (newProdAll[rs.model_code] || 0) - (soldQtyAll[rs.model_code] || 0) + (retQtyAll[rs.model_code] || 0);
+      const k = `${rs.model_code}|${rs.color || ''}`;
+      const actual = rs.opening_balance + (newProdAll[k] || 0) - (soldQtyAll[k] || 0) + (retQtyAll[k] || 0);
       const reserved = rs.reserved_quantity;
       const available = actual - reserved;
       return { model_code: rs.model_code, product_name: rs.product_name, actual, reserved, available };
