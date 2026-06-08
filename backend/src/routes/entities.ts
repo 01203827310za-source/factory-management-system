@@ -327,6 +327,48 @@ marketersRouter.delete('/:name', requireManager, async (req, res) => {
 export const fabricPurchasesRouter = Router();
 fabricPurchasesRouter.use(authenticate);
 
+// Type alias for Prisma's interactive-transaction client (same API as top-level prisma)
+type TxClient = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+
+// Recomputes warehouse qty_in, cost_per_kg, and avg_cost_per_kg from scratch
+// using ALL FabricPurchase rows for the given material_type + color.
+// Must be called inside every $transaction that touches a purchase record.
+async function recalcFromPurchases(tx: TxClient, fabricType: string, color: string): Promise<void> {
+  const warehouse = await tx.fabricWarehouse.findFirst({
+    where: { material_type: fabricType, color },
+  });
+  if (!warehouse) return;
+
+  const purchases = await tx.fabricPurchase.findMany({
+    where: { fabric_type: fabricType, color },
+    orderBy: { id: 'asc' },
+  });
+
+  if (purchases.length === 0) {
+    // All purchases removed — zero out the row but keep it
+    await tx.fabricWarehouse.update({
+      where: { id: warehouse.id },
+      data: { qty_in: 0, cost_per_kg: 0, avg_cost_per_kg: 0 },
+    });
+    return;
+  }
+
+  const totalQty   = purchases.reduce((s, p) => s + p.quantity_kg, 0);
+  const totalValue = purchases.reduce((s, p) => s + p.quantity_kg * p.price_per_kg, 0);
+  const wac        = Math.round((totalValue / totalQty) * 100) / 100;
+  const lastPrice  = purchases[purchases.length - 1].price_per_kg;
+
+  await tx.fabricWarehouse.update({
+    where: { id: warehouse.id },
+    data: {
+      qty_in:              totalQty,
+      cost_per_kg:         wac,
+      avg_cost_per_kg:     wac,
+      last_purchase_price: lastPrice,
+    },
+  });
+}
+
 fabricPurchasesRouter.get('/', async (_req, res) => {
   try { return res.json(await prisma.fabricPurchase.findMany({ orderBy: { id: 'desc' } })); }
   catch { return res.status(500).json({ message: 'خطأ' }); }
@@ -335,57 +377,47 @@ fabricPurchasesRouter.get('/', async (_req, res) => {
 fabricPurchasesRouter.post('/', requireManager, async (req: Request, res: Response) => {
   try {
     const { date, fabric_type, color, quantity_kg, price_per_kg, supplier, invoice_no, notes } = req.body;
-    const qty = parseFloat(quantity_kg) || 0;
+    const qty   = parseFloat(quantity_kg)  || 0;
     const price = parseFloat(price_per_kg) || 0;
     if (!fabric_type || qty <= 0 || price <= 0) {
       return res.status(400).json({ message: 'يرجى تحديد الصنف والكمية والسعر' });
     }
-    const total_cost = Math.round(qty * price * 100) / 100;
     const cleanColor = (color || '').trim();
 
-    // 1. Save purchase history (immutable record)
-    const purchase = await prisma.fabricPurchase.create({
-      data: {
-        date, fabric_type, color: cleanColor,
-        quantity_kg: qty, price_per_kg: price, total_cost,
-        supplier: supplier || '', invoice_no: invoice_no || '', notes: notes || '',
-      },
-    });
-
-    // 2. Find existing warehouse row for this type + color
-    const existing = await prisma.fabricWarehouse.findFirst({
-      where: { material_type: fabric_type, color: cleanColor },
-    });
-
-    if (existing) {
-      // Weighted average: (old_qty * old_avg + new_qty * new_price) / total_qty
-      const currentAvg = existing.avg_cost_per_kg > 0 ? existing.avg_cost_per_kg : existing.cost_per_kg;
-      const totalQty = existing.qty_in + qty;
-      const newAvg = totalQty > 0
-        ? (existing.qty_in * currentAvg + qty * price) / totalQty
-        : price;
-      await prisma.fabricWarehouse.update({
-        where: { id: existing.id },
+    const purchase = await prisma.$transaction(async (tx) => {
+      // 1. Save the immutable purchase record
+      const created = await tx.fabricPurchase.create({
         data: {
-          qty_in: totalQty,
-          avg_cost_per_kg: Math.round(newAvg * 100) / 100,
-          last_purchase_price: price,
+          date, fabric_type, color: cleanColor,
+          quantity_kg: qty, price_per_kg: price,
+          total_cost: Math.round(qty * price * 100) / 100,
+          supplier: supplier || '', invoice_no: invoice_no || '', notes: notes || '',
         },
       });
-    } else {
-      // No existing row — create one
-      await prisma.fabricWarehouse.create({
-        data: {
-          date,
-          material_type: fabric_type,
-          color: cleanColor,
-          qty_in: qty,
-          cost_per_kg: price,
-          avg_cost_per_kg: price,
-          last_purchase_price: price,
-        },
+
+      // 2. Ensure a warehouse row exists for this type + color
+      const existing = await tx.fabricWarehouse.findFirst({
+        where: { material_type: fabric_type, color: cleanColor },
       });
-    }
+      if (!existing) {
+        await tx.fabricWarehouse.create({
+          data: {
+            date,
+            material_type:       fabric_type,
+            color:               cleanColor,
+            qty_in:              0,
+            cost_per_kg:         0,
+            avg_cost_per_kg:     0,
+            last_purchase_price: price,
+          },
+        });
+      }
+
+      // 3. Recalculate WAC from full purchase history (includes the record just created above)
+      await recalcFromPurchases(tx, fabric_type, cleanColor);
+
+      return created;
+    });
 
     return res.status(201).json(purchase);
   } catch (err) {
@@ -398,7 +430,7 @@ fabricPurchasesRouter.put('/:id', requireManager, async (req: Request, res: Resp
   try {
     const id = parseInt(req.params.id as string);
     const { date, fabric_type, color, quantity_kg, price_per_kg, supplier, invoice_no, notes } = req.body;
-    const newQty = parseFloat(quantity_kg) || 0;
+    const newQty   = parseFloat(quantity_kg)  || 0;
     const newPrice = parseFloat(price_per_kg) || 0;
     if (!fabric_type || newQty <= 0 || newPrice <= 0) {
       return res.status(400).json({ message: 'يرجى تحديد الصنف والكمية والسعر' });
@@ -409,52 +441,22 @@ fabricPurchasesRouter.put('/:id', requireManager, async (req: Request, res: Resp
       const existing = await tx.fabricPurchase.findUnique({ where: { id } });
       if (!existing) throw new Error('NOT_FOUND');
 
-      const warehouse = await tx.fabricWarehouse.findFirst({
-        where: { material_type: existing.fabric_type, color: existing.color },
-      });
-      if (!warehouse) throw new Error('WAREHOUSE_NOT_FOUND');
-
-      // Get all purchases to compute baseQty
-      const allPurchases = await tx.fabricPurchase.findMany({
-        where: { fabric_type: existing.fabric_type, color: existing.color },
-        orderBy: { id: 'asc' },
-      });
-      const currentPurchaseTotalQty = allPurchases.reduce((s, p) => s + p.quantity_kg, 0);
-      const baseQty = Math.max(0, warehouse.qty_in - currentPurchaseTotalQty);
-      const baseCost = warehouse.cost_per_kg;
-
-      // Safety: if reducing quantity, check cutting consumption
+      // Safety: if reducing qty, ensure cutting consumption is not exceeded
       if (newQty < existing.quantity_kg) {
+        const allPurchases = await tx.fabricPurchase.findMany({
+          where: { fabric_type: existing.fabric_type, color: existing.color },
+        });
+        const projectedQty = allPurchases.reduce((s, p) => s + p.quantity_kg, 0)
+          - existing.quantity_kg + newQty;
         const cutting = await tx.cuttingOrder.findMany({
           where: { material_type: existing.fabric_type, color: existing.color },
         });
         const totalConsumed = cutting.reduce((s, c) => s + c.kg_consumed, 0);
-        const newTotalQty = baseQty + (currentPurchaseTotalQty - existing.quantity_kg + newQty);
-        if (newTotalQty < totalConsumed) throw new Error('CONSUMED');
+        if (projectedQty < totalConsumed) throw new Error('CONSUMED');
       }
 
-      // Build updated purchase list: replace old with new values
-      const afterPurchases = allPurchases.map(p =>
-        p.id === id
-          ? { quantity_kg: newQty, price_per_kg: newPrice }
-          : { quantity_kg: p.quantity_kg, price_per_kg: p.price_per_kg }
-      );
-      const newPurchaseTotalQty = afterPurchases.reduce((s, p) => s + p.quantity_kg, 0);
-      const newTotalQty = baseQty + newPurchaseTotalQty;
-      const weightedSum = baseQty * baseCost + afterPurchases.reduce((s, p) => s + p.quantity_kg * p.price_per_kg, 0);
-      const newAvg = newTotalQty > 0 ? weightedSum / newTotalQty : newPrice;
-      const lastPurchase = afterPurchases[afterPurchases.length - 1];
-
-      await tx.fabricWarehouse.update({
-        where: { id: warehouse.id },
-        data: {
-          qty_in: newTotalQty,
-          avg_cost_per_kg: Math.round(newAvg * 100) / 100,
-          last_purchase_price: lastPurchase?.price_per_kg ?? baseCost,
-        },
-      });
-
-      return tx.fabricPurchase.update({
+      // Update the purchase record
+      const updated = await tx.fabricPurchase.update({
         where: { id },
         data: {
           date, fabric_type, color: cleanColor,
@@ -463,14 +465,40 @@ fabricPurchasesRouter.put('/:id', requireManager, async (req: Request, res: Resp
           supplier: supplier || '', invoice_no: invoice_no || '', notes: notes || '',
         },
       });
+
+      // If fabric type or color changed, recalc the old warehouse too
+      if (existing.fabric_type !== fabric_type || existing.color !== cleanColor) {
+        await recalcFromPurchases(tx, existing.fabric_type, existing.color);
+        // Ensure a warehouse row exists for the new type + color
+        const newWarehouse = await tx.fabricWarehouse.findFirst({
+          where: { material_type: fabric_type, color: cleanColor },
+        });
+        if (!newWarehouse) {
+          await tx.fabricWarehouse.create({
+            data: {
+              date,
+              material_type:       fabric_type,
+              color:               cleanColor,
+              qty_in:              0,
+              cost_per_kg:         0,
+              avg_cost_per_kg:     0,
+              last_purchase_price: newPrice,
+            },
+          });
+        }
+      }
+
+      // Recalculate WAC for the (possibly new) type + color from full purchase history
+      await recalcFromPurchases(tx, fabric_type, cleanColor);
+
+      return updated;
     });
 
     return res.json(result);
   } catch (err: unknown) {
     if (err instanceof Error) {
       if (err.message === 'NOT_FOUND') return res.status(404).json({ message: 'العملية غير موجودة' });
-      if (err.message === 'CONSUMED') return res.status(400).json({ message: 'لا يمكن حذف أو تقليل هذه العملية لأن جزءاً من الكمية تم استهلاكه بالفعل.' });
-      if (err.message === 'WAREHOUSE_NOT_FOUND') return res.status(404).json({ message: 'سجل المخزون غير موجود' });
+      if (err.message === 'CONSUMED')  return res.status(400).json({ message: 'لا يمكن تقليل هذه العملية لأن جزءاً من الكمية تم استهلاكه بالفعل.' });
     }
     console.error(err);
     return res.status(500).json({ message: 'خطأ في تعديل المشترى' });
@@ -485,55 +513,27 @@ fabricPurchasesRouter.delete('/:id', requireManager, async (req: Request, res: R
       const existing = await tx.fabricPurchase.findUnique({ where: { id } });
       if (!existing) throw new Error('NOT_FOUND');
 
-      const warehouse = await tx.fabricWarehouse.findFirst({
-        where: { material_type: existing.fabric_type, color: existing.color },
-      });
-      if (!warehouse) throw new Error('WAREHOUSE_NOT_FOUND');
-
+      // Safety: ensure remaining qty still covers cutting consumption
       const allPurchases = await tx.fabricPurchase.findMany({
         where: { fabric_type: existing.fabric_type, color: existing.color },
-        orderBy: { id: 'asc' },
       });
-      const currentPurchaseTotalQty = allPurchases.reduce((s, p) => s + p.quantity_kg, 0);
-      const baseQty = Math.max(0, warehouse.qty_in - currentPurchaseTotalQty);
-      const baseCost = warehouse.cost_per_kg;
-
-      const afterPurchases = allPurchases
-        .filter(p => p.id !== id)
-        .map(p => ({ quantity_kg: p.quantity_kg, price_per_kg: p.price_per_kg }));
-
-      const newPurchaseTotalQty = afterPurchases.reduce((s, p) => s + p.quantity_kg, 0);
-      const newTotalQty = baseQty + newPurchaseTotalQty;
-
-      // Safety: ensure remaining stock covers cutting consumption
+      const projectedQty = allPurchases.reduce((s, p) => s + p.quantity_kg, 0) - existing.quantity_kg;
       const cutting = await tx.cuttingOrder.findMany({
         where: { material_type: existing.fabric_type, color: existing.color },
       });
       const totalConsumed = cutting.reduce((s, c) => s + c.kg_consumed, 0);
-      if (newTotalQty < totalConsumed) throw new Error('CONSUMED');
+      if (projectedQty < totalConsumed) throw new Error('CONSUMED');
 
-      const weightedSum = baseQty * baseCost + afterPurchases.reduce((s, p) => s + p.quantity_kg * p.price_per_kg, 0);
-      const newAvg = newTotalQty > 0 ? weightedSum / newTotalQty : baseCost;
-      const lastPurchase = afterPurchases[afterPurchases.length - 1];
-
-      await tx.fabricWarehouse.update({
-        where: { id: warehouse.id },
-        data: {
-          qty_in: newTotalQty,
-          avg_cost_per_kg: Math.round(newAvg * 100) / 100,
-          last_purchase_price: lastPurchase?.price_per_kg ?? baseCost,
-        },
-      });
-
+      // Delete the record first, then recalculate from the remaining purchases
       await tx.fabricPurchase.delete({ where: { id } });
+      await recalcFromPurchases(tx, existing.fabric_type, existing.color);
     });
 
     return res.json({ message: 'تم الحذف' });
   } catch (err: unknown) {
     if (err instanceof Error) {
       if (err.message === 'NOT_FOUND') return res.status(404).json({ message: 'العملية غير موجودة' });
-      if (err.message === 'CONSUMED') return res.status(400).json({ message: 'لا يمكن حذف أو تقليل هذه العملية لأن جزءاً من الكمية تم استهلاكه بالفعل.' });
-      if (err.message === 'WAREHOUSE_NOT_FOUND') return res.status(404).json({ message: 'سجل المخزون غير موجود' });
+      if (err.message === 'CONSUMED')  return res.status(400).json({ message: 'لا يمكن حذف هذه العملية لأن جزءاً من الكمية تم استهلاكه بالفعل.' });
     }
     console.error(err);
     return res.status(500).json({ message: 'خطأ في حذف المشترى' });
