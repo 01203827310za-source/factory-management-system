@@ -72,7 +72,8 @@ router.get('/', async (_req: Request, res: Response) => {
     fabric.forEach(f => {
       const consumed = fabricConsumed[`${f.material_type}|${f.color}`] || 0;
       const available = Math.max(0, f.qty_in - consumed);
-      fabricValue += available * f.cost_per_kg;
+      const wac = f.avg_cost_per_kg > 0 ? f.avg_cost_per_kg : f.cost_per_kg;
+      fabricValue += available * wac;
     });
 
     // Stock value

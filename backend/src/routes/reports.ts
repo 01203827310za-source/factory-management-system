@@ -74,7 +74,8 @@ function computeCapitalSnapshot(db: AllData, upToDate: string) {
   let fabricValue = 0;
   fabric.filter(f => f.date <= upToDate).forEach(f => {
     const avail = Math.max(0, f.qty_in - (consumed[`${f.material_type}|${f.color}`] || 0));
-    fabricValue += avail * f.cost_per_kg;
+    const wac = f.avg_cost_per_kg > 0 ? f.avg_cost_per_kg : f.cost_per_kg;
+    fabricValue += avail * wac;
   });
 
   // --- Accessories ---
@@ -182,7 +183,8 @@ router.get('/', async (req: Request, res: Response) => {
     let fabricValue = 0; let fabricBalanceKg = 0;
     fabric.forEach(f => {
       const avail = Math.max(0, f.qty_in - (fabricConsumedAll[`${f.material_type}|${f.color}`] || 0));
-      fabricValue += avail * f.cost_per_kg;
+      const wac = f.avg_cost_per_kg > 0 ? f.avg_cost_per_kg : f.cost_per_kg;
+      fabricValue += avail * wac;
       fabricBalanceKg += avail;
     });
 
