@@ -128,6 +128,7 @@ async function gatherSnapshot() {
     paymentLogs, fabric, readyStock, accessories,
     cuttingOrders, modelProds,
     employees, productions, advances, deductions, bonuses,
+    fixedAssets, fabricPurchases,
   ] = await Promise.all([
     prisma.sale.findMany(),
     prisma.expenseRevenue.findMany(),
@@ -145,6 +146,8 @@ async function gatherSnapshot() {
     prisma.employeeAdvance.findMany(),
     prisma.employeeDeduction.findMany(),
     prisma.employeeBonus.findMany(),
+    prisma.fixedAsset.findMany(),
+    prisma.fabricPurchase.findMany(),
   ]);
 
   // ── Sales metrics ──────────────────────────────────────────────────────────
@@ -183,53 +186,140 @@ async function gatherSnapshot() {
   // ── Debts ──────────────────────────────────────────────────────────────────
   const totalDebtsRemaining = debts.reduce((s, d) => s + d.remaining, 0);
   const totalDebtsPaid      = debts.reduce((s, d) => s + d.amount_paid, 0);
-  const debtors = debts.filter(d => d.remaining > 0).map(d => ({ name: d.name, remaining: d.remaining }));
+  const debtors = debts
+    .filter(d => d.remaining > 0)
+    .map(d => ({ name: d.name, remaining: d.remaining }))
+    .sort((a, b) => b.remaining - a.remaining);
 
   // ── Client accounts ────────────────────────────────────────────────────────
   const clientAccountsRemaining = clientAccts.reduce((s, c) => s + c.remaining, 0);
+  const clientAccountsList = clientAccts
+    .filter(c => c.remaining > 0)
+    .map(c => ({ client: c.client_name, model: c.model_name, total: c.total_amount, paid: c.amount_paid, remaining: c.remaining }))
+    .sort((a, b) => b.remaining - a.remaining);
 
-  // ── Fabric warehouse ───────────────────────────────────────────────────────
+  // ── Returns ────────────────────────────────────────────────────────────────
+  const totalRefunds = returns_.reduce((s, r) => s + r.refund_amount, 0);
+  const returnsByItem: Record<string, { qty: number; refund: number }> = {};
+  returns_.forEach(r => {
+    if (!r.model_code) return;
+    const k = `${r.model_code}|${r.model_color || ''}`;
+    if (!returnsByItem[k]) returnsByItem[k] = { qty: 0, refund: 0 };
+    returnsByItem[k].qty    += r.model_qty;
+    returnsByItem[k].refund += r.refund_amount;
+  });
+  const returnsList = Object.entries(returnsByItem)
+    .map(([item, v]) => ({ item, qty: v.qty, refund: v.refund }))
+    .sort((a, b) => b.qty - a.qty);
+
+  // ── Fabric warehouse (WAC cost) ────────────────────────────────────────────
   const fabricConsumed: Record<string, number> = {};
   cuttingOrders.forEach(c => {
     const key = `${c.material_type}|${c.color}`;
     fabricConsumed[key] = (fabricConsumed[key] || 0) + c.kg_consumed;
   });
   let fabricValue = 0;
-  const fabricSummary: { type: string; color: string; available_kg: number; value: number }[] = [];
+  const fabricSummary: { type: string; color: string; qty_in: number; consumed: number; available_kg: number; avg_cost: number; value: number }[] = [];
   fabric.forEach(f => {
     const consumed  = fabricConsumed[`${f.material_type}|${f.color}`] || 0;
     const available = Math.max(0, f.qty_in - consumed);
-    const value     = available * f.cost_per_kg;
+    const wac       = f.avg_cost_per_kg > 0 ? f.avg_cost_per_kg : f.cost_per_kg;  // WAC, fallback to entry cost
+    const value     = available * wac;
     fabricValue += value;
-    fabricSummary.push({ type: f.material_type, color: f.color, available_kg: available, value });
+    fabricSummary.push({ type: f.material_type, color: f.color, qty_in: f.qty_in, consumed, available_kg: available, avg_cost: wac, value });
   });
 
-  // ── Ready stock ────────────────────────────────────────────────────────────
+  // ── Fabric purchases ───────────────────────────────────────────────────────
+  const totalFabricPurchasesCost = fabricPurchases.reduce((s, p) => s + p.total_cost, 0);
+  const purchasesByType: Record<string, { total_kg: number; total_cost: number }> = {};
+  fabricPurchases.forEach(p => {
+    const k = `${p.fabric_type}|${p.color || ''}`;
+    if (!purchasesByType[k]) purchasesByType[k] = { total_kg: 0, total_cost: 0 };
+    purchasesByType[k].total_kg   += p.quantity_kg;
+    purchasesByType[k].total_cost += p.total_cost;
+  });
+  const fabricPurchasesList = Object.entries(purchasesByType).map(([item, v]) => ({
+    item,
+    total_kg:         Math.round(v.total_kg   * 100) / 100,
+    total_cost:       Math.round(v.total_cost * 100) / 100,
+    avg_price_per_kg: v.total_kg > 0 ? Math.round(v.total_cost / v.total_kg * 100) / 100 : 0,
+  }));
+
+  // ── Ready stock (color-isolated, all items including zero-stock) ───────────
   const newProd: Record<string, number> = {};
   modelProds.forEach(m => {
-    if (m.status === 'تام') newProd[m.model_code] = (newProd[m.model_code] || 0) + m.qty_received;
-  });
-  const totalSalesQty: Record<string, number> = {};
-  sales.forEach(s => {
-    [1, 2, 3, 4, 5].forEach(i => {
-      const code = s[`model${i}_code` as keyof typeof s] as string;
-      const qty  = s[`model${i}_qty`  as keyof typeof s] as number;
-      if (code && qty) totalSalesQty[code] = (totalSalesQty[code] || 0) + qty;
-    });
-  });
-  let stockValue = 0;
-  const stockSummary: { code: string; name: string; available: number; value: number }[] = [];
-  readyStock.forEach(rs => {
-    const produced  = newProd[rs.model_code] || 0;
-    const sold      = totalSalesQty[rs.model_code] || 0;
-    const available = Math.max(0, rs.opening_balance + produced - sold);
-    const value     = available * rs.cost_per_piece;
-    stockValue += value;
-    if (available > 0) stockSummary.push({ code: rs.model_code, name: rs.product_name, available, value });
+    const k = `${m.model_code}|${m.color || ''}`;
+    newProd[k] = (newProd[k] || 0) + m.qty_received;
   });
 
-  // ── Accessories ────────────────────────────────────────────────────────────
-  const accessoriesValue = accessories.reduce((s, a) => s + Math.max(0, a.qty_in - a.qty_consumed) * a.cost, 0);
+  const totalSalesQty: Record<string, number> = {};
+  sales
+    .filter(s => s.order_status !== 'تم الحجز' && s.order_status !== 'تم الإلغاء')
+    .forEach(s => {
+      [1, 2, 3, 4, 5].forEach(i => {
+        const code  = s[`model${i}_code`  as keyof typeof s] as string;
+        const qty   = s[`model${i}_qty`   as keyof typeof s] as number;
+        const color = s[`model${i}_color` as keyof typeof s] as string;
+        if (code && qty > 0) {
+          const k = `${code}|${color || ''}`;
+          totalSalesQty[k] = (totalSalesQty[k] || 0) + qty;
+        }
+      });
+    });
+
+  const returnQty: Record<string, number> = {};
+  returns_.forEach(r => {
+    if (r.model_code) {
+      const k = `${r.model_code}|${r.model_color || ''}`;
+      returnQty[k] = (returnQty[k] || 0) + r.model_qty;
+    }
+  });
+
+  let stockValue = 0;
+  const stockSummary: { code: string; color: string; name: string; opening: number; produced: number; sold: number; returned: number; reserved: number; available: number; cost: number; value: number }[] = [];
+  readyStock.forEach(rs => {
+    const k        = `${rs.model_code}|${rs.color || ''}`;
+    const produced = newProd[k] || 0;
+    const sold     = totalSalesQty[k] || 0;
+    const returned = returnQty[k] || 0;
+    const reserved = rs.reserved_quantity || 0;
+    const actual   = Math.max(0, rs.opening_balance + produced - sold + returned);
+    const available = Math.max(0, actual - reserved);
+    const value    = available * rs.cost_per_piece;
+    stockValue += value;
+    stockSummary.push({          // all items, including zero-stock
+      code:     rs.model_code,
+      color:    rs.color || '',
+      name:     rs.product_name,
+      opening:  rs.opening_balance,
+      produced,
+      sold,
+      returned,
+      reserved,
+      available,
+      cost:     rs.cost_per_piece,
+      value,
+    });
+  });
+
+  // ── Accessories (full per-item breakdown) ──────────────────────────────────
+  let accessoriesValue = 0;
+  const accessoriesList: { name: string; qty_in: number; consumed: number; available: number; cost: number; value: number }[] = [];
+  accessories.forEach(a => {
+    const available = Math.max(0, a.qty_in - a.qty_consumed);
+    const value     = available * a.cost;
+    accessoriesValue += value;
+    accessoriesList.push({ name: a.item_name, qty_in: a.qty_in, consumed: a.qty_consumed, available, cost: a.cost, value });
+  });
+
+  // ── Fixed assets ───────────────────────────────────────────────────────────
+  const totalFixedAssetsValue = fixedAssets.reduce((s, a) => s + a.purchase_price, 0);
+  const fixedAssetsList = fixedAssets.map(a => ({
+    name:          a.name,
+    category:      a.category,
+    purchase_date: a.purchase_date,
+    value:         a.purchase_price,
+  }));
 
   // ── Total current assets ───────────────────────────────────────────────────
   const totalCurrentAssets = fabricValue + stockValue + accessoriesValue + netCash;
@@ -252,50 +342,65 @@ async function gatherSnapshot() {
   return {
     date: now.toISOString().slice(0, 10),
     sales: {
-      total_value: totalSalesValue,
-      total_deposits: totalDeposits,
+      total_value:            totalSalesValue,
+      total_deposits:         totalDeposits,
       total_remaining_unpaid: totalRemaining,
-      orders_dispatched: dispatchedCount,
-      orders_pending: pendingCount,
-      orders_reserved: reservationsCount,
-      reservations_value: reservationsValue,
-      orders_cancelled: cancelledCount,
-      best_marketer: bestMarketer ? { name: bestMarketer[0], value: bestMarketer[1] } : null,
-      by_marketer: salesByMarketer,
+      orders_dispatched:      dispatchedCount,
+      orders_pending:         pendingCount,
+      orders_reserved:        reservationsCount,
+      reservations_value:     reservationsValue,
+      orders_cancelled:       cancelledCount,
+      best_marketer:          bestMarketer ? { name: bestMarketer[0], value: bestMarketer[1] } : null,
+      by_marketer:            salesByMarketer,
     },
     financial: {
-      total_in: totalIn,
+      total_in:  totalIn,
       total_out: totalOut,
-      net_cash: netCash,
+      net_cash:  netCash,
       hatem_net: hatemIn - hatemOut,
-      mido_net: midoIn - midoOut,
+      mido_net:  midoIn - midoOut,
     },
     debts: {
       total_remaining: totalDebtsRemaining,
-      total_paid: totalDebtsPaid,
-      active_debtors: debtors.slice(0, 10),
+      total_paid:      totalDebtsPaid,
+      active_debtors:  debtors,              // all debtors, no slice
     },
     client_accounts: {
       total_remaining: clientAccountsRemaining,
+      accounts:        clientAccountsList,   // full per-client breakdown
+    },
+    returns: {
+      total_count:   returns_.length,
+      total_refunds: totalRefunds,
+      by_item:       returnsList,
     },
     inventory: {
-      fabric_value: fabricValue,
-      stock_value: stockValue,
-      accessories_value: accessoriesValue,
+      fabric_value:         fabricValue,
+      stock_value:          stockValue,
+      accessories_value:    accessoriesValue,
       total_current_assets: totalCurrentAssets,
-      fabric_items: fabricSummary.slice(0, 15),
-      stock_items: stockSummary.slice(0, 15),
+      fabric_items:         fabricSummary,       // all rows, no slice
+      stock_items:          stockSummary,        // all rows including zero-stock, no slice
+      accessories_items:    accessoriesList,     // full per-item breakdown
+    },
+    fabric_purchases: {
+      total_cost: totalFabricPurchasesCost,
+      by_type:    fabricPurchasesList,
+    },
+    fixed_assets: {
+      total_value: totalFixedAssetsValue,
+      items:       fixedAssetsList,
     },
     payroll: {
-      active_employees: employees.filter(e => e.status === 'active').length,
-      fixed_employees: employees.filter(e => e.employee_type === 'fixed' && e.status === 'active').length,
-      piecework_employees: employees.filter(e => e.employee_type === 'piecework' && e.status === 'active').length,
-      monthly_fixed_salaries: fixedSalaries,
+      active_employees:         employees.filter(e => e.status === 'active').length,
+      fixed_employees:          employees.filter(e => e.employee_type === 'fixed'     && e.status === 'active').length,
+      piecework_employees:      employees.filter(e => e.employee_type === 'piecework' && e.status === 'active').length,
+      monthly_fixed_salaries:   fixedSalaries,
       monthly_production_value: monthlyProduction,
-      monthly_advances: monthlyAdvances,
-      monthly_deductions: monthlyDeductions,
-      monthly_bonuses: monthlyBonuses,
-      estimated_monthly_cost: estimatedPayroll,
+      monthly_advances:         monthlyAdvances,
+      monthly_deductions:       monthlyDeductions,
+      monthly_bonuses:          monthlyBonuses,
+      estimated_monthly_cost:   estimatedPayroll,
     },
   };
 }
@@ -325,14 +430,19 @@ function buildContext(snap: Awaited<ReturnType<typeof gatherSnapshot>>, topics: 
   if (all || topics.includes('client_accounts')) ctx.client_accounts = snap.client_accounts;
   if (all || topics.includes('fabric'))          ctx.fabric          = { fabric_value: snap.inventory.fabric_value, items: snap.inventory.fabric_items };
   if (all || topics.includes('stock'))           ctx.stock           = { stock_value: snap.inventory.stock_value, items: snap.inventory.stock_items };
-  if (all || topics.includes('accessories'))     ctx.accessories     = { accessories_value: snap.inventory.accessories_value };
+  if (all || topics.includes('accessories'))     ctx.accessories     = { accessories_value: snap.inventory.accessories_value, items: snap.inventory.accessories_items };
   if (all || topics.includes('payroll'))         ctx.payroll         = snap.payroll;
-  if (all) ctx.inventory_summary = {
-    total_current_assets: snap.inventory.total_current_assets,
-    fabric_value: snap.inventory.fabric_value,
-    stock_value: snap.inventory.stock_value,
-    accessories_value: snap.inventory.accessories_value,
-  };
+  if (all) {
+    ctx.returns          = snap.returns;
+    ctx.fabric_purchases = snap.fabric_purchases;
+    ctx.fixed_assets     = snap.fixed_assets;
+    ctx.inventory_summary = {
+      total_current_assets: snap.inventory.total_current_assets,
+      fabric_value:         snap.inventory.fabric_value,
+      stock_value:          snap.inventory.stock_value,
+      accessories_value:    snap.inventory.accessories_value,
+    };
+  }
   return ctx;
 }
 
