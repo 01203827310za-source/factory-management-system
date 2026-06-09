@@ -5,13 +5,15 @@
 // READ-ONLY GUARANTEE:
 //   • Only prisma.*findMany() calls — zero writes
 //   • No create / update / delete / upsert / executeRaw
-//   • Gemini receives aggregated numbers only, never raw rows
+//   • Groq receives aggregated numbers only, never raw rows
 // ============================================
 
 import { Router, Request, Response } from 'express';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import Groq from 'groq-sdk';
 import prisma from '../lib/prisma';
 import { authenticate } from '../middleware/auth';
+
+const GROQ_MODEL = 'llama-3.3-70b-versatile';
 
 const router = Router();
 router.use(authenticate);
@@ -32,10 +34,14 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 function isRetryable(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
+  const status = (err as { status?: number }).status;
   return (
+    status === 503 ||
+    status === 429 ||
     msg.includes('503') ||
     msg.includes('UNAVAILABLE') ||
     msg.includes('429') ||
+    msg.includes('rate_limit') ||
     msg.includes('QUOTA') ||
     msg.includes('quota') ||
     msg.includes('RESOURCE_EXHAUSTED') ||
@@ -44,9 +50,10 @@ function isRetryable(err: unknown): boolean {
   );
 }
 
-async function callGeminiWithRetry(
-  model: ReturnType<typeof getGemini>,
-  prompt: string,
+async function callGroqWithRetry(
+  client: Groq,
+  systemContent: string,
+  userContent: string,
 ): Promise<string> {
   let lastErr: unknown;
 
@@ -55,8 +62,19 @@ async function callGeminiWithRetry(
 
     const start = Date.now();
     try {
-      const result = await withTimeout(model.generateContent(prompt), TIMEOUT_MS);
-      return result.response.text();
+      const completion = await withTimeout(
+        client.chat.completions.create({
+          model: GROQ_MODEL,
+          messages: [
+            { role: 'system', content: systemContent },
+            { role: 'user',   content: userContent   },
+          ],
+          temperature: 0.4,
+          max_tokens: 4096,
+        }),
+        TIMEOUT_MS,
+      );
+      return completion.choices[0]?.message?.content ?? '';
     } catch (err: unknown) {
       const duration = Date.now() - start;
       const msg = err instanceof Error ? err.message : String(err);
@@ -69,40 +87,35 @@ async function callGeminiWithRetry(
   throw lastErr; // all retries exhausted
 }
 
-// ─── Gemini client — lazy, never throws at module load ───────────────────────
-function getGemini() {
-  const key = process.env.GEMINI_API_KEY?.trim();
-  if (!key || key === 'your-gemini-api-key-here') {
-    const err = new Error('MISSING_KEY');
-    throw err;
-  }
-  return new GoogleGenerativeAI(key).getGenerativeModel({ model: 'gemini-2.5-flash' });
+// ─── Groq client — lazy, never throws at module load ─────────────────────────
+function getGroq(): Groq {
+  const key = process.env.GROQ_API_KEY?.trim();
+  if (!key || key === 'your-groq-api-key-here') throw new Error('MISSING_KEY');
+  return new Groq({ apiKey: key });
 }
 
 // ─── Arabic error messages ────────────────────────────────────────────────────
 function toArabicError(err: unknown): { status: number; message: string } {
-  const msg = err instanceof Error ? err.message : String(err);
+  const msg        = err instanceof Error ? err.message : String(err);
+  const httpStatus = (err as { status?: number }).status;
 
   if (msg === 'MISSING_KEY')
-    return { status: 503, message: 'خدمة الذكاء الاصطناعي غير مفعّلة — يرجى ضبط GEMINI_API_KEY في ملف .env' };
+    return { status: 503, message: 'خدمة الذكاء الاصطناعي غير مفعّلة — يرجى ضبط GROQ_API_KEY في ملف .env' };
 
-  if (msg === 'TIMEOUT')
+  if (msg === 'TIMEOUT' || msg.includes('ETIMEDOUT'))
     return { status: 504, message: 'خدمة الذكاء الاصطناعي مشغولة حالياً، حاول مرة أخرى بعد دقيقة.' };
 
-  if (msg.includes('API_KEY_INVALID') || msg.includes('API key not valid'))
-    return { status: 401, message: 'مفتاح Gemini API غير صالح — يرجى مراجعة الإعدادات' };
+  if (httpStatus === 401 || msg.includes('401') || msg.includes('invalid_api_key') || msg.includes('Invalid API Key'))
+    return { status: 401, message: 'مفتاح Groq API غير صالح — يرجى مراجعة الإعدادات' };
 
-  if (msg.includes('QUOTA') || msg.includes('quota') || msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED'))
+  if (httpStatus === 429 || msg.includes('429') || msg.includes('rate_limit') || msg.includes('QUOTA') || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED'))
     return { status: 429, message: 'خدمة الذكاء الاصطناعي مشغولة حالياً، حاول مرة أخرى بعد دقيقة.' };
 
   if (msg.includes('SAFETY') || msg.includes('blocked'))
     return { status: 422, message: 'تم رفض الطلب بسبب فلتر الأمان — يرجى إعادة صياغة السؤال' };
 
-  if (msg.includes('UNAVAILABLE') || msg.includes('503'))
+  if (httpStatus === 503 || msg.includes('UNAVAILABLE') || msg.includes('503'))
     return { status: 503, message: 'خدمة الذكاء الاصطناعي مشغولة حالياً، حاول مرة أخرى بعد دقيقة.' };
-
-  if (msg.includes('ETIMEDOUT') || msg === 'TIMEOUT')
-    return { status: 504, message: 'خدمة الذكاء الاصطناعي مشغولة حالياً، حاول مرة أخرى بعد دقيقة.' };
 
   return { status: 500, message: 'خطأ في الاتصال بالذكاء الاصطناعي — يرجى المحاولة مرة أخرى' };
 }
@@ -366,8 +379,8 @@ router.post('/', async (req: Request, res: Response) => {
     // Validate mode
     const isAnalyze = mode === 'analyze';
 
-    // Step 1: get Gemini client (throws MISSING_KEY if not configured)
-    const model = getGemini();
+    // Step 1: get Groq client (throws MISSING_KEY if not configured)
+    const groqClient = getGroq();
 
     // Step 2: gather read-only data snapshot
     const snapshot = await withTimeout(gatherSnapshot(), TIMEOUT_MS);
@@ -377,15 +390,11 @@ router.post('/', async (req: Request, res: Response) => {
     const context   = buildContext(snapshot, topics);
     const sysPrompt = isAnalyze ? ANALYSIS_PROMPT : SYSTEM_PROMPT;
 
-    const prompt = `${sysPrompt}
+    const systemContent = `${sysPrompt}\n\nالبيانات المتاحة (${snapshot.date}):\n${JSON.stringify(context, null, 2)}`;
+    const userContent   = isAnalyze ? 'أنشئ التقرير الإداري الشامل الآن.' : question;
 
-البيانات المتاحة (${snapshot.date}):
-${JSON.stringify(context, null, 2)}
-
-${isAnalyze ? 'أنشئ التقرير الإداري الشامل الآن.' : `سؤال المستخدم: ${question}`}`;
-
-    // Step 4: call Gemini with retry (503 / 429 / ETIMEDOUT → up to 3 attempts)
-    const answer = await callGeminiWithRetry(model, prompt);
+    // Step 4: call Groq with retry (503 / 429 / ETIMEDOUT → up to 3 attempts)
+    const answer = await callGroqWithRetry(groqClient, systemContent, userContent);
 
     res.json({ answer, topics_used: topics });
 
