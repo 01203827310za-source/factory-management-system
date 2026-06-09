@@ -16,7 +16,7 @@ import { authenticate } from '../middleware/auth';
 const router = Router();
 router.use(authenticate);
 
-const TIMEOUT_MS = 30_000; // 30 seconds hard cap on Gemini calls
+const TIMEOUT_MS = 30_000; // 30 seconds hard cap per Gemini attempt
 
 // ─── Timeout wrapper ─────────────────────────────────────────────────────────
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -24,6 +24,49 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
     setTimeout(() => reject(new Error('TIMEOUT')), ms)
   );
   return Promise.race([promise, timeout]);
+}
+
+// ─── Retry config ─────────────────────────────────────────────────────────────
+const RETRY_DELAYS_MS = [0, 2_000, 5_000]; // attempt 1 → immediate, 2 → 2s, 3 → 5s
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+function isRetryable(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    msg.includes('503') ||
+    msg.includes('UNAVAILABLE') ||
+    msg.includes('429') ||
+    msg.includes('QUOTA') ||
+    msg.includes('quota') ||
+    msg.includes('RESOURCE_EXHAUSTED') ||
+    msg.includes('ETIMEDOUT') ||
+    msg === 'TIMEOUT'
+  );
+}
+
+async function callGeminiWithRetry(
+  model: ReturnType<typeof getGemini>,
+  prompt: string,
+): Promise<string> {
+  let lastErr: unknown;
+
+  for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt++) {
+    if (RETRY_DELAYS_MS[attempt] > 0) await delay(RETRY_DELAYS_MS[attempt]);
+
+    const start = Date.now();
+    try {
+      const result = await withTimeout(model.generateContent(prompt), TIMEOUT_MS);
+      return result.response.text();
+    } catch (err: unknown) {
+      const duration = Date.now() - start;
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[AI] attempt ${attempt + 1}/${RETRY_DELAYS_MS.length} failed after ${duration}ms — ${msg}`);
+      lastErr = err;
+      if (!isRetryable(err)) throw err; // 401 / 403 / 422 — don't retry
+    }
+  }
+
+  throw lastErr; // all retries exhausted
 }
 
 // ─── Gemini client — lazy, never throws at module load ───────────────────────
@@ -44,19 +87,22 @@ function toArabicError(err: unknown): { status: number; message: string } {
     return { status: 503, message: 'خدمة الذكاء الاصطناعي غير مفعّلة — يرجى ضبط GEMINI_API_KEY في ملف .env' };
 
   if (msg === 'TIMEOUT')
-    return { status: 504, message: 'انتهت مهلة الانتظار (30 ثانية) — يرجى إعادة المحاولة' };
+    return { status: 504, message: 'خدمة الذكاء الاصطناعي مشغولة حالياً، حاول مرة أخرى بعد دقيقة.' };
 
   if (msg.includes('API_KEY_INVALID') || msg.includes('API key not valid'))
     return { status: 401, message: 'مفتاح Gemini API غير صالح — يرجى مراجعة الإعدادات' };
 
-  if (msg.includes('QUOTA') || msg.includes('quota') || msg.includes('429'))
-    return { status: 429, message: 'تم استنفاد حصة استخدام Gemini API — يرجى المحاولة لاحقاً' };
+  if (msg.includes('QUOTA') || msg.includes('quota') || msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED'))
+    return { status: 429, message: 'خدمة الذكاء الاصطناعي مشغولة حالياً، حاول مرة أخرى بعد دقيقة.' };
 
   if (msg.includes('SAFETY') || msg.includes('blocked'))
     return { status: 422, message: 'تم رفض الطلب بسبب فلتر الأمان — يرجى إعادة صياغة السؤال' };
 
   if (msg.includes('UNAVAILABLE') || msg.includes('503'))
-    return { status: 503, message: 'خدمة Gemini غير متاحة مؤقتاً — يرجى المحاولة بعد قليل' };
+    return { status: 503, message: 'خدمة الذكاء الاصطناعي مشغولة حالياً، حاول مرة أخرى بعد دقيقة.' };
+
+  if (msg.includes('ETIMEDOUT') || msg === 'TIMEOUT')
+    return { status: 504, message: 'خدمة الذكاء الاصطناعي مشغولة حالياً، حاول مرة أخرى بعد دقيقة.' };
 
   return { status: 500, message: 'خطأ في الاتصال بالذكاء الاصطناعي — يرجى المحاولة مرة أخرى' };
 }
@@ -338,9 +384,8 @@ ${JSON.stringify(context, null, 2)}
 
 ${isAnalyze ? 'أنشئ التقرير الإداري الشامل الآن.' : `سؤال المستخدم: ${question}`}`;
 
-    // Step 4: call Gemini with timeout
-    const result   = await withTimeout(model.generateContent(prompt), TIMEOUT_MS);
-    const answer   = result.response.text();
+    // Step 4: call Gemini with retry (503 / 429 / ETIMEDOUT → up to 3 attempts)
+    const answer = await callGeminiWithRetry(model, prompt);
 
     res.json({ answer, topics_used: topics });
 
