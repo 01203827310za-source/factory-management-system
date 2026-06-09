@@ -16,7 +16,7 @@ import { authenticate } from '../middleware/auth';
 const router = Router();
 router.use(authenticate);
 
-const TIMEOUT_MS = 30_000; // 30 seconds hard cap per Gemini attempt
+const TIMEOUT_MS = 10_000; // 10 seconds hard cap per Gemini attempt
 
 // ─── Timeout wrapper ─────────────────────────────────────────────────────────
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -27,7 +27,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 }
 
 // ─── Retry config ─────────────────────────────────────────────────────────────
-const RETRY_DELAYS_MS = [0, 2_000, 5_000]; // attempt 1 → immediate, 2 → 2s, 3 → 5s
+const RETRY_DELAYS_MS = [0, 1_000, 2_000]; // attempt 1 → immediate, 2 → 1s, 3 → 2s
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 function isRetryable(err: unknown): boolean {
