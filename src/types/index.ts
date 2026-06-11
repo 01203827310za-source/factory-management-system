@@ -131,6 +131,19 @@ export interface ModelProduction {
   parts?: ModelPart[];
 }
 
+export interface DebtPayment {
+  id: number;
+  debt_id: number;
+  payment_log_id?: number | null;
+  date: string;
+  amount: number;
+  payment_method: string;
+  description: string;
+  receiver: string;
+  created_by: string;
+  created_at: string;
+}
+
 export interface Debt {
   id: number;
   date: string;
@@ -138,6 +151,20 @@ export interface Debt {
   total_amount: number;
   amount_paid: number;
   remaining: number;
+  created_at: string;
+  payments?: DebtPayment[];
+}
+
+export interface ClientAccountPayment {
+  id: number;
+  account_id: number;
+  payment_log_id?: number | null;
+  date: string;
+  amount: number;
+  payment_method: string;
+  description: string;
+  receiver: string;
+  created_by: string;
   created_at: string;
 }
 
@@ -152,6 +179,7 @@ export interface ClientAccount {
   remaining: number;
   notes: string;
   created_at: string;
+  payments?: ClientAccountPayment[];
 }
 
 export interface ReturnItem {

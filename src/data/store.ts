@@ -7,16 +7,19 @@ import {
   salesApi, expensesApi, readyStockApi, fabricApi, accessoriesApi,
   cuttingApi, modelProdApi, debtsApi, clientAccountsApi, returnsApi,
   paymentLogApi, marketersApi, dashboardApi,
+  debtPaymentsApi, clientAccountPaymentsApi,
   type SaleRecord, type ExpenseRecord, type ReadyStockRecord,
   type FabricRecord, type AccessoriesRecord, type CuttingRecord,
   type ModelProdRecord, type DebtRecord, type ClientAccountRecord,
   type ReturnRecord, type PaymentLogRecord, type DashboardMetrics,
+  type PaymentHistoryRecord,
 } from '../services/api';
 
 import type {
   Sale, ExpenseRevenue, ReadyStock, ComputedReadyStock,
   FabricWarehouse, ComputedFabric, AccessoriesWarehouse, ComputedAccessories,
   CuttingOrder, ModelProduction, Debt, ClientAccount, ReturnItem, PaymentLog,
+  DebtPayment, ClientAccountPayment,
 } from '../types';
 
 // Type aliases - API types match our app types exactly
@@ -192,6 +195,26 @@ export const clientAcctsStore = {
   update: (id: number, data: Partial<ClientAccount>): Promise<ClientAccount> =>
     clientAccountsApi.update(id, data as Partial<ClientAccountRecord>) as Promise<ClientAccount>,
   remove: (id: number): Promise<void> => clientAccountsApi.remove(id).then(() => void 0),
+};
+
+// ===== DEBT PAYMENTS =====
+export const debtPaymentsStore = {
+  add: (debtId: number, data: Omit<DebtPayment, 'id' | 'debt_id' | 'payment_log_id' | 'created_at' | 'created_by'>): Promise<DebtPayment> =>
+    debtPaymentsApi.add(debtId, data as Omit<PaymentHistoryRecord, 'id' | 'created_at' | 'created_by'>) as Promise<DebtPayment>,
+  update: (debtId: number, pid: number, data: Partial<Omit<DebtPayment, 'id' | 'debt_id' | 'payment_log_id' | 'created_at' | 'created_by'>>): Promise<DebtPayment> =>
+    debtPaymentsApi.update(debtId, pid, data as Partial<Omit<PaymentHistoryRecord, 'id' | 'created_at' | 'created_by'>>) as Promise<DebtPayment>,
+  remove: (debtId: number, pid: number): Promise<void> =>
+    debtPaymentsApi.remove(debtId, pid).then(() => void 0),
+};
+
+// ===== CLIENT ACCOUNT PAYMENTS =====
+export const clientAccountPaymentsStore = {
+  add: (accountId: number, data: Omit<ClientAccountPayment, 'id' | 'account_id' | 'payment_log_id' | 'created_at' | 'created_by'>): Promise<ClientAccountPayment> =>
+    clientAccountPaymentsApi.add(accountId, data as Omit<PaymentHistoryRecord, 'id' | 'created_at' | 'created_by'>) as Promise<ClientAccountPayment>,
+  update: (accountId: number, pid: number, data: Partial<Omit<ClientAccountPayment, 'id' | 'account_id' | 'payment_log_id' | 'created_at' | 'created_by'>>): Promise<ClientAccountPayment> =>
+    clientAccountPaymentsApi.update(accountId, pid, data as Partial<Omit<PaymentHistoryRecord, 'id' | 'created_at' | 'created_by'>>) as Promise<ClientAccountPayment>,
+  remove: (accountId: number, pid: number): Promise<void> =>
+    clientAccountPaymentsApi.remove(accountId, pid).then(() => void 0),
 };
 
 // ===== RETURNS =====

@@ -269,11 +269,15 @@ export type ModelProdRecord = {
 };
 
 // ===== DEBTS =====
-export const debtsApi = {
-  getAll: () => get<DebtRecord[]>('/debts'),
-  add: (data: Omit<DebtRecord, 'id' | 'created_at'>) => post<DebtRecord>('/debts', data),
-  update: (id: number, data: Partial<DebtRecord>) => put<DebtRecord>(`/debts/${id}`, data),
-  remove: (id: number) => del<{ message: string }>(`/debts/${id}`),
+export type PaymentHistoryRecord = {
+  id: number;
+  date: string;
+  amount: number;
+  payment_method: string;
+  description: string;
+  receiver: string;
+  created_by: string;
+  created_at: string;
 };
 
 export type DebtRecord = {
@@ -284,16 +288,25 @@ export type DebtRecord = {
   amount_paid: number;
   remaining: number;
   created_at: string;
+  payments?: PaymentHistoryRecord[];
+};
+
+export const debtsApi = {
+  getAll: () => get<DebtRecord[]>('/debts'),
+  add: (data: Omit<DebtRecord, 'id' | 'created_at' | 'payments'>) => post<DebtRecord>('/debts', data),
+  update: (id: number, data: Partial<DebtRecord>) => put<DebtRecord>(`/debts/${id}`, data),
+  remove: (id: number) => del<{ message: string }>(`/debts/${id}`),
+};
+
+export const debtPaymentsApi = {
+  add: (debtId: number, data: Omit<PaymentHistoryRecord, 'id' | 'created_at' | 'created_by'>) =>
+    post<PaymentHistoryRecord>(`/debts/${debtId}/payments`, data),
+  update: (debtId: number, pid: number, data: Partial<Omit<PaymentHistoryRecord, 'id' | 'created_at' | 'created_by'>>) =>
+    put<PaymentHistoryRecord>(`/debts/${debtId}/payments/${pid}`, data),
+  remove: (debtId: number, pid: number) => del<{ message: string }>(`/debts/${debtId}/payments/${pid}`),
 };
 
 // ===== CLIENT ACCOUNTS =====
-export const clientAccountsApi = {
-  getAll: () => get<ClientAccountRecord[]>('/client-accounts'),
-  add: (data: Omit<ClientAccountRecord, 'id' | 'created_at'>) => post<ClientAccountRecord>('/client-accounts', data),
-  update: (id: number, data: Partial<ClientAccountRecord>) => put<ClientAccountRecord>(`/client-accounts/${id}`, data),
-  remove: (id: number) => del<{ message: string }>(`/client-accounts/${id}`),
-};
-
 export type ClientAccountRecord = {
   id: number;
   date: string;
@@ -305,6 +318,22 @@ export type ClientAccountRecord = {
   remaining: number;
   notes: string;
   created_at: string;
+  payments?: PaymentHistoryRecord[];
+};
+
+export const clientAccountsApi = {
+  getAll: () => get<ClientAccountRecord[]>('/client-accounts'),
+  add: (data: Omit<ClientAccountRecord, 'id' | 'created_at' | 'payments'>) => post<ClientAccountRecord>('/client-accounts', data),
+  update: (id: number, data: Partial<ClientAccountRecord>) => put<ClientAccountRecord>(`/client-accounts/${id}`, data),
+  remove: (id: number) => del<{ message: string }>(`/client-accounts/${id}`),
+};
+
+export const clientAccountPaymentsApi = {
+  add: (accountId: number, data: Omit<PaymentHistoryRecord, 'id' | 'created_at' | 'created_by'>) =>
+    post<PaymentHistoryRecord>(`/client-accounts/${accountId}/payments`, data),
+  update: (accountId: number, pid: number, data: Partial<Omit<PaymentHistoryRecord, 'id' | 'created_at' | 'created_by'>>) =>
+    put<PaymentHistoryRecord>(`/client-accounts/${accountId}/payments/${pid}`, data),
+  remove: (accountId: number, pid: number) => del<{ message: string }>(`/client-accounts/${accountId}/payments/${pid}`),
 };
 
 // ===== RETURNS =====

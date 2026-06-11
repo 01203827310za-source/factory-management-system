@@ -378,8 +378,10 @@ modelProdRouter.delete('/:id', requireManager, async (req, res) => {
 export const debtsRouter = Router();
 debtsRouter.use(authenticate);
 
+const DEBT_INCLUDE = { payments: { orderBy: { id: 'asc' as const } } } as const;
+
 debtsRouter.get('/', async (_req, res) => {
-  try { return res.json(await prisma.debt.findMany({ orderBy: { id: 'asc' } })); }
+  try { return res.json(await prisma.debt.findMany({ orderBy: { id: 'asc' }, include: DEBT_INCLUDE })); }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 debtsRouter.post('/', requireManager, async (req: Request, res: Response) => {
@@ -387,6 +389,7 @@ debtsRouter.post('/', requireManager, async (req: Request, res: Response) => {
     const data = req.body;
     const debt = await prisma.debt.create({
       data: { ...data, remaining: (data.total_amount || 0) - (data.amount_paid || 0) },
+      include: DEBT_INCLUDE,
     });
     logAudit({ user: req.user, module: 'Debts', action: 'CREATE', record_id: debt.id,
       after_data: debt, description: `إضافة دين: ${debt.name}` });
@@ -402,7 +405,7 @@ debtsRouter.put('/:id', requireManager, async (req: Request, res: Response) => {
     const newPaid = data.amount_paid !== undefined ? Number(data.amount_paid) : cur.amount_paid;
     const newTotal = data.total_amount !== undefined ? Number(data.total_amount) : cur.total_amount;
     data.remaining = newTotal - newPaid;
-    const result = await prisma.debt.update({ where: { id }, data });
+    const result = await prisma.debt.update({ where: { id }, data, include: DEBT_INCLUDE });
     const delta = newPaid - cur.amount_paid;
     if (delta < 0) {
       await purgePaymentLogs('debt_payment', `سداد دين: ${cur.name}`, -delta);
@@ -415,15 +418,92 @@ debtsRouter.put('/:id', requireManager, async (req: Request, res: Response) => {
 debtsRouter.delete('/:id', requireManager, async (req, res) => {
   try {
     const id = parseInt(req.params.id as string);
-    const cur = await prisma.debt.findUnique({ where: { id } });
-    if (cur && cur.amount_paid > 0) {
-      await prisma.paymentLog.deleteMany({
-        where: { type: 'debt_payment', description: { startsWith: `سداد دين: ${cur.name}` } },
-      });
+    const cur = await prisma.debt.findUnique({ where: { id }, include: DEBT_INCLUDE });
+    if (cur) {
+      // Clean up PaymentLog entries linked to each payment
+      const logIds = (cur.payments || []).map(p => p.payment_log_id).filter((x): x is number => x != null);
+      if (logIds.length) await prisma.paymentLog.deleteMany({ where: { id: { in: logIds } } });
     }
-    await prisma.debt.delete({ where: { id } });
+    await prisma.debt.delete({ where: { id } }); // debt_payments cascade
     logAudit({ user: req.user, module: 'Debts', action: 'DELETE', record_id: id,
       before_data: cur, description: `حذف دين: ${cur?.name}` });
+    return res.json({ message: 'تم' });
+  } catch { return res.status(500).json({ message: 'خطأ' }); }
+});
+
+// ----- Debt payment sub-routes -----
+debtsRouter.post('/:id/payments', requireManager, async (req: Request, res: Response) => {
+  const id = parseInt(req.params.id as string);
+  try {
+    const { date, amount, payment_method, description, receiver } = req.body;
+    const amt = parseFloat(amount) || 0;
+    if (amt <= 0) return res.status(400).json({ message: 'المبلغ يجب أن يكون أكبر من صفر' });
+    const debt = await prisma.debt.findUnique({ where: { id } });
+    if (!debt) return res.status(404).json({ message: 'الدين غير موجود' });
+
+    const payDate = date || new Date().toISOString().split('T')[0];
+    const log = await prisma.paymentLog.create({
+      data: { date: payDate, type: 'debt_payment', amount: amt,
+        receiver: receiver || '', description: `سداد دين: ${debt.name}` },
+    });
+    const payment = await prisma.debtPayment.create({
+      data: { debt_id: id, payment_log_id: log.id, date: payDate, amount: amt,
+        payment_method: payment_method || '', description: description || '',
+        receiver: receiver || '', created_by: req.user?.username || '' },
+    });
+    const newPaid = debt.amount_paid + amt;
+    await prisma.debt.update({ where: { id }, data: { amount_paid: newPaid, remaining: debt.total_amount - newPaid } });
+    logAudit({ user: req.user, module: 'Debts', action: 'CREATE', record_id: payment.id,
+      after_data: payment, description: `دفعة دين: ${debt.name} - ${amt}` });
+    return res.status(201).json(payment);
+  } catch { return res.status(500).json({ message: 'خطأ' }); }
+});
+
+debtsRouter.put('/:id/payments/:pid', requireManager, async (req: Request, res: Response) => {
+  const id = parseInt(req.params.id as string);
+  const pid = parseInt(req.params.pid as string);
+  try {
+    const { date, amount, payment_method, description } = req.body;
+    const newAmt = parseFloat(amount) || 0;
+    const [debt, payment] = await Promise.all([
+      prisma.debt.findUnique({ where: { id } }),
+      prisma.debtPayment.findUnique({ where: { id: pid } }),
+    ]);
+    if (!debt || !payment) return res.status(404).json({ message: 'غير موجود' });
+
+    const delta = newAmt - payment.amount;
+    const updated = await prisma.debtPayment.update({
+      where: { id: pid },
+      data: { date: date || payment.date, amount: newAmt,
+        payment_method: payment_method ?? payment.payment_method,
+        description: description ?? payment.description },
+    });
+    if (payment.payment_log_id) {
+      await prisma.paymentLog.update({ where: { id: payment.payment_log_id }, data: { amount: newAmt } });
+    }
+    const newPaid = debt.amount_paid + delta;
+    await prisma.debt.update({ where: { id }, data: { amount_paid: newPaid, remaining: debt.total_amount - newPaid } });
+    return res.json(updated);
+  } catch { return res.status(500).json({ message: 'خطأ' }); }
+});
+
+debtsRouter.delete('/:id/payments/:pid', requireManager, async (req: Request, res: Response) => {
+  const id = parseInt(req.params.id as string);
+  const pid = parseInt(req.params.pid as string);
+  try {
+    const [debt, payment] = await Promise.all([
+      prisma.debt.findUnique({ where: { id } }),
+      prisma.debtPayment.findUnique({ where: { id: pid } }),
+    ]);
+    if (!debt || !payment) return res.status(404).json({ message: 'غير موجود' });
+    await prisma.debtPayment.delete({ where: { id: pid } });
+    if (payment.payment_log_id) {
+      await prisma.paymentLog.delete({ where: { id: payment.payment_log_id } }).catch(() => {});
+    }
+    const newPaid = Math.max(0, debt.amount_paid - payment.amount);
+    await prisma.debt.update({ where: { id }, data: { amount_paid: newPaid, remaining: debt.total_amount - newPaid } });
+    logAudit({ user: req.user, module: 'Debts', action: 'DELETE', record_id: pid,
+      before_data: payment, description: `حذف دفعة دين: ${debt.name} - ${payment.amount}` });
     return res.json({ message: 'تم' });
   } catch { return res.status(500).json({ message: 'خطأ' }); }
 });
@@ -432,8 +512,10 @@ debtsRouter.delete('/:id', requireManager, async (req, res) => {
 export const clientAccountsRouter = Router();
 clientAccountsRouter.use(authenticate);
 
+const ACCT_INCLUDE = { payments: { orderBy: { id: 'asc' as const } } } as const;
+
 clientAccountsRouter.get('/', async (_req, res) => {
-  try { return res.json(await prisma.clientAccount.findMany({ orderBy: { id: 'asc' } })); }
+  try { return res.json(await prisma.clientAccount.findMany({ orderBy: { id: 'asc' }, include: ACCT_INCLUDE })); }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 clientAccountsRouter.post('/', requireManager, async (req: Request, res: Response) => {
@@ -441,6 +523,7 @@ clientAccountsRouter.post('/', requireManager, async (req: Request, res: Respons
     const data = req.body;
     const rec = await prisma.clientAccount.create({
       data: { ...data, remaining: (data.total_amount || 0) - (data.amount_paid || 0) },
+      include: ACCT_INCLUDE,
     });
     logAudit({ user: req.user, module: 'ClientAccounts', action: 'CREATE', record_id: rec.id,
       after_data: rec, description: `إضافة حساب عميل: ${rec.client_name}` });
@@ -456,7 +539,7 @@ clientAccountsRouter.put('/:id', requireManager, async (req: Request, res: Respo
     const newPaid = data.amount_paid !== undefined ? Number(data.amount_paid) : cur.amount_paid;
     const newTotal = data.total_amount !== undefined ? Number(data.total_amount) : cur.total_amount;
     data.remaining = newTotal - newPaid;
-    const result = await prisma.clientAccount.update({ where: { id }, data });
+    const result = await prisma.clientAccount.update({ where: { id }, data, include: ACCT_INCLUDE });
     const delta = newPaid - cur.amount_paid;
     if (delta < 0) {
       await purgePaymentLogs('client_payment', `دفعة عميل: ${cur.client_name}`, -delta);
@@ -469,15 +552,91 @@ clientAccountsRouter.put('/:id', requireManager, async (req: Request, res: Respo
 clientAccountsRouter.delete('/:id', requireManager, async (req, res) => {
   try {
     const id = parseInt(req.params.id as string);
-    const cur = await prisma.clientAccount.findUnique({ where: { id } });
-    if (cur && cur.amount_paid > 0) {
-      await prisma.paymentLog.deleteMany({
-        where: { type: 'client_payment', description: { startsWith: `دفعة عميل: ${cur.client_name}` } },
-      });
+    const cur = await prisma.clientAccount.findUnique({ where: { id }, include: ACCT_INCLUDE });
+    if (cur) {
+      const logIds = (cur.payments || []).map(p => p.payment_log_id).filter((x): x is number => x != null);
+      if (logIds.length) await prisma.paymentLog.deleteMany({ where: { id: { in: logIds } } });
     }
-    await prisma.clientAccount.delete({ where: { id } });
+    await prisma.clientAccount.delete({ where: { id } }); // client_account_payments cascade
     logAudit({ user: req.user, module: 'ClientAccounts', action: 'DELETE', record_id: id,
       before_data: cur, description: `حذف حساب عميل: ${cur?.client_name}` });
+    return res.json({ message: 'تم' });
+  } catch { return res.status(500).json({ message: 'خطأ' }); }
+});
+
+// ----- Client account payment sub-routes -----
+clientAccountsRouter.post('/:id/payments', requireManager, async (req: Request, res: Response) => {
+  const id = parseInt(req.params.id as string);
+  try {
+    const { date, amount, payment_method, description, receiver } = req.body;
+    const amt = parseFloat(amount) || 0;
+    if (amt <= 0) return res.status(400).json({ message: 'المبلغ يجب أن يكون أكبر من صفر' });
+    const account = await prisma.clientAccount.findUnique({ where: { id } });
+    if (!account) return res.status(404).json({ message: 'الحساب غير موجود' });
+
+    const payDate = date || new Date().toISOString().split('T')[0];
+    const log = await prisma.paymentLog.create({
+      data: { date: payDate, type: 'client_payment', amount: amt,
+        receiver: receiver || '', description: `دفعة عميل: ${account.client_name} - ${account.model_name}` },
+    });
+    const payment = await prisma.clientAccountPayment.create({
+      data: { account_id: id, payment_log_id: log.id, date: payDate, amount: amt,
+        payment_method: payment_method || '', description: description || '',
+        receiver: receiver || '', created_by: req.user?.username || '' },
+    });
+    const newPaid = account.amount_paid + amt;
+    await prisma.clientAccount.update({ where: { id }, data: { amount_paid: newPaid, remaining: account.total_amount - newPaid } });
+    logAudit({ user: req.user, module: 'ClientAccounts', action: 'CREATE', record_id: payment.id,
+      after_data: payment, description: `دفعة عميل: ${account.client_name} - ${amt}` });
+    return res.status(201).json(payment);
+  } catch { return res.status(500).json({ message: 'خطأ' }); }
+});
+
+clientAccountsRouter.put('/:id/payments/:pid', requireManager, async (req: Request, res: Response) => {
+  const id = parseInt(req.params.id as string);
+  const pid = parseInt(req.params.pid as string);
+  try {
+    const { date, amount, payment_method, description } = req.body;
+    const newAmt = parseFloat(amount) || 0;
+    const [account, payment] = await Promise.all([
+      prisma.clientAccount.findUnique({ where: { id } }),
+      prisma.clientAccountPayment.findUnique({ where: { id: pid } }),
+    ]);
+    if (!account || !payment) return res.status(404).json({ message: 'غير موجود' });
+
+    const delta = newAmt - payment.amount;
+    const updated = await prisma.clientAccountPayment.update({
+      where: { id: pid },
+      data: { date: date || payment.date, amount: newAmt,
+        payment_method: payment_method ?? payment.payment_method,
+        description: description ?? payment.description },
+    });
+    if (payment.payment_log_id) {
+      await prisma.paymentLog.update({ where: { id: payment.payment_log_id }, data: { amount: newAmt } });
+    }
+    const newPaid = account.amount_paid + delta;
+    await prisma.clientAccount.update({ where: { id }, data: { amount_paid: newPaid, remaining: account.total_amount - newPaid } });
+    return res.json(updated);
+  } catch { return res.status(500).json({ message: 'خطأ' }); }
+});
+
+clientAccountsRouter.delete('/:id/payments/:pid', requireManager, async (req: Request, res: Response) => {
+  const id = parseInt(req.params.id as string);
+  const pid = parseInt(req.params.pid as string);
+  try {
+    const [account, payment] = await Promise.all([
+      prisma.clientAccount.findUnique({ where: { id } }),
+      prisma.clientAccountPayment.findUnique({ where: { id: pid } }),
+    ]);
+    if (!account || !payment) return res.status(404).json({ message: 'غير موجود' });
+    await prisma.clientAccountPayment.delete({ where: { id: pid } });
+    if (payment.payment_log_id) {
+      await prisma.paymentLog.delete({ where: { id: payment.payment_log_id } }).catch(() => {});
+    }
+    const newPaid = Math.max(0, account.amount_paid - payment.amount);
+    await prisma.clientAccount.update({ where: { id }, data: { amount_paid: newPaid, remaining: account.total_amount - newPaid } });
+    logAudit({ user: req.user, module: 'ClientAccounts', action: 'DELETE', record_id: pid,
+      before_data: payment, description: `حذف دفعة عميل: ${account.client_name} - ${payment.amount}` });
     return res.json({ message: 'تم' });
   } catch { return res.status(500).json({ message: 'خطأ' }); }
 });

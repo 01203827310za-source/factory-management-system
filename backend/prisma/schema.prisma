@@ -198,31 +198,67 @@ model ModelPart {
 
 // ===== DEBTS =====
 model Debt {
-  id           Int      @id @default(autoincrement())
+  id           Int           @id @default(autoincrement())
   date         String
   name         String
-  total_amount Float    @default(0)
-  amount_paid  Float    @default(0)
-  remaining    Float    @default(0)
-  created_at   DateTime @default(now())
+  total_amount Float         @default(0)
+  amount_paid  Float         @default(0)
+  remaining    Float         @default(0)
+  created_at   DateTime      @default(now())
+  payments     DebtPayment[]
 
   @@map("debts")
 }
 
+// ===== DEBT PAYMENT HISTORY =====
+model DebtPayment {
+  id             Int      @id @default(autoincrement())
+  debt_id        Int
+  debt           Debt     @relation(fields: [debt_id], references: [id], onDelete: Cascade)
+  payment_log_id Int?
+  date           String   @default("")
+  amount         Float    @default(0)
+  payment_method String   @default("")
+  description    String   @default("")
+  receiver       String   @default("")
+  created_by     String   @default("")
+  created_at     DateTime @default(now())
+
+  @@map("debt_payments")
+}
+
 // ===== CLIENT ACCOUNTS =====
 model ClientAccount {
-  id           Int      @id @default(autoincrement())
+  id           Int                    @id @default(autoincrement())
   date         String
   client_name  String
-  model_name   String   @default("")
-  quantity     Int      @default(0)
-  total_amount Float    @default(0)
-  amount_paid  Float    @default(0)
-  remaining    Float    @default(0)
-  notes        String   @default("")
-  created_at   DateTime @default(now())
+  model_name   String                 @default("")
+  quantity     Int                    @default(0)
+  total_amount Float                  @default(0)
+  amount_paid  Float                  @default(0)
+  remaining    Float                  @default(0)
+  notes        String                 @default("")
+  created_at   DateTime               @default(now())
+  payments     ClientAccountPayment[]
 
   @@map("client_accounts")
+}
+
+// ===== CLIENT ACCOUNT PAYMENT HISTORY =====
+model ClientAccountPayment {
+  id             Int           @id @default(autoincrement())
+  account_id     Int
+  account        ClientAccount @relation(fields: [account_id], references: [id], onDelete: Cascade)
+  payment_log_id Int?
+  date           String        @default("")
+  amount         Float         @default(0)
+  payment_method String        @default("")
+  description    String        @default("")
+  receiver       String        @default("")
+  created_by     String        @default("")
+  created_at     DateTime      @default(now())
+
+  @@map("client_account_payments")
 }
 
 // ===== RETURNS =====
