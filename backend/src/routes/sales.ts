@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate, requireManager } from '../middleware/auth';
+import { logAudit } from '../services/auditHelper';
 
 const router = Router();
 router.use(authenticate);
@@ -69,6 +70,8 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
       await adjustReserved(extractModels(data), +1);
     }
 
+    logAudit({ user: req.user, module: 'Sales', action: 'CREATE', record_id: sale.id,
+      after_data: sale, description: `إضافة عملية بيع: ${sale.client} - ${sale.order_number}` });
     return res.status(201).json(sale);
   } catch (err) {
     console.error(err);
@@ -107,6 +110,8 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
       await adjustReserved(extractModels(data), +1);
     }
 
+    logAudit({ user: req.user, module: 'Sales', action: 'UPDATE', record_id: id,
+      before_data: oldSale, after_data: sale, description: `تعديل عملية بيع: ${sale.client} - ${sale.order_number}` });
     return res.json(sale);
   } catch {
     return res.status(500).json({ message: 'خطأ في تحديث الطلب' });
@@ -123,6 +128,8 @@ router.delete('/:id', requireManager, async (req: Request, res: Response) => {
       await adjustReserved(extractModels(sale as unknown as Record<string, unknown>), -1);
     }
     await prisma.sale.delete({ where: { id } });
+    logAudit({ user: req.user, module: 'Sales', action: 'DELETE', record_id: id,
+      before_data: sale, description: `حذف عملية بيع: ${sale?.client} - ${sale?.order_number}` });
     return res.json({ message: 'تم حذف الطلب' });
   } catch {
     return res.status(500).json({ message: 'خطأ في حذف الطلب' });
@@ -146,6 +153,8 @@ router.post('/:id/convert-reservation', requireManager, async (req: Request, res
       where: { id },
       data: { order_status: 'تم الصرف' },
     });
+    logAudit({ user: req.user, module: 'Sales', action: 'UPDATE', record_id: id,
+      before_data: sale, after_data: updated, description: `تحويل حجز إلى صرف: ${sale.client} - ${sale.order_number}` });
     return res.json(updated);
   } catch (err) {
     console.error(err);
@@ -170,6 +179,8 @@ router.post('/:id/cancel-reservation', requireManager, async (req: Request, res:
       where: { id },
       data: { order_status: 'تم الإلغاء' },
     });
+    logAudit({ user: req.user, module: 'Sales', action: 'UPDATE', record_id: id,
+      before_data: sale, after_data: updated, description: `إلغاء حجز: ${sale.client} - ${sale.order_number}` });
     return res.json(updated);
   } catch (err) {
     console.error(err);
