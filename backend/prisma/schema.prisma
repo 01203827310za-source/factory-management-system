@@ -190,6 +190,7 @@ model ModelPart {
   model      ModelProduction @relation(fields: [model_id], references: [id], onDelete: Cascade)
   part_type  String          @default("")
   cut_number Int             @default(0)
+  color      String          @default("")
   created_at DateTime        @default(now())
 
   @@map("model_parts")

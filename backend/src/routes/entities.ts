@@ -223,7 +223,29 @@ modelProdRouter.use(authenticate);
 
 const PARTS_INCLUDE = { parts: { orderBy: { id: 'asc' as const } } } as const;
 
-type PartInput = { part_type?: string; cut_number?: number };
+type PartInput = { part_type?: string; cut_number?: number; color?: string };
+
+// Returns how many pieces from (cut_number, color) are still available.
+// excludeModelId: omit that model's usage (for update validation).
+async function getAvailableForPart(
+  cut_number: number,
+  color: string,
+  excludeModelId?: number,
+): Promise<{ total: number; used: number; available: number }> {
+  const cuts = await prisma.cuttingOrder.findMany({ where: { cut_number, color } });
+  const total = cuts.reduce((s, c) => s + c.total_pieces, 0);
+
+  const usedParts = await prisma.modelPart.findMany({
+    where: {
+      cut_number,
+      color,
+      ...(excludeModelId !== undefined ? { model_id: { not: excludeModelId } } : {}),
+    },
+    include: { model: { select: { qty_from_cutting: true } } },
+  });
+  const used = usedParts.reduce((s, p) => s + p.model.qty_from_cutting, 0);
+  return { total, used, available: total - used };
+}
 
 modelProdRouter.get('/', async (_req, res) => {
   try {
@@ -237,6 +259,23 @@ modelProdRouter.get('/', async (_req, res) => {
 modelProdRouter.post('/', requireManager, async (req, res) => {
   try {
     const { parts, ...data } = req.body;
+    const qty = parseInt(data.qty_from_cutting) || 0;
+
+    if (Array.isArray(parts) && parts.length > 0) {
+      for (const p of parts as PartInput[]) {
+        const partCut = p.cut_number || 0;
+        const partColor = (p.color || '').trim();
+        if (partCut > 0 && partColor) {
+          const { available } = await getAvailableForPart(partCut, partColor);
+          if (available < qty) {
+            return res.status(400).json({
+              message: `رصيد غير كافٍ للقصة ${partCut} - ${partColor}.\nالمتاح: ${available}\nالمطلوب: ${qty}`,
+            });
+          }
+        }
+      }
+    }
+
     const primaryCut = Array.isArray(parts) && parts.length > 0
       ? (parts[0].cut_number || 0) : (data.cut_number || 0);
     const rec = await prisma.modelProduction.create({ data: { ...data, cut_number: primaryCut } });
@@ -246,6 +285,7 @@ modelProdRouter.post('/', requireManager, async (req, res) => {
           model_id:   rec.id,
           part_type:  p.part_type  || '',
           cut_number: p.cut_number || 0,
+          color:      (p.color     || '').trim(),
         })),
       });
     }
@@ -260,6 +300,23 @@ modelProdRouter.put('/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
   try {
     const { parts, ...data } = req.body;
+    const qty = parseInt(data.qty_from_cutting) || 0;
+
+    if (Array.isArray(parts) && parts.length > 0) {
+      for (const p of parts as PartInput[]) {
+        const partCut = p.cut_number || 0;
+        const partColor = (p.color || '').trim();
+        if (partCut > 0 && partColor) {
+          const { available } = await getAvailableForPart(partCut, partColor, id);
+          if (available < qty) {
+            return res.status(400).json({
+              message: `رصيد غير كافٍ للقصة ${partCut} - ${partColor}.\nالمتاح: ${available}\nالمطلوب: ${qty}`,
+            });
+          }
+        }
+      }
+    }
+
     const primaryCut = Array.isArray(parts) && parts.length > 0
       ? (parts[0].cut_number || 0) : (data.cut_number || 0);
     const before = await prisma.modelProduction.findUnique({ where: { id }, include: PARTS_INCLUDE });
@@ -272,6 +329,7 @@ modelProdRouter.put('/:id', requireManager, async (req, res) => {
             model_id:   id,
             part_type:  p.part_type  || '',
             cut_number: p.cut_number || 0,
+            color:      (p.color     || '').trim(),
           })),
         });
       }

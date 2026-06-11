@@ -109,6 +109,7 @@ export interface ModelPart {
   model_id: number;
   part_type: string;
   cut_number: number;
+  color: string;
   created_at: string;
 }
 
