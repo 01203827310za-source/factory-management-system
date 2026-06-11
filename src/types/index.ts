@@ -102,6 +102,7 @@ export interface CuttingOrder {
   kg_consumed: number;
   notes: string;
   created_at: string;
+  remaining_pieces?: number;
 }
 
 export interface ModelPart {

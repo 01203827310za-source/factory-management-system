@@ -84,10 +84,10 @@ export default function Cutting() {
       <div className="relative max-w-md"><Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="بحث برقم القصة، البيان..." className={`w-full pr-10 ${ic}`} /></div>
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
         <div className="overflow-x-auto"><table className="w-full text-sm whitespace-nowrap">
-          <thead><tr className="bg-[#1e3a5f] text-white">{['#','التاريخ','رقم القصة','البيان','نوع الخامة','عدد الرقات','طول الفرشة (م)','القطع','اللون','كجم','تكلفة القطع','ملاحظات','إجراءات'].map(h => <th key={h} className="px-3 py-3 text-center font-semibold">{h}</th>)}</tr></thead>
+          <thead><tr className="bg-[#1e3a5f] text-white">{['#','التاريخ','رقم القصة','البيان','نوع الخامة','عدد الرقات','طول الفرشة (م)','القطع','المتبقي','اللون','كجم','تكلفة القطع','ملاحظات','إجراءات'].map(h => <th key={h} className="px-3 py-3 text-center font-semibold">{h}</th>)}</tr></thead>
           <tbody>
-            {loading && <tr><td colSpan={13} className="text-center py-8 text-gray-400"><RefreshCw size={16} className="animate-spin inline mr-2" />جارٍ التحميل...</td></tr>}
-            {!loading && filtered.length === 0 && <tr><td colSpan={13} className="text-center py-8 text-gray-400">لا توجد بيانات</td></tr>}
+            {loading && <tr><td colSpan={14} className="text-center py-8 text-gray-400"><RefreshCw size={16} className="animate-spin inline mr-2" />جارٍ التحميل...</td></tr>}
+            {!loading && filtered.length === 0 && <tr><td colSpan={14} className="text-center py-8 text-gray-400">لا توجد بيانات</td></tr>}
             {filtered.map((item, idx) => {
               const avgCost = getAvgCost(item.material_type, item.color);
               const cuttingCost = item.kg_consumed * avgCost;
@@ -101,6 +101,9 @@ export default function Cutting() {
                 <td className="px-3 py-3 text-center">{item.layers_count}</td>
                 <td className="px-3 py-3 text-center">{item.spread_length_m}</td>
                 <td className="px-3 py-3 text-center font-semibold">{item.total_pieces}</td>
+                <td className="px-3 py-3 text-center font-bold" style={{ color: (item.remaining_pieces ?? item.total_pieces) > 0 ? '#15803d' : '#dc2626' }}>
+                  {item.remaining_pieces ?? item.total_pieces}
+                </td>
                 <td className="px-3 py-3 text-center">{item.color}</td>
                 <td className="px-3 py-3 text-center text-red-600 font-semibold">{item.kg_consumed}</td>
                 <td className="px-3 py-3 text-center font-semibold text-purple-700">

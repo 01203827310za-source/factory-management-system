@@ -185,7 +185,28 @@ export const cuttingRouter = Router();
 cuttingRouter.use(authenticate);
 
 cuttingRouter.get('/', async (_req, res) => {
-  try { return res.json(await prisma.cuttingOrder.findMany({ orderBy: { id: 'asc' } })); }
+  try {
+    const cuts = await prisma.cuttingOrder.findMany({ orderBy: { id: 'asc' } });
+
+    // For each cut, compute reserved pieces from model_parts → model_production
+    const usedMap = new Map<string, number>();
+    const pairs = [...new Set(cuts.map(c => `${c.cut_number}|${c.color}`))];
+    await Promise.all(pairs.map(async (key) => {
+      const [cut_number, color] = key.split('|');
+      const parts = await prisma.modelPart.findMany({
+        where: { cut_number: parseInt(cut_number), color },
+        include: { model: { select: { qty_from_cutting: true } } },
+      });
+      usedMap.set(key, parts.reduce((s, p) => s + p.model.qty_from_cutting, 0));
+    }));
+
+    const result = cuts.map(c => {
+      const key = `${c.cut_number}|${c.color}`;
+      const used = usedMap.get(key) ?? 0;
+      return { ...c, remaining_pieces: c.total_pieces - used };
+    });
+    return res.json(result);
+  }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 cuttingRouter.post('/', requireManager, async (req, res) => {
