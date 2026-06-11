@@ -165,21 +165,34 @@ model CuttingOrder {
 
 // ===== MODEL PRODUCTION =====
 model ModelProduction {
-  id                   Int      @id @default(autoincrement())
+  id                   Int         @id @default(autoincrement())
   date                 String
   cut_number           Int
   model_code           String
-  qty_from_cutting     Int      @default(0)
-  model_description    String   @default("")
-  color                String   @default("")
-  sizes                String   @default("")
-  status               String   @default("قيد التشغيل")
-  wastage              Int      @default(0)
-  qty_received         Int      @default(0)
-  warehouse_entry_date String   @default("")
-  created_at           DateTime @default(now())
+  qty_from_cutting     Int         @default(0)
+  model_description    String      @default("")
+  color                String      @default("")
+  sizes                String      @default("")
+  status               String      @default("قيد التشغيل")
+  wastage              Int         @default(0)
+  qty_received         Int         @default(0)
+  warehouse_entry_date String      @default("")
+  created_at           DateTime    @default(now())
+  parts                ModelPart[]
 
   @@map("model_productions")
+}
+
+// ===== MODEL PARTS =====
+model ModelPart {
+  id         Int             @id @default(autoincrement())
+  model_id   Int
+  model      ModelProduction @relation(fields: [model_id], references: [id], onDelete: Cascade)
+  part_type  String          @default("")
+  cut_number Int             @default(0)
+  created_at DateTime        @default(now())
+
+  @@map("model_parts")
 }
 
 // ===== DEBTS =====

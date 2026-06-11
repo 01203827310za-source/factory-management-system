@@ -221,33 +221,74 @@ cuttingRouter.delete('/:id', requireManager, async (req, res) => {
 export const modelProdRouter = Router();
 modelProdRouter.use(authenticate);
 
+const PARTS_INCLUDE = { parts: { orderBy: { id: 'asc' as const } } } as const;
+
+type PartInput = { part_type?: string; cut_number?: number };
+
 modelProdRouter.get('/', async (_req, res) => {
-  try { return res.json(await prisma.modelProduction.findMany({ orderBy: { id: 'asc' } })); }
-  catch { return res.status(500).json({ message: 'خطأ' }); }
-});
-modelProdRouter.post('/', requireManager, async (req, res) => {
   try {
-    const rec = await prisma.modelProduction.create({ data: req.body });
-    logAudit({ user: req.user, module: 'ModelProduction', action: 'CREATE', record_id: rec.id,
-      after_data: rec, description: `إضافة إنتاج موديل: ${rec.model_code} - ${rec.model_description}` });
-    return res.status(201).json(rec);
+    return res.json(await prisma.modelProduction.findMany({
+      orderBy: { id: 'asc' },
+      include: PARTS_INCLUDE,
+    }));
   } catch { return res.status(500).json({ message: 'خطأ' }); }
 });
+
+modelProdRouter.post('/', requireManager, async (req, res) => {
+  try {
+    const { parts, ...data } = req.body;
+    const primaryCut = Array.isArray(parts) && parts.length > 0
+      ? (parts[0].cut_number || 0) : (data.cut_number || 0);
+    const rec = await prisma.modelProduction.create({ data: { ...data, cut_number: primaryCut } });
+    if (Array.isArray(parts) && parts.length > 0) {
+      await prisma.modelPart.createMany({
+        data: (parts as PartInput[]).map(p => ({
+          model_id:   rec.id,
+          part_type:  p.part_type  || '',
+          cut_number: p.cut_number || 0,
+        })),
+      });
+    }
+    const fresh = await prisma.modelProduction.findUnique({ where: { id: rec.id }, include: PARTS_INCLUDE });
+    logAudit({ user: req.user, module: 'ModelProduction', action: 'CREATE', record_id: rec.id,
+      after_data: fresh, description: `إضافة إنتاج موديل: ${rec.model_code} - ${rec.model_description}` });
+    return res.status(201).json(fresh);
+  } catch { return res.status(500).json({ message: 'خطأ' }); }
+});
+
 modelProdRouter.put('/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
   try {
-    const before = await prisma.modelProduction.findUnique({ where: { id } });
-    const rec = await prisma.modelProduction.update({ where: { id }, data: req.body });
+    const { parts, ...data } = req.body;
+    const primaryCut = Array.isArray(parts) && parts.length > 0
+      ? (parts[0].cut_number || 0) : (data.cut_number || 0);
+    const before = await prisma.modelProduction.findUnique({ where: { id }, include: PARTS_INCLUDE });
+    await prisma.modelProduction.update({ where: { id }, data: { ...data, cut_number: primaryCut } });
+    if (Array.isArray(parts)) {
+      await prisma.modelPart.deleteMany({ where: { model_id: id } });
+      if (parts.length > 0) {
+        await prisma.modelPart.createMany({
+          data: (parts as PartInput[]).map(p => ({
+            model_id:   id,
+            part_type:  p.part_type  || '',
+            cut_number: p.cut_number || 0,
+          })),
+        });
+      }
+    }
+    const fresh = await prisma.modelProduction.findUnique({ where: { id }, include: PARTS_INCLUDE });
     logAudit({ user: req.user, module: 'ModelProduction', action: 'UPDATE', record_id: id,
-      before_data: before, after_data: rec, description: `تعديل إنتاج موديل: ${rec.model_code} - ${rec.model_description}` });
-    return res.json(rec);
+      before_data: before, after_data: fresh,
+      description: `تعديل إنتاج موديل: ${fresh?.model_code} - ${fresh?.model_description}` });
+    return res.json(fresh);
   } catch { return res.status(500).json({ message: 'خطأ' }); }
 });
+
 modelProdRouter.delete('/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
   try {
-    const before = await prisma.modelProduction.findUnique({ where: { id } });
-    await prisma.modelProduction.delete({ where: { id } });
+    const before = await prisma.modelProduction.findUnique({ where: { id }, include: PARTS_INCLUDE });
+    await prisma.modelProduction.delete({ where: { id } }); // parts cascade via FK
     logAudit({ user: req.user, module: 'ModelProduction', action: 'DELETE', record_id: id,
       before_data: before, description: `حذف إنتاج موديل: ${before?.model_code} - ${before?.model_description}` });
     return res.json({ message: 'تم' });

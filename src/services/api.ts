@@ -242,10 +242,18 @@ export const modelProdApi = {
   remove: (id: number) => del<{ message: string }>(`/model-prod/${id}`),
 };
 
+export type ModelPartRecord = {
+  id: number;
+  model_id: number;
+  part_type: string;
+  cut_number: number;
+  created_at: string;
+};
+
 export type ModelProdRecord = {
   id: number;
   date: string;
-  cut_number: number;
+  cut_number: number; // mirrors first part — kept for backward compatibility
   model_code: string;
   qty_from_cutting: number;
   model_description: string;
@@ -256,6 +264,7 @@ export type ModelProdRecord = {
   qty_received: number;
   warehouse_entry_date: string;
   created_at: string;
+  parts?: ModelPartRecord[];
 };
 
 // ===== DEBTS =====

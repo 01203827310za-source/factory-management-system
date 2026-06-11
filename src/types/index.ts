@@ -104,10 +104,18 @@ export interface CuttingOrder {
   created_at: string;
 }
 
+export interface ModelPart {
+  id: number;
+  model_id: number;
+  part_type: string;
+  cut_number: number;
+  created_at: string;
+}
+
 export interface ModelProduction {
   id: number;
   date: string;
-  cut_number: number;
+  cut_number: number; // mirrors first part's cut_number — kept for backward compatibility
   model_code: string;
   qty_from_cutting: number;
   model_description: string;
@@ -118,6 +126,7 @@ export interface ModelProduction {
   qty_received: number;
   warehouse_entry_date: string;
   created_at: string;
+  parts?: ModelPart[];
 }
 
 export interface Debt {
