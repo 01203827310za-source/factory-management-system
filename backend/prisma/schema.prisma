@@ -446,6 +446,22 @@ model PayrollRecord {
   @@map("payroll_records")
 }
 
+// ===== FINANCIAL SNAPSHOTS =====
+model FinancialSnapshot {
+  id                   Int      @id @default(autoincrement())
+  snapshot_date        String   @unique
+  total_current_assets Float    @default(0)
+  cash                 Float    @default(0)
+  fabric_assets        Float    @default(0)
+  ready_stock_assets   Float    @default(0)
+  accessories_assets   Float    @default(0)
+  receivables          Float    @default(0)
+  debts                Float    @default(0)
+  created_at           DateTime @default(now())
+
+  @@map("financial_snapshots")
+}
+
 // ===== AUDIT LOG =====
 model AuditLog {
   id          Int      @id @default(autoincrement())

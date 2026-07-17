@@ -9,6 +9,7 @@ import {
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
+import ProfitByPeriod from '../components/ProfitByPeriod';
 
 const PIE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
@@ -169,6 +170,9 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
+
+        {/* Profit by Period */}
+        <ProfitByPeriod />
 
         {/* Charts */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

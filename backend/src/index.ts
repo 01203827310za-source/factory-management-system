@@ -12,6 +12,7 @@ import dashboardRouter from './routes/dashboard';
 import payrollRouter from './routes/payroll';
 import auditLogRouter from './routes/auditLog';
 import aiAssistantRouter from './routes/aiAssistant';
+import snapshotsRouter from './routes/snapshots';
 import {
   expensesRouter, readyStockRouter, fabricRouter, accessoriesRouter,
   cuttingRouter, modelProdRouter, debtsRouter, clientAccountsRouter,
@@ -62,6 +63,7 @@ app.use('/api/financial-center', financialCenterRouter);
 app.use('/api/payroll', payrollRouter);
 app.use('/api/audit-log', auditLogRouter);
 app.use('/api/ai-assistant', aiAssistantRouter);
+app.use('/api/snapshots', snapshotsRouter);
 
 // ===== 404 =====
 app.use((_req, res) => {

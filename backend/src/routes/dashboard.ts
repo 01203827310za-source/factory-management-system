@@ -120,6 +120,33 @@ router.get('/', async (_req: Request, res: Response) => {
     const netPartners = (hatemIn - hatemOut) + (midoIn - midoOut);
     const totalCurrentAssets = fabricValue + stockValue + accessoriesValue + moneyOwedToUs + netPartners - remainingDebts;
 
+    // Auto-upsert today's snapshot using already-computed values (non-blocking)
+    const _today = new Date().toISOString().slice(0, 10);
+    setImmediate(() => {
+      prisma.financialSnapshot.upsert({
+        where:  { snapshot_date: _today },
+        update: {
+          total_current_assets: totalCurrentAssets,
+          cash:                 cashAvailable,
+          fabric_assets:        fabricValue,
+          ready_stock_assets:   stockValue,
+          accessories_assets:   accessoriesValue,
+          receivables:          moneyOwedToUs,
+          debts:                remainingDebts,
+        },
+        create: {
+          snapshot_date:        _today,
+          total_current_assets: totalCurrentAssets,
+          cash:                 cashAvailable,
+          fabric_assets:        fabricValue,
+          ready_stock_assets:   stockValue,
+          accessories_assets:   accessoriesValue,
+          receivables:          moneyOwedToUs,
+          debts:                remainingDebts,
+        },
+      }).catch((e: Error) => console.error('Auto-snapshot failed:', e.message));
+    });
+
     return res.json({
       total_sales: totalSales,
       total_expenses: totalOut,

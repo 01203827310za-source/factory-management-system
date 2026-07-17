@@ -706,6 +706,40 @@ export const auditLogApi = {
   getDetail: (id: number) => get<AuditLogRecord>(`/audit-log/${id}`),
 };
 
+// ===== SNAPSHOTS =====
+export type SnapshotRecord = {
+  id: number;
+  snapshot_date: string;
+  total_current_assets: number;
+  cash: number;
+  fabric_assets: number;
+  ready_stock_assets: number;
+  accessories_assets: number;
+  receivables: number;
+  debts: number;
+  created_at: string;
+};
+
+export type ProfitResult = {
+  from_date: string;
+  to_date: string;
+  start_date: string;
+  end_date: string;
+  start_assets: number;
+  end_assets: number;
+  profit: number;
+  growth_percent: number | null;
+  has_start_data: boolean;
+  has_end_data: boolean;
+};
+
+export const snapshotsApi = {
+  getAll:    ()                              => get<SnapshotRecord[]>('/snapshots'),
+  take:      ()                              => post<SnapshotRecord>('/snapshots/take', {}),
+  getProfit: (from_date: string, to_date: string) =>
+    get<ProfitResult>(`/snapshots/profit?from_date=${from_date}&to_date=${to_date}`),
+};
+
 // ===== AI ASSISTANT =====
 export type AiAssistantResponse = { answer: string; topics_used: string[] };
 
