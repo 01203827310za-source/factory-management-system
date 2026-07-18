@@ -43,6 +43,11 @@ async function main() {
   }
   console.log('✅ Marketers seeded');
 
+  // ===== PARTNERS =====
+  await prisma.partner.upsert({ where: { name: 'حاتم' }, update: {}, create: { name: 'حاتم', is_active: true } });
+  await prisma.partner.upsert({ where: { name: 'ميدو' }, update: {}, create: { name: 'ميدو', is_active: true } });
+  console.log('✅ Partners seeded');
+
   // ===== READY STOCK =====
   const stockCount = await prisma.readyStock.count();
   if (stockCount === 0) {

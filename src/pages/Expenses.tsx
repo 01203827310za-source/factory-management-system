@@ -5,6 +5,7 @@ import Modal from '../components/Modal';
 import { useToast } from '../components/Toast';
 import { Plus, Edit2, Trash2, Download, Search, RefreshCw } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { usePartners } from '../contexts/PartnerContext';
 
 const OP_TYPES: ExpenseRevenue['operation_type'][] = ['راس مالى', 'مصروف تشغيل', 'ايراد مبيعات', 'استلاف', 'سداد'];
 const ic = "w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400";
@@ -12,6 +13,9 @@ const lc = "block text-xs font-semibold text-gray-600 mb-1";
 
 export default function Expenses() {
   const toast = useToast();
+  const { activePartners } = usePartners();
+  const hatemActive = activePartners.length === 0 || activePartners.some(p => p.name === 'حاتم');
+  const midoActive  = activePartners.length === 0 || activePartners.some(p => p.name === 'ميدو');
   const [items, setItems] = useState<ExpenseRevenue[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -93,8 +97,8 @@ export default function Expenses() {
 
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         {[
-          { l: 'وارد حاتم', v: summary.hatemIn, c: 'emerald' }, { l: 'منصرف حاتم', v: summary.hatemOut, c: 'red' },
-          { l: 'وارد ميدو', v: summary.midoIn, c: 'emerald' }, { l: 'منصرف ميدو', v: summary.midoOut, c: 'red' },
+          ...(hatemActive ? [{ l: 'وارد حاتم', v: summary.hatemIn, c: 'emerald' }, { l: 'منصرف حاتم', v: summary.hatemOut, c: 'red' }] : []),
+          ...(midoActive  ? [{ l: 'وارد ميدو',  v: summary.midoIn,  c: 'emerald' }, { l: 'منصرف ميدو',  v: summary.midoOut,  c: 'red' }] : []),
           { l: 'إجمالي الوارد', v: summary.totalIn, c: 'blue' },
         ].map(x => (
           <div key={x.l} className={`bg-${x.c}-50 border border-${x.c}-200 rounded-lg p-3 text-center`}>
@@ -154,10 +158,10 @@ export default function Expenses() {
           <div><label className={lc}>التاريخ</label><input type="date" className={ic} value={form.date} onChange={e => setForm({...form, date: e.target.value})} /></div>
           <div><label className={lc}>نوع العملية</label><select className={ic} value={form.operation_type} onChange={e => setForm({...form, operation_type: e.target.value as ExpenseRevenue['operation_type']})}>{OP_TYPES.map(t => <option key={t} value={t}>{t}</option>)}</select></div>
           <div className="md:col-span-2"><label className={lc}>البيان *</label><input className={ic} value={form.statement} onChange={e => setForm({...form, statement: e.target.value})} /></div>
-          <div><label className={lc}>وارد حاتم</label><input type="number" className={ic} value={form.hatem_in} onChange={e => setForm({...form, hatem_in: parseFloat(e.target.value)||0})} min={0} /></div>
-          <div><label className={lc}>منصرف حاتم</label><input type="number" className={ic} value={form.hatem_out} onChange={e => setForm({...form, hatem_out: parseFloat(e.target.value)||0})} min={0} /></div>
-          <div><label className={lc}>وارد ميدو</label><input type="number" className={ic} value={form.mido_in} onChange={e => setForm({...form, mido_in: parseFloat(e.target.value)||0})} min={0} /></div>
-          <div><label className={lc}>منصرف ميدو</label><input type="number" className={ic} value={form.mido_out} onChange={e => setForm({...form, mido_out: parseFloat(e.target.value)||0})} min={0} /></div>
+          {hatemActive && <div><label className={lc}>وارد حاتم</label><input type="number" className={ic} value={form.hatem_in} onChange={e => setForm({...form, hatem_in: parseFloat(e.target.value)||0})} min={0} /></div>}
+          {hatemActive && <div><label className={lc}>منصرف حاتم</label><input type="number" className={ic} value={form.hatem_out} onChange={e => setForm({...form, hatem_out: parseFloat(e.target.value)||0})} min={0} /></div>}
+          {midoActive  && <div><label className={lc}>وارد ميدو</label><input type="number" className={ic} value={form.mido_in} onChange={e => setForm({...form, mido_in: parseFloat(e.target.value)||0})} min={0} /></div>}
+          {midoActive  && <div><label className={lc}>منصرف ميدو</label><input type="number" className={ic} value={form.mido_out} onChange={e => setForm({...form, mido_out: parseFloat(e.target.value)||0})} min={0} /></div>}
         </div>
         <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-200">
           <button onClick={() => setModalOpen(false)} className="px-5 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">إلغاء</button>

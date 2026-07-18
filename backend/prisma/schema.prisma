@@ -446,6 +446,18 @@ model PayrollRecord {
   @@map("payroll_records")
 }
 
+// ===== PARTNERS =====
+model Partner {
+  id         Int      @id @default(autoincrement())
+  name       String   @unique
+  is_active  Boolean  @default(true)
+  exit_date  String?
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@map("partners")
+}
+
 // ===== FINANCIAL SNAPSHOTS =====
 model FinancialSnapshot {
   id                   Int      @id @default(autoincrement())

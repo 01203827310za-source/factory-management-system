@@ -9,6 +9,7 @@ import type { Sale, ReturnItem } from '../types';
 import Modal from '../components/Modal';
 import { useToast } from '../components/Toast';
 import { Plus, Edit2, Trash2, Filter, Download, Search, UserPlus, Printer, ArrowLeftRight, RefreshCw, CheckSquare, XCircle, BookmarkPlus } from 'lucide-react';
+import { usePartners } from '../contexts/PartnerContext';
 
 import * as XLSX from 'xlsx';
 
@@ -19,6 +20,7 @@ const DELIVERY_METHODS = ['ايرجنت', 'مصنع', 'البريد', 'شحن م
 
 export default function Sales() {
   const toast = useToast();
+  const { activePartners, solePartner } = usePartners();
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -510,11 +512,14 @@ await loadData();(returnForm);
           </div>
           <div>
             <label className={labelClass}>من استلم العربون</label>
-            <select className={inputClass} value={form.deposit_receiver} onChange={e => setForm({...form, deposit_receiver: e.target.value as 'حاتم' | 'ميدو' | ''})}>
-              <option value="">اختر</option>
-              <option value="حاتم">حاتم</option>
-              <option value="ميدو">ميدو</option>
-            </select>
+            {solePartner ? (
+              <input className={inputClass} readOnly value={solePartner.name} />
+            ) : (
+              <select className={inputClass} value={form.deposit_receiver} onChange={e => setForm({...form, deposit_receiver: e.target.value as 'حاتم' | 'ميدو' | ''})}>
+                <option value="">اختر</option>
+                {activePartners.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
+              </select>
+            )}
           </div>
           <div>
             <label className={labelClass}>المتبقي</label>
@@ -631,19 +636,25 @@ await loadData();(returnForm);
           </div>
           <div>
             <label className={labelClass}>من رجع *</label>
-            <select className={inputClass} value={returnForm.returned_by} onChange={e => setReturnForm({...returnForm, returned_by: e.target.value as 'حاتم' | 'ميدو' | ''})}>
-              <option value="">اختر</option>
-              <option value="حاتم">حاتم</option>
-              <option value="ميدو">ميدو</option>
-            </select>
+            {solePartner ? (
+              <input className={inputClass} readOnly value={solePartner.name} />
+            ) : (
+              <select className={inputClass} value={returnForm.returned_by} onChange={e => setReturnForm({...returnForm, returned_by: e.target.value as 'حاتم' | 'ميدو' | ''})}>
+                <option value="">اختر</option>
+                {activePartners.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
+              </select>
+            )}
           </div>
           <div>
             <label className={labelClass}>من حول مبلغ المرتجع *</label>
-            <select className={inputClass} value={returnForm.paid_by} onChange={e => setReturnForm({...returnForm, paid_by: e.target.value as 'حاتم' | 'ميدو' | ''})}>
-              <option value="">اختر</option>
-              <option value="حاتم">حاتم</option>
-              <option value="ميدو">ميدو</option>
-            </select>
+            {solePartner ? (
+              <input className={inputClass} readOnly value={solePartner.name} />
+            ) : (
+              <select className={inputClass} value={returnForm.paid_by} onChange={e => setReturnForm({...returnForm, paid_by: e.target.value as 'حاتم' | 'ميدو' | ''})}>
+                <option value="">اختر</option>
+                {activePartners.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
+              </select>
+            )}
           </div>
           <div>
             <label className={labelClass}>كود الموديل *</label>

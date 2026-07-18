@@ -10,6 +10,7 @@ import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
 import ProfitByPeriod from '../components/ProfitByPeriod';
+import { usePartners } from '../contexts/PartnerContext';
 
 const PIE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
@@ -26,6 +27,7 @@ const EMPTY: DashboardMetrics = {
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<DashboardMetrics>(EMPTY);
   const [loading, setLoading] = useState(true);
+  const { activePartners } = usePartners();
 
   const loadData = async () => {
     try {
@@ -99,9 +101,10 @@ export default function Dashboard() {
               </thead>
               <tbody>
                 {[
-                  { name: 'محمد (ميدو)', inn: metrics.mido_total_in, out: metrics.mido_total_out, net: metrics.mido_net },
-                  { name: 'حاتم', inn: metrics.hatem_total_in, out: metrics.hatem_total_out, net: metrics.hatem_net },
-                ].map(p => (
+                  { key: 'ميدو', name: 'محمد (ميدو)', inn: metrics.mido_total_in, out: metrics.mido_total_out, net: metrics.mido_net },
+                  { key: 'حاتم', name: 'حاتم',         inn: metrics.hatem_total_in, out: metrics.hatem_total_out, net: metrics.hatem_net },
+                ].filter(p => activePartners.length === 0 || activePartners.some(ap => ap.name === p.key))
+                 .map(p => (
                   <tr key={p.name} className="border-t border-gray-50 hover:bg-blue-50/50">
                     <td className="px-6 py-4 font-medium">{p.name}</td>
                     <td className="px-6 py-4 text-center text-emerald-600 font-semibold">{p.inn.toLocaleString('ar-EG')}</td>

@@ -740,6 +740,24 @@ export const snapshotsApi = {
     get<ProfitResult>(`/snapshots/profit?from_date=${from_date}&to_date=${to_date}`),
 };
 
+// ===== PARTNERS =====
+export type PartnerRecord = {
+  id: number;
+  name: string;
+  is_active: boolean;
+  exit_date: string | null;
+  net_balance: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export const partnersApi = {
+  getAll:      ()         => get<PartnerRecord[]>('/partners'),
+  getActive:   ()         => get<PartnerRecord[]>('/partners/active'),
+  deactivate:  (id: number) => post<PartnerRecord>(`/partners/${id}/deactivate`, {}),
+  reactivate:  (id: number) => post<PartnerRecord>(`/partners/${id}/reactivate`, {}),
+};
+
 // ===== AI ASSISTANT =====
 export type AiAssistantResponse = { answer: string; topics_used: string[] };
 
