@@ -5,7 +5,6 @@ import Modal from '../components/Modal';
 import { useToast } from '../components/Toast';
 import { Plus, Edit2, Trash2, Download, Search, RefreshCw } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { usePartners } from '../contexts/PartnerContext';
 
 const OP_TYPES: ExpenseRevenue['operation_type'][] = ['راس مالى', 'مصروف تشغيل', 'ايراد مبيعات', 'استلاف', 'سداد'];
 const ic = "w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400";
@@ -13,9 +12,6 @@ const lc = "block text-xs font-semibold text-gray-600 mb-1";
 
 export default function Expenses() {
   const toast = useToast();
-  const { activePartners } = usePartners();
-  const hatemActive = activePartners.length === 0 || activePartners.some(p => p.name === 'حاتم');
-  const midoActive  = activePartners.length === 0 || activePartners.some(p => p.name === 'ميدو');
   const [items, setItems] = useState<ExpenseRevenue[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -26,7 +22,7 @@ export default function Expenses() {
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
-  const emptyForm = { date: '', operation_type: 'مصروف تشغيل' as ExpenseRevenue['operation_type'], statement: '', hatem_in: 0, hatem_out: 0, mido_in: 0, mido_out: 0 };
+  const emptyForm = { date: '', operation_type: 'مصروف تشغيل' as ExpenseRevenue['operation_type'], statement: '', amount_in: 0, amount_out: 0 };
   const [form, setForm] = useState(emptyForm);
 
   const loadData = async () => {
@@ -40,7 +36,7 @@ export default function Expenses() {
   const openAdd = () => { setEditItem(null); setForm(emptyForm); setModalOpen(true); };
   const openEdit = (item: ExpenseRevenue) => {
     setEditItem(item);
-    setForm({ date: item.date, operation_type: item.operation_type, statement: item.statement, hatem_in: item.hatem_in, hatem_out: item.hatem_out, mido_in: item.mido_in, mido_out: item.mido_out });
+    setForm({ date: item.date, operation_type: item.operation_type, statement: item.statement, amount_in: item.amount_in, amount_out: item.amount_out });
     setModalOpen(true);
   };
 
@@ -71,16 +67,15 @@ export default function Expenses() {
   }, [items, filterType, filterDateFrom, filterDateTo, search]);
 
   const summary = useMemo(() => ({
-    hatemIn: items.reduce((s, r) => s + r.hatem_in, 0),
-    hatemOut: items.reduce((s, r) => s + r.hatem_out, 0),
-    midoIn: items.reduce((s, r) => s + r.mido_in, 0),
-    midoOut: items.reduce((s, r) => s + r.mido_out, 0),
-    totalIn: items.reduce((s, r) => s + r.hatem_in + r.mido_in, 0),
-    totalOut: items.reduce((s, r) => s + r.hatem_out + r.mido_out, 0),
+    totalIn:  items.reduce((s, r) => s + r.amount_in,  0),
+    totalOut: items.reduce((s, r) => s + r.amount_out, 0),
   }), [items]);
 
   const exportExcel = () => {
-    const ws = XLSX.utils.json_to_sheet(filtered.map(r => ({ 'التاريخ': r.date, 'نوع العملية': r.operation_type, 'البيان': r.statement, 'وارد حاتم': r.hatem_in, 'منصرف حاتم': r.hatem_out, 'وارد ميدو': r.mido_in, 'منصرف ميدو': r.mido_out })));
+    const ws = XLSX.utils.json_to_sheet(filtered.map(r => ({
+      'التاريخ': r.date, 'نوع العملية': r.operation_type, 'البيان': r.statement,
+      'وارد': r.amount_in, 'منصرف': r.amount_out,
+    })));
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'المصاريف'); XLSX.writeFile(wb, 'expenses_export.xlsx');
   };
 
@@ -95,17 +90,15 @@ export default function Expenses() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        {[
-          ...(hatemActive ? [{ l: 'وارد حاتم', v: summary.hatemIn, c: 'emerald' }, { l: 'منصرف حاتم', v: summary.hatemOut, c: 'red' }] : []),
-          ...(midoActive  ? [{ l: 'وارد ميدو',  v: summary.midoIn,  c: 'emerald' }, { l: 'منصرف ميدو',  v: summary.midoOut,  c: 'red' }] : []),
-          { l: 'إجمالي الوارد', v: summary.totalIn, c: 'blue' },
-        ].map(x => (
-          <div key={x.l} className={`bg-${x.c}-50 border border-${x.c}-200 rounded-lg p-3 text-center`}>
-            <p className={`text-[11px] text-${x.c}-600`}>{x.l}</p>
-            <p className={`text-lg font-bold text-${x.c}-700`}>{x.v.toLocaleString('ar-EG')}</p>
-          </div>
-        ))}
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-center">
+          <p className="text-[11px] text-emerald-600">إجمالي الوارد</p>
+          <p className="text-lg font-bold text-emerald-700">{summary.totalIn.toLocaleString('ar-EG')}</p>
+        </div>
+        <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-center">
+          <p className="text-[11px] text-red-600">إجمالي المنصرف</p>
+          <p className="text-lg font-bold text-red-700">{summary.totalOut.toLocaleString('ar-EG')}</p>
+        </div>
         <div className={`${summary.totalIn - summary.totalOut >= 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'} rounded-lg p-3 text-center border`}>
           <p className={`text-[11px] ${summary.totalIn - summary.totalOut >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>صافي السيولة</p>
           <p className={`text-lg font-bold ${summary.totalIn - summary.totalOut >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>{(summary.totalIn - summary.totalOut).toLocaleString('ar-EG')}</p>
@@ -125,11 +118,11 @@ export default function Expenses() {
         <div className="overflow-x-auto">
           <table className="w-full text-sm whitespace-nowrap">
             <thead><tr className="bg-[#1e3a5f] text-white">
-              {['#','التاريخ','نوع العملية','البيان','وارد حاتم','منصرف حاتم','وارد ميدو','منصرف ميدو','إجراءات'].map(h => <th key={h} className="px-4 py-3 text-center font-semibold">{h}</th>)}
+              {['#','التاريخ','نوع العملية','البيان','وارد','منصرف','إجراءات'].map(h => <th key={h} className="px-4 py-3 text-center font-semibold">{h}</th>)}
             </tr></thead>
             <tbody>
-              {loading && <tr><td colSpan={9} className="text-center py-8 text-gray-400"><RefreshCw size={16} className="animate-spin inline mr-2" />جارٍ التحميل...</td></tr>}
-              {!loading && filtered.length === 0 && <tr><td colSpan={9} className="text-center py-8 text-gray-400">لا توجد بيانات</td></tr>}
+              {loading && <tr><td colSpan={7} className="text-center py-8 text-gray-400"><RefreshCw size={16} className="animate-spin inline mr-2" />جارٍ التحميل...</td></tr>}
+              {!loading && filtered.length === 0 && <tr><td colSpan={7} className="text-center py-8 text-gray-400">لا توجد بيانات</td></tr>}
               {filtered.map((item, idx) => (
                 <tr key={item.id} className="border-t border-gray-100 hover:bg-blue-50/40 transition">
                   <td className="px-4 py-3 text-center text-gray-500">{idx + 1}</td>
@@ -138,10 +131,8 @@ export default function Expenses() {
                     <span className={`px-2 py-1 rounded-full text-xs font-medium ${item.operation_type === 'راس مالى' ? 'bg-purple-100 text-purple-700' : item.operation_type === 'مصروف تشغيل' ? 'bg-red-100 text-red-700' : item.operation_type === 'ايراد مبيعات' ? 'bg-emerald-100 text-emerald-700' : item.operation_type === 'استلاف' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>{item.operation_type}</span>
                   </td>
                   <td className="px-4 py-3 font-medium text-right">{item.statement}</td>
-                  <td className="px-4 py-3 text-center text-emerald-600">{item.hatem_in > 0 ? item.hatem_in.toLocaleString('ar-EG') : '-'}</td>
-                  <td className="px-4 py-3 text-center text-red-600">{item.hatem_out > 0 ? item.hatem_out.toLocaleString('ar-EG') : '-'}</td>
-                  <td className="px-4 py-3 text-center text-emerald-600">{item.mido_in > 0 ? item.mido_in.toLocaleString('ar-EG') : '-'}</td>
-                  <td className="px-4 py-3 text-center text-red-600">{item.mido_out > 0 ? item.mido_out.toLocaleString('ar-EG') : '-'}</td>
+                  <td className="px-4 py-3 text-center text-emerald-600">{item.amount_in > 0 ? item.amount_in.toLocaleString('ar-EG') : '-'}</td>
+                  <td className="px-4 py-3 text-center text-red-600">{item.amount_out > 0 ? item.amount_out.toLocaleString('ar-EG') : '-'}</td>
                   <td className="px-4 py-3 text-center"><div className="flex items-center justify-center gap-1">
                     <button onClick={() => openEdit(item)} className="p-1.5 text-blue-600 hover:bg-blue-100 rounded-lg"><Edit2 size={15} /></button>
                     <button onClick={() => setDeleteConfirm(item.id)} className="p-1.5 text-red-600 hover:bg-red-100 rounded-lg"><Trash2 size={15} /></button>
@@ -158,10 +149,8 @@ export default function Expenses() {
           <div><label className={lc}>التاريخ</label><input type="date" className={ic} value={form.date} onChange={e => setForm({...form, date: e.target.value})} /></div>
           <div><label className={lc}>نوع العملية</label><select className={ic} value={form.operation_type} onChange={e => setForm({...form, operation_type: e.target.value as ExpenseRevenue['operation_type']})}>{OP_TYPES.map(t => <option key={t} value={t}>{t}</option>)}</select></div>
           <div className="md:col-span-2"><label className={lc}>البيان *</label><input className={ic} value={form.statement} onChange={e => setForm({...form, statement: e.target.value})} /></div>
-          {hatemActive && <div><label className={lc}>وارد حاتم</label><input type="number" className={ic} value={form.hatem_in} onChange={e => setForm({...form, hatem_in: parseFloat(e.target.value)||0})} min={0} /></div>}
-          {hatemActive && <div><label className={lc}>منصرف حاتم</label><input type="number" className={ic} value={form.hatem_out} onChange={e => setForm({...form, hatem_out: parseFloat(e.target.value)||0})} min={0} /></div>}
-          {midoActive  && <div><label className={lc}>وارد ميدو</label><input type="number" className={ic} value={form.mido_in} onChange={e => setForm({...form, mido_in: parseFloat(e.target.value)||0})} min={0} /></div>}
-          {midoActive  && <div><label className={lc}>منصرف ميدو</label><input type="number" className={ic} value={form.mido_out} onChange={e => setForm({...form, mido_out: parseFloat(e.target.value)||0})} min={0} /></div>}
+          <div><label className={lc}>وارد</label><input type="number" className={ic} value={form.amount_in} onChange={e => setForm({...form, amount_in: parseFloat(e.target.value)||0})} min={0} /></div>
+          <div><label className={lc}>منصرف</label><input type="number" className={ic} value={form.amount_out} onChange={e => setForm({...form, amount_out: parseFloat(e.target.value)||0})} min={0} /></div>
         </div>
         <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-200">
           <button onClick={() => setModalOpen(false)} className="px-5 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">إلغاء</button>

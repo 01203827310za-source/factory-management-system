@@ -4,20 +4,17 @@ import { getDashboardMetrics } from '../data/store';
 import type { DashboardMetrics } from '../types';
 import {
   TrendingUp, TrendingDown, Wallet, AlertTriangle,
-  Users, DollarSign, ShoppingCart, ArrowLeftRight, RefreshCw
+  DollarSign, ShoppingCart, ArrowLeftRight, RefreshCw
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
 import ProfitByPeriod from '../components/ProfitByPeriod';
-import { usePartners } from '../contexts/PartnerContext';
 
 const PIE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
 const EMPTY: DashboardMetrics = {
   total_sales: 0, total_expenses: 0, net_profit: 0, remaining_debts: 0,
-  hatem_total_in: 0, hatem_total_out: 0, hatem_net: 0,
-  mido_total_in: 0, mido_total_out: 0, mido_net: 0,
   total_in: 0, total_out: 0, cash_available: 0, money_owed_to_us: 0,
   sales_by_marketer: {}, order_status_counts: {}, total_returns: 0, total_refunds: 0,
   total_current_assets: 0, fabric_value: 0, stock_value: 0, accessories_value: 0,
@@ -27,7 +24,6 @@ const EMPTY: DashboardMetrics = {
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<DashboardMetrics>(EMPTY);
   const [loading, setLoading] = useState(true);
-  const { activePartners } = usePartners();
 
   const loadData = async () => {
     try {
@@ -82,47 +78,32 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Partners Table */}
+        {/* Financial Summary */}
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
           <div className="px-6 py-4 border-b border-gray-100">
             <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
-              <Users size={20} className="text-blue-600" /> ملخص الشركاء
+              <Wallet size={20} className="text-blue-600" /> ملخص مالي
             </h2>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50">
-                  <th className="text-right px-6 py-3 font-semibold text-gray-600">الشريك</th>
                   <th className="text-center px-6 py-3 font-semibold text-gray-600">إجمالي الوارد</th>
                   <th className="text-center px-6 py-3 font-semibold text-gray-600">إجمالي المصاريف</th>
-                  <th className="text-center px-6 py-3 font-semibold text-gray-600">الصافي المتاح</th>
+                  <th className="text-center px-6 py-3 font-semibold text-gray-600">الصافي</th>
                 </tr>
               </thead>
               <tbody>
-                {[
-                  { key: 'ميدو', name: 'محمد (ميدو)', inn: metrics.mido_total_in, out: metrics.mido_total_out, net: metrics.mido_net },
-                  { key: 'حاتم', name: 'حاتم',         inn: metrics.hatem_total_in, out: metrics.hatem_total_out, net: metrics.hatem_net },
-                ].filter(p => activePartners.length === 0 || activePartners.some(ap => ap.name === p.key))
-                 .map(p => (
-                  <tr key={p.name} className="border-t border-gray-50 hover:bg-blue-50/50">
-                    <td className="px-6 py-4 font-medium">{p.name}</td>
-                    <td className="px-6 py-4 text-center text-emerald-600 font-semibold">{p.inn.toLocaleString('ar-EG')}</td>
-                    <td className="px-6 py-4 text-center text-red-600 font-semibold">{p.out.toLocaleString('ar-EG')}</td>
-                    <td className={`px-6 py-4 text-center font-bold ${p.net >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{p.net.toLocaleString('ar-EG')}</td>
-                  </tr>
-                ))}
-                <tr className="border-t-2 border-gray-200 bg-gray-50 font-bold">
-                  <td className="px-6 py-4">الإجمالي</td>
-                  <td className="px-6 py-4 text-center text-emerald-700">{metrics.total_in.toLocaleString('ar-EG')}</td>
-                  <td className="px-6 py-4 text-center text-red-700">{metrics.total_out.toLocaleString('ar-EG')}</td>
-                  <td className={`px-6 py-4 text-center ${metrics.net_profit >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>{metrics.net_profit.toLocaleString('ar-EG')}</td>
+                <tr className="border-t border-gray-100">
+                  <td className="px-6 py-4 text-center text-emerald-700 font-bold text-lg">{metrics.total_in.toLocaleString('ar-EG')}</td>
+                  <td className="px-6 py-4 text-center text-red-700 font-bold text-lg">{metrics.total_out.toLocaleString('ar-EG')}</td>
+                  <td className={`px-6 py-4 text-center font-bold text-lg ${metrics.net_profit >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
+                    {metrics.net_profit.toLocaleString('ar-EG')}
+                  </td>
                 </tr>
               </tbody>
             </table>
-          </div>
-          <div className="px-6 py-3 bg-orange-50 border-t border-orange-100 text-xs text-orange-700 flex items-center gap-2">
-            <ArrowLeftRight size={14} /> ملاحظة: العربون يُحسب للشريك الذي استلمه، والمتبقي من الأوردرات "تم الصرف" يُضاف لحساب حاتم
           </div>
         </div>
 
@@ -162,8 +143,8 @@ export default function Dashboard() {
           </div>
           <div className="bg-white/10 rounded-lg p-4 flex items-center justify-between">
             <div>
-              <p className="text-sm text-white/70">الصافي مع ميدو وحاتم بعد الديون</p>
-              <p className="text-sm text-white/70">(صافي ميدو + صافي حاتم − الديون)</p>
+              <p className="text-sm text-white/70">صافي الوضع المالي بعد الديون</p>
+              <p className="text-sm text-white/70">(صافي النقد الكلي − الديون)</p>
             </div>
             <div className="text-left">
               <p className="text-xs text-white/50">المجموع الكلي</p>

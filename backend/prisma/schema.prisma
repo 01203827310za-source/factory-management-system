@@ -75,6 +75,9 @@ model ExpenseRevenue {
   date           String
   operation_type String
   statement      String
+  amount_in      Float    @default(0)
+  amount_out     Float    @default(0)
+  // Phase-2 drop: hatem_in, hatem_out, mido_in, mido_out kept in DB until verified
   hatem_in       Float    @default(0)
   hatem_out      Float    @default(0)
   mido_in        Float    @default(0)
@@ -93,8 +96,6 @@ model ReadyStock {
   opening_balance   Int    @default(0)
   cost_per_piece    Float  @default(0)
   location          String @default("")
-  mido_stock        Int    @default(0)
-  hatem_stock       Int    @default(0)
   reserved_quantity Int    @default(0)
 
   @@map("ready_stock")
@@ -444,18 +445,6 @@ model PayrollRecord {
 
   @@unique([employee_id, month, year])
   @@map("payroll_records")
-}
-
-// ===== PARTNERS =====
-model Partner {
-  id         Int      @id @default(autoincrement())
-  name       String   @unique
-  is_active  Boolean  @default(true)
-  exit_date  String?
-  created_at DateTime @default(now())
-  updated_at DateTime @updatedAt
-
-  @@map("partners")
 }
 
 // ===== FINANCIAL SNAPSHOTS =====

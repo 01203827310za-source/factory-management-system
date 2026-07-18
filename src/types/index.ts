@@ -13,7 +13,7 @@ export interface Sale {
   model5_code: string; model5_qty: number; model5_color: string;
   invoice_value: number;
   deposit_paid: number;
-  deposit_receiver: 'حاتم' | 'ميدو' | '';
+  deposit_receiver: string;
   remaining: number;
   shipping_number: string;
   order_status: 'تم الصرف' | 'لم يتم الصرف' | 'حساب عميل' | 'تم الحجز' | 'تم الإلغاء';
@@ -29,10 +29,8 @@ export interface ExpenseRevenue {
   date: string;
   operation_type: 'راس مالى' | 'مصروف تشغيل' | 'ايراد مبيعات' | 'استلاف' | 'سداد';
   statement: string;
-  hatem_in: number;
-  hatem_out: number;
-  mido_in: number;
-  mido_out: number;
+  amount_in: number;
+  amount_out: number;
   created_at: string;
 }
 
@@ -44,8 +42,6 @@ export interface ReadyStock {
   opening_balance: number;
   cost_per_piece: number;
   location: string;
-  mido_stock: number;
-  hatem_stock: number;
   reserved_quantity: number;
 }
 
@@ -187,8 +183,8 @@ export interface ReturnItem {
   date: string;
   order_number: string;
   client_name: string;
-  returned_by: 'حاتم' | 'ميدو' | '';
-  paid_by: 'حاتم' | 'ميدو' | '';
+  returned_by: string;
+  paid_by: string;
   model_code: string;
   model_qty: number;
   model_color: string;
@@ -202,7 +198,7 @@ export interface PaymentLog {
   date: string;
   type: 'client_payment' | 'debt_payment';
   amount: number;
-  receiver: 'حاتم' | 'ميدو' | '';
+  receiver: string;
   description: string;
   created_at: string;
 }
@@ -212,12 +208,6 @@ export interface DashboardMetrics {
   total_expenses: number;
   net_profit: number;
   remaining_debts: number;
-  hatem_total_in: number;
-  hatem_total_out: number;
-  hatem_net: number;
-  mido_total_in: number;
-  mido_total_out: number;
-  mido_net: number;
   total_in: number;
   total_out: number;
   cash_available: number;

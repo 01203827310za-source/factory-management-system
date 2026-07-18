@@ -5,10 +5,8 @@ import { authenticate } from '../middleware/auth';
 const router = Router();
 router.use(authenticate);
 
-// GET /api/dashboard - Compute all metrics server-side
 router.get('/', async (_req: Request, res: Response) => {
   try {
-    // Fetch all needed data in parallel
     const [sales, expenses, debts, clientAccts, returns_, paymentLogs, fabric, readyStock, accessories] = await Promise.all([
       prisma.sale.findMany(),
       prisma.expenseRevenue.findMany(),
@@ -21,33 +19,27 @@ router.get('/', async (_req: Request, res: Response) => {
       prisma.accessoriesWarehouse.findMany(),
     ]);
 
-    // Payment logs
-    const hatemPaymentIn = paymentLogs.filter(p => p.receiver === 'حاتم' && p.type === 'client_payment').reduce((s, p) => s + p.amount, 0);
-    const midoPaymentIn = paymentLogs.filter(p => p.receiver === 'ميدو' && p.type === 'client_payment').reduce((s, p) => s + p.amount, 0);
-    const hatemDebtOut = paymentLogs.filter(p => p.type === 'debt_payment' && p.receiver === 'حاتم').reduce((s, p) => s + p.amount, 0);
-    const midoDebtOut = paymentLogs.filter(p => p.type === 'debt_payment' && p.receiver === 'ميدو').reduce((s, p) => s + p.amount, 0);
-
     const totalSales = sales.reduce((s, sale) => s + sale.invoice_value, 0);
     const totalReservations = sales
       .filter(s => s.order_status === 'تم الحجز')
       .reduce((s, sale) => s + sale.invoice_value, 0);
 
-    const hatemDepositIn = sales.filter(s => s.deposit_receiver === 'حاتم').reduce((s, sale) => s + sale.deposit_paid, 0);
-    const midoDepositIn = sales.filter(s => s.deposit_receiver === 'ميدو').reduce((s, sale) => s + sale.deposit_paid, 0);
-    const hatemRemainingIn = sales.filter(s => s.order_status === 'تم الصرف').reduce((s, sale) => s + sale.remaining, 0);
+    const depositIn      = sales.reduce((s, sale) => s + sale.deposit_paid, 0);
+    const remainingIn    = sales
+      .filter(s => s.order_status === 'تم الصرف')
+      .reduce((s, sale) => s + sale.remaining, 0);
+    const clientPayIn    = paymentLogs
+      .filter(p => p.type === 'client_payment')
+      .reduce((s, p) => s + p.amount, 0);
+    const debtOut        = paymentLogs
+      .filter(p => p.type === 'debt_payment')
+      .reduce((s, p) => s + p.amount, 0);
+    const refundOut      = returns_.reduce((s, r) => s + r.refund_amount, 0);
 
-    const hatemReturnOut = returns_.filter(r => r.paid_by === 'حاتم').reduce((s, r) => s + r.refund_amount, 0);
-    const midoReturnOut = returns_.filter(r => r.paid_by === 'ميدو').reduce((s, r) => s + r.refund_amount, 0);
-    const totalRefunds = hatemReturnOut + midoReturnOut;
-
-    const hatemIn = expenses.reduce((s, e) => s + e.hatem_in, 0) + hatemDepositIn + hatemRemainingIn + hatemPaymentIn;
-    const hatemOut = expenses.reduce((s, e) => s + e.hatem_out, 0) + hatemDebtOut + hatemReturnOut;
-    const midoIn = expenses.reduce((s, e) => s + e.mido_in, 0) + midoDepositIn + midoPaymentIn;
-    const midoOut = expenses.reduce((s, e) => s + e.mido_out, 0) + midoDebtOut + midoReturnOut;
-
-    const totalIn = hatemIn + midoIn;
-    const totalOut = hatemOut + midoOut;
+    const totalIn  = expenses.reduce((s, e) => s + e.amount_in, 0) + depositIn + remainingIn + clientPayIn;
+    const totalOut = expenses.reduce((s, e) => s + e.amount_out, 0) + debtOut + refundOut;
     const netProfit = totalIn - totalOut;
+
     const remainingDebts = debts.reduce((s, d) => s + d.remaining, 0);
     const moneyOwedToUs =
       sales.filter(s => s.order_status === 'لم يتم الصرف').reduce((s, sale) => s + sale.remaining, 0) +
@@ -60,8 +52,6 @@ router.get('/', async (_req: Request, res: Response) => {
     const orderStatusCounts: Record<string, number> = {};
     sales.forEach(s => { orderStatusCounts[s.order_status] = (orderStatusCounts[s.order_status] || 0) + 1; });
 
-    // Compute asset values
-    // Fabric: need cutting consumption
     const cuttingOrders = await prisma.cuttingOrder.findMany();
     const fabricConsumed: Record<string, number> = {};
     cuttingOrders.forEach(c => {
@@ -76,14 +66,12 @@ router.get('/', async (_req: Request, res: Response) => {
       fabricValue += available * wac;
     });
 
-    // Stock value
     const modelProds = await prisma.modelProduction.findMany();
     const newProd: Record<string, number> = {};
     modelProds.forEach(mp => {
       const k = `${mp.model_code}|${mp.color || ''}`;
       newProd[k] = (newProd[k] || 0) + mp.qty_received;
     });
-    // Only deduct stock for actual dispatched/pending sales — NOT reservations or cancelled
     const totalSalesQty: Record<string, number> = {};
     sales
       .filter(s => s.order_status !== 'تم الحجز' && s.order_status !== 'تم الإلغاء')
@@ -110,40 +98,19 @@ router.get('/', async (_req: Request, res: Response) => {
       const sold = totalSalesQty[k] || 0;
       const returned = returnQty[k] || 0;
       const actual = Math.max(0, rs.opening_balance + prod - sold + returned);
-      // Use available (not reserved) quantity for stock valuation
       const available = Math.max(0, actual - rs.reserved_quantity);
       stockValue += available * rs.cost_per_piece;
     });
 
     const accessoriesValue = accessories.reduce((s, a) => s + Math.max(0, a.qty_in - a.qty_consumed) * a.cost, 0);
+    const totalCurrentAssets = fabricValue + stockValue + accessoriesValue + moneyOwedToUs + netProfit - remainingDebts;
 
-    const netPartners = (hatemIn - hatemOut) + (midoIn - midoOut);
-    const totalCurrentAssets = fabricValue + stockValue + accessoriesValue + moneyOwedToUs + netPartners - remainingDebts;
-
-    // Auto-upsert today's snapshot using already-computed values (non-blocking)
     const _today = new Date().toISOString().slice(0, 10);
     setImmediate(() => {
       prisma.financialSnapshot.upsert({
         where:  { snapshot_date: _today },
-        update: {
-          total_current_assets: totalCurrentAssets,
-          cash:                 cashAvailable,
-          fabric_assets:        fabricValue,
-          ready_stock_assets:   stockValue,
-          accessories_assets:   accessoriesValue,
-          receivables:          moneyOwedToUs,
-          debts:                remainingDebts,
-        },
-        create: {
-          snapshot_date:        _today,
-          total_current_assets: totalCurrentAssets,
-          cash:                 cashAvailable,
-          fabric_assets:        fabricValue,
-          ready_stock_assets:   stockValue,
-          accessories_assets:   accessoriesValue,
-          receivables:          moneyOwedToUs,
-          debts:                remainingDebts,
-        },
+        update: { total_current_assets: totalCurrentAssets, cash: cashAvailable, fabric_assets: fabricValue, ready_stock_assets: stockValue, accessories_assets: accessoriesValue, receivables: moneyOwedToUs, debts: remainingDebts },
+        create: { snapshot_date: _today, total_current_assets: totalCurrentAssets, cash: cashAvailable, fabric_assets: fabricValue, ready_stock_assets: stockValue, accessories_assets: accessoriesValue, receivables: moneyOwedToUs, debts: remainingDebts },
       }).catch((e: Error) => console.error('Auto-snapshot failed:', e.message));
     });
 
@@ -152,12 +119,6 @@ router.get('/', async (_req: Request, res: Response) => {
       total_expenses: totalOut,
       net_profit: netProfit,
       remaining_debts: remainingDebts,
-      hatem_total_in: hatemIn,
-      hatem_total_out: hatemOut,
-      hatem_net: hatemIn - hatemOut,
-      mido_total_in: midoIn,
-      mido_total_out: midoOut,
-      mido_net: midoIn - midoOut,
       total_in: totalIn,
       total_out: totalOut,
       cash_available: cashAvailable,
@@ -165,7 +126,7 @@ router.get('/', async (_req: Request, res: Response) => {
       sales_by_marketer: salesByMarketer,
       order_status_counts: orderStatusCounts,
       total_returns: returns_.length,
-      total_refunds: totalRefunds,
+      total_refunds: refundOut,
       total_current_assets: totalCurrentAssets,
       fabric_value: fabricValue,
       stock_value: stockValue,

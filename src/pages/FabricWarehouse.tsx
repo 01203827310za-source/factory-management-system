@@ -30,7 +30,15 @@ export default function FabricWarehouse() {
   const [showPurchaseLog, setShowPurchaseLog] = useState(true);
   const [editPurchaseItem, setEditPurchaseItem] = useState<FabricPurchaseRecord | null>(null);
   const [deletePurchaseConfirm, setDeletePurchaseConfirm] = useState<number | null>(null);
-  const emptyForm = { date: '', material_type: '', color: '', qty_in: 0, cost_per_kg: 0 };
+  const emptyForm: Omit<FabricWarehouse, 'id' | 'created_at'> = {
+    date: '',
+    material_type: '',
+    color: '',
+    qty_in: 0,
+    cost_per_kg: 0,
+    avg_cost_per_kg: 0,
+    last_purchase_price: 0,
+  };
   const [form, setForm] = useState(emptyForm);
   const [purchaseForm, setPurchaseForm] = useState(emptyPurchaseForm);
 
@@ -78,7 +86,15 @@ export default function FabricWarehouse() {
   const openAdd = () => { setEditItem(null); setForm(emptyForm); setModalOpen(true); };
   const openEdit = (item: FabricWarehouse) => {
     setEditItem(item);
-    setForm({ date: item.date, material_type: item.material_type, color: item.color, qty_in: item.qty_in, cost_per_kg: item.cost_per_kg });
+    setForm({
+      date: item.date,
+      material_type: item.material_type,
+      color: item.color,
+      qty_in: item.qty_in,
+      cost_per_kg: item.cost_per_kg,
+      avg_cost_per_kg: item.avg_cost_per_kg,
+      last_purchase_price: item.last_purchase_price,
+    });
     setModalOpen(true);
   };
 

@@ -5,7 +5,6 @@ import Modal from '../components/Modal';
 import { useToast } from '../components/Toast';
 import { Plus, Edit2, Trash2, Download, Search, RefreshCw, Banknote, ChevronDown, ChevronUp, History } from 'lucide-react';
 import * as XLSX from 'xlsx';
-
 const ic = "w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400";
 const lc = "block text-xs font-semibold text-gray-600 mb-1";
 const today = new Date().toISOString().split('T')[0];
@@ -31,7 +30,7 @@ export default function ClientAccounts() {
 
   // Add payment modal
   const [payTarget, setPayTarget] = useState<ClientAccount | null>(null);
-  const emptyPayForm = { date: today, amount: 0, payment_method: '', description: '', receiver: '' as 'حاتم' | 'ميدو' | '' };
+  const emptyPayForm = { date: today, amount: 0, payment_method: '', description: '', receiver: '' };
   const [payForm, setPayForm] = useState(emptyPayForm);
 
   // Edit payment modal
@@ -88,12 +87,11 @@ export default function ClientAccounts() {
 
   const handleAddPayment = async () => {
     if (!payTarget) return;
-    if (!payForm.receiver) { toast('error', 'يرجى تحديد من استلم الدفعة'); return; }
     if (payForm.amount <= 0) { toast('error', 'يرجى إدخال مبلغ صحيح'); return; }
     setSaving(true);
     try {
       await clientAccountPaymentsStore.add(payTarget.id, payForm);
-      toast('success', `تم تسجيل دفعة ${payForm.amount.toLocaleString('ar-EG')} لصالح ${payForm.receiver}`);
+      toast('success', `تم تسجيل دفعة ${payForm.amount.toLocaleString('ar-EG')}`);
       setPayTarget(null);
       setExpandedRows(prev => new Set(prev).add(payTarget.id));
       await loadData();
@@ -291,13 +289,6 @@ export default function ClientAccounts() {
                 <select className={ic} value={payForm.payment_method} onChange={e => setPayForm({...payForm, payment_method: e.target.value})}>
                   <option value="">اختر</option>
                   {METHODS.map(m => <option key={m} value={m}>{m}</option>)}
-                </select>
-              </div>
-              <div><label className={lc}>من استلم الدفعة *</label>
-                <select className={ic} value={payForm.receiver} onChange={e => setPayForm({...payForm, receiver: e.target.value as 'حاتم' | 'ميدو' | ''})}>
-                  <option value="">اختر</option>
-                  <option value="حاتم">حاتم</option>
-                  <option value="ميدو">ميدو</option>
                 </select>
               </div>
             </div>

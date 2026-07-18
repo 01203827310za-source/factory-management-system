@@ -5,7 +5,6 @@ import Modal from '../components/Modal';
 import { useToast } from '../components/Toast';
 import { Plus, Edit2, Trash2, Download, Search, RefreshCw } from 'lucide-react';
 import * as XLSX from 'xlsx';
-
 const ic = "w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400";
 const lc = "block text-xs font-semibold text-gray-600 mb-1";
 
@@ -18,7 +17,7 @@ export default function ReadyStock() {
   const [editItem, setEditItem] = useState<ReadyStock | null>(null);
   const [search, setSearch] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
-  const emptyForm = { model_code: '', product_name: '', color: '', opening_balance: 0, cost_per_piece: 0, location: '', mido_stock: 0, hatem_stock: 0, reserved_quantity: 0 };
+  const emptyForm = { model_code: '', product_name: '', color: '', opening_balance: 0, cost_per_piece: 0, location: '', reserved_quantity: 0 };
   const [form, setForm] = useState(emptyForm);
 
   const loadData = async () => {
@@ -32,7 +31,7 @@ export default function ReadyStock() {
   const openAdd = () => { setEditItem(null); setForm(emptyForm); setModalOpen(true); };
   const openEdit = (item: ReadyStock) => {
     setEditItem(item);
-    setForm({ model_code: item.model_code, product_name: item.product_name, color: item.color, opening_balance: item.opening_balance, cost_per_piece: item.cost_per_piece, location: item.location, mido_stock: item.mido_stock, hatem_stock: item.hatem_stock });
+    setForm({ model_code: item.model_code, product_name: item.product_name, color: item.color, opening_balance: item.opening_balance, cost_per_piece: item.cost_per_piece, location: item.location, reserved_quantity: item.reserved_quantity });
     setModalOpen(true);
   };
 
@@ -124,7 +123,7 @@ export default function ReadyStock() {
           <div><label className={lc}>اللون</label><input className={ic} value={form.color} onChange={e => setForm({...form, color: e.target.value})} /></div>
           <div><label className={lc}>رصيد أول</label><input type="number" className={ic} value={form.opening_balance} onChange={e => setForm({...form, opening_balance: parseInt(e.target.value)||0})} min={0} /></div>
           <div><label className={lc}>تكلفة القطعة</label><input type="number" className={ic} value={form.cost_per_piece} onChange={e => setForm({...form, cost_per_piece: parseFloat(e.target.value)||0})} min={0} /></div>
-          <div><label className={lc}>المكان</label><select className={ic} value={form.location} onChange={e => setForm({...form, location: e.target.value})}><option value="">اختر</option><option value="مخزن ميدو">مخزن ميدو</option><option value="مخزن حاتم">مخزن حاتم</option></select></div>
+          <div><label className={lc}>المكان</label><input className={ic} value={form.location} onChange={e => setForm({...form, location: e.target.value})} placeholder="مثال: مخزن ميدو" /></div>
         </div>
         <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-200">
           <button onClick={() => setModalOpen(false)} className="px-5 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">إلغاء</button>

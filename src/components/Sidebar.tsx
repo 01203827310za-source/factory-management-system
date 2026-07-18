@@ -34,7 +34,7 @@ const menuItems: { page: Page; label: string; icon: React.ReactNode }[] = [
   { page: 'auditLog', label: 'سجل التعديلات', icon: <ClipboardCheck size={20} /> },
 ];
 
-export default function Sidebar({ currentPage, onNavigate, sidebarOpen, onToggleSidebar, globalSearch, onSearchChange, isAdmin, onUsersPage }: SidebarProps) {
+export default function Sidebar({ currentPage, onNavigate, sidebarOpen, onToggleSidebar, globalSearch, onSearchChange }: SidebarProps) {
   return (
     <>
       {sidebarOpen && (

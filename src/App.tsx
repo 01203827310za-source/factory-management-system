@@ -20,7 +20,6 @@ import Payroll from './pages/Payroll';
 import AuditLog from './pages/AuditLog';
 import AiAssistant from './pages/AiAssistant';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
-import { PartnerProvider } from './contexts/PartnerContext';
 import { Menu, LogOut, User, ChevronDown, KeyRound } from 'lucide-react';
 import { authApi } from './services/api';
 import { useToast } from './components/Toast';
@@ -94,7 +93,6 @@ function AppContent() {
   if (!isAuthenticated) return <Login />;
 
   return (
-    <PartnerProvider>
     <div className="min-h-screen bg-gray-100" dir="rtl">
       <Sidebar
         currentPage={currentPage}
@@ -198,7 +196,6 @@ function AppContent() {
       {/* Click outside to close user menu */}
       {userMenuOpen && <div className="fixed inset-0 z-20" onClick={() => setUserMenuOpen(false)} />}
     </div>
-    </PartnerProvider>
   );
 }
 

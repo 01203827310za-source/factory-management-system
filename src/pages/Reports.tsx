@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { reportsApi, type ReportData, employeeMovementsApi, type EmployeeMovementsData } from '../services/api';
+import { reportsApi, type ReportData, cashFlowApi, type CashFlowData } from '../services/api';
 import { useToast } from '../components/Toast';
 import {
   BarChart2, Download, Printer, RefreshCw, TrendingUp, TrendingDown,
@@ -116,13 +116,6 @@ export default function Reports() {
       { 'البند': 'إجمالي الحجوزات', 'القيمة': data.summary.total_reservations },
       { 'البند': 'إجمالي الديون', 'القيمة': data.summary.total_debts },
     ]), 'الملخص');
-
-    // Sheet 1b: Partner Summary
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([
-      { 'الشريك': 'حاتم', 'إجمالي الوارد': data.partner_summary.hatem_total_in, 'إجمالي المصروفات': data.partner_summary.hatem_total_out, 'الصافي': data.partner_summary.hatem_net },
-      { 'الشريك': 'ميدو', 'إجمالي الوارد': data.partner_summary.mido_total_in, 'إجمالي المصروفات': data.partner_summary.mido_total_out, 'الصافي': data.partner_summary.mido_net },
-      { 'الشريك': 'الإجمالي', 'إجمالي الوارد': data.partner_summary.total_in, 'إجمالي المصروفات': data.partner_summary.total_out, 'الصافي': data.partner_summary.total_net },
-    ]), 'ملخص الشركاء');
 
     // Sheet 2: Sales
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([
@@ -261,7 +254,7 @@ export default function Reports() {
 // ─── All report sections ──────────────────────────────────────────────────────
 
 function ReportBody({ data, fromDate, toDate }: { data: ReportData; fromDate: string; toDate: string }) {
-  const { summary, sales_report, inventory_report, financial_report, partner_summary, customers_report, reservations_report, capital_growth } = data;
+  const { summary, sales_report, inventory_report, financial_report, customers_report, reservations_report, capital_growth } = data;
   const hasShortages = reservations_report.shortages.length > 0;
 
   return (
@@ -332,36 +325,10 @@ function ReportBody({ data, fromDate, toDate }: { data: ReportData; fromDate: st
             <MiniCard label="إجمالي المصروفات" value={financial_report.total_expenses} color="red" />
             <MiniCard label="صافي الشركاء" value={financial_report.net_profit} color={financial_report.net_profit >= 0 ? 'green' : 'red'} />
           </div>
-          <div className="overflow-x-auto rounded-xl border border-gray-200">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-gray-50">
-                  <th className="px-4 py-3 text-right font-semibold text-gray-600">الشريك</th>
-                  <th className="px-4 py-3 text-center font-semibold text-gray-600">إجمالي الوارد</th>
-                  <th className="px-4 py-3 text-center font-semibold text-gray-600">إجمالي المصروفات</th>
-                  <th className="px-4 py-3 text-center font-semibold text-gray-600">الصافي</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[
-                  { name: 'ميدو', inn: partner_summary.mido_total_in, out: partner_summary.mido_total_out, net: partner_summary.mido_net },
-                  { name: 'حاتم', inn: partner_summary.hatem_total_in, out: partner_summary.hatem_total_out, net: partner_summary.hatem_net },
-                ].map(p => (
-                  <tr key={p.name} className="border-t border-gray-100 hover:bg-gray-50">
-                    <td className="px-4 py-3 font-medium text-gray-800">{p.name}</td>
-                    <td className="px-4 py-3 text-center font-semibold text-emerald-700">{fmt(p.inn)}</td>
-                    <td className="px-4 py-3 text-center font-semibold text-red-600">{fmt(p.out)}</td>
-                    <td className={`px-4 py-3 text-center font-bold ${p.net >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{fmt(p.net)}</td>
-                  </tr>
-                ))}
-                <tr className="border-t-2 border-gray-200 bg-gray-50 font-bold">
-                  <td className="px-4 py-3 text-gray-800">الإجمالي</td>
-                  <td className="px-4 py-3 text-center text-emerald-700">{fmt(partner_summary.total_in)}</td>
-                  <td className="px-4 py-3 text-center text-red-600">{fmt(partner_summary.total_out)}</td>
-                  <td className={`px-4 py-3 text-center ${partner_summary.total_net >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{fmt(partner_summary.total_net)}</td>
-                </tr>
-              </tbody>
-            </table>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <KV label="إجمالي الوارد" value={financial_report.total_revenues} accent="text-emerald-700" />
+            <KV label="إجمالي المصروفات" value={financial_report.total_expenses} accent="text-red-600" />
+            <KV label="صافي السيولة" value={financial_report.net_profit} accent={financial_report.net_profit >= 0 ? 'text-emerald-700' : 'text-red-600'} />
           </div>
         </div>
       </div>
@@ -626,17 +593,16 @@ function CapitalGrowthSection({
 
 function EmployeeMovementsSection() {
   const toast = useToast();
-  const [employee, setEmployee] = useState('all');
   const [fromDate, setFromDate] = useState(firstOfMonth);
   const [toDate, setToDate] = useState(today);
-  const [data, setData] = useState<EmployeeMovementsData | null>(null);
+  const [data, setData] = useState<CashFlowData | null>(null);
   const [loading, setLoading] = useState(false);
 
   const loadData = async () => {
     if (fromDate > toDate) { toast('error', 'تاريخ البداية يجب أن يكون قبل تاريخ النهاية'); return; }
     setLoading(true);
     try {
-      setData(await employeeMovementsApi.get(employee, fromDate, toDate));
+      setData(await cashFlowApi.get(fromDate, toDate));
     } catch (e: unknown) {
       toast('error', e instanceof Error ? e.message : 'خطأ في تحميل البيانات');
     } finally {
@@ -646,7 +612,6 @@ function EmployeeMovementsSection() {
 
   const printStatement = () => {
     if (!data) return;
-    const empLabel = data.employee === 'all' ? 'جميع الموظفين' : data.employee;
     const rows = data.transactions.map(t => `
       <tr>
         <td>${t.date}</td>
@@ -656,13 +621,12 @@ function EmployeeMovementsSection() {
         <td style="color:${t.direction === 'in' ? 'green' : 'red'};font-weight:bold">
           ${t.direction === 'in' ? '+' : '−'}${t.amount.toLocaleString('ar-EG')}
         </td>
-        <td>${t.employee}</td>
       </tr>
     `).join('');
 
     const html = `<!DOCTYPE html><html dir="rtl"><head>
       <meta charset="UTF-8">
-      <title>كشف حساب - ${empLabel}</title>
+      <title>كشف التدفق النقدي</title>
       <style>
         body { font-family: Arial, sans-serif; padding: 20px; direction: rtl; }
         h2 { color: #1e3a5f; }
@@ -677,7 +641,7 @@ function EmployeeMovementsSection() {
         .green { color: green; } .red { color: red; }
       </style>
     </head><body>
-      <h2>كشف حساب موظف — ${empLabel}</h2>
+      <h2>كشف التدفق النقدي</h2>
       <p>الفترة: ${data.from_date} → ${data.to_date}</p>
       <div class="summary">
         <div class="card"><p>إجمالي المقبوضات</p><h3 class="green">${data.summary.total_received.toLocaleString('ar-EG')}</h3></div>
@@ -686,7 +650,7 @@ function EmployeeMovementsSection() {
         <div class="card"><p>عدد العمليات</p><h3>${data.summary.transaction_count}</h3></div>
       </div>
       <table>
-        <thead><tr><th>التاريخ</th><th>النوع</th><th>البيان</th><th>العميل</th><th>المبلغ</th><th>الموظف</th></tr></thead>
+        <thead><tr><th>التاريخ</th><th>النوع</th><th>البيان</th><th>العميل</th><th>المبلغ</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
       <script>window.print();</script>
@@ -698,20 +662,11 @@ function EmployeeMovementsSection() {
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-      <SectionHeader title="8. تقرير حركة الموظفين المالية" color="purple" />
+      <SectionHeader title="8. تقرير التدفق النقدي" color="purple" />
 
       {/* Filters */}
       <div className="p-4 border-b border-gray-100 bg-gray-50 print:hidden">
         <div className="flex flex-wrap items-end gap-4">
-          <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1">الموظف</label>
-            <select value={employee} onChange={e => setEmployee(e.target.value)}
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400">
-              <option value="all">جميع الموظفين</option>
-              <option value="حاتم">حاتم</option>
-              <option value="ميدو">ميدو</option>
-            </select>
-          </div>
           <div>
             <label className="block text-xs font-semibold text-gray-600 mb-1">من تاريخ</label>
             <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)}
@@ -746,18 +701,13 @@ function EmployeeMovementsSection() {
             <MiniCard label="عدد العمليات" value={data.summary.transaction_count} color="gray" />
           </div>
 
-          {/* Expenses & Revenues module breakdown — for verification */}
-          {Object.keys(data.expenses_breakdown).length > 0 && (
+          {/* Expenses & Revenues breakdown */}
+          {(data.expenses_breakdown.exp_in > 0 || data.expenses_breakdown.exp_out > 0) && (
             <div className="bg-purple-50 border border-purple-200 rounded-xl p-3">
-              <p className="text-xs font-semibold text-purple-700 mb-2">تحقق — حصة مصاريف وإيرادات في هذه الفترة</p>
-              <div className="flex flex-wrap gap-4">
-                {Object.entries(data.expenses_breakdown).map(([emp, bd]) => (
-                  <div key={emp} className="text-xs text-purple-800 space-y-0.5">
-                    <p className="font-bold">{emp}</p>
-                    <p>وارد: <span className="font-semibold text-emerald-700">{fmt(bd.exp_in)}</span></p>
-                    <p>منصرف: <span className="font-semibold text-red-600">{fmt(bd.exp_out)}</span></p>
-                  </div>
-                ))}
+              <p className="text-xs font-semibold text-purple-700 mb-2">حصة المصاريف والإيرادات في هذه الفترة</p>
+              <div className="flex gap-6 text-xs text-purple-800">
+                <p>وارد: <span className="font-semibold text-emerald-700">{fmt(data.expenses_breakdown.exp_in)}</span></p>
+                <p>منصرف: <span className="font-semibold text-red-600">{fmt(data.expenses_breakdown.exp_out)}</span></p>
               </div>
             </div>
           )}
@@ -779,7 +729,6 @@ function EmployeeMovementsSection() {
                 <th className="px-3 py-3 text-right font-semibold text-gray-600">البيان</th>
                 <th className="px-3 py-3 text-right font-semibold text-gray-600">العميل</th>
                 <th className="px-3 py-3 text-center font-semibold text-gray-600">المبلغ</th>
-                <th className="px-3 py-3 text-center font-semibold text-gray-600">الموظف</th>
               </tr>
             </thead>
             <tbody>
@@ -792,11 +741,6 @@ function EmployeeMovementsSection() {
                   <td className={`px-3 py-2.5 text-center font-bold ${t.direction === 'in' ? 'text-emerald-700' : 'text-red-600'}`}>
                     {t.direction === 'in' ? '+' : '−'}{fmt(t.amount)}
                   </td>
-                  <td className="px-3 py-2.5 text-center">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${t.employee === 'حاتم' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
-                      {t.employee}
-                    </span>
-                  </td>
                 </tr>
               ))}
             </tbody>
@@ -808,7 +752,6 @@ function EmployeeMovementsSection() {
                   <span className="text-gray-400 mx-1">/</span>
                   <span className="text-red-600">−{fmt(data.summary.total_paid)}</span>
                 </td>
-                <td></td>
               </tr>
             </tfoot>
           </table>

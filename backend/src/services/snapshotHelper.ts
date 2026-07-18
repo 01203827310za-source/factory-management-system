@@ -10,7 +10,6 @@ export type SnapshotData = {
   debts: number;
 };
 
-// Replicates the exact computation from dashboard.ts so snapshots are consistent.
 export async function computeSnapshot(): Promise<SnapshotData> {
   const [
     sales, expenses, debtsData, clientAccts, returns_,
@@ -30,50 +29,27 @@ export async function computeSnapshot(): Promise<SnapshotData> {
     prisma.modelProduction.findMany(),
   ]);
 
-  // ── Partner cash flows ──────────────────────────────────────────
-  const hatemPaymentIn = paymentLogs
-    .filter(p => p.receiver === 'حاتم' && p.type === 'client_payment')
-    .reduce((s, p) => s + p.amount, 0);
-  const midoPaymentIn = paymentLogs
-    .filter(p => p.receiver === 'ميدو' && p.type === 'client_payment')
-    .reduce((s, p) => s + p.amount, 0);
-  const hatemDebtOut = paymentLogs
-    .filter(p => p.type === 'debt_payment' && p.receiver === 'حاتم')
-    .reduce((s, p) => s + p.amount, 0);
-  const midoDebtOut = paymentLogs
-    .filter(p => p.type === 'debt_payment' && p.receiver === 'ميدو')
-    .reduce((s, p) => s + p.amount, 0);
-
-  const hatemDepositIn = sales
-    .filter(s => s.deposit_receiver === 'حاتم')
-    .reduce((s, sale) => s + sale.deposit_paid, 0);
-  const midoDepositIn = sales
-    .filter(s => s.deposit_receiver === 'ميدو')
-    .reduce((s, sale) => s + sale.deposit_paid, 0);
-  const hatemRemainingIn = sales
+  const depositIn   = sales.reduce((s, sale) => s + sale.deposit_paid, 0);
+  const remainingIn = sales
     .filter(s => s.order_status === 'تم الصرف')
     .reduce((s, sale) => s + sale.remaining, 0);
+  const clientPayIn = paymentLogs
+    .filter(p => p.type === 'client_payment')
+    .reduce((s, p) => s + p.amount, 0);
+  const debtOut     = paymentLogs
+    .filter(p => p.type === 'debt_payment')
+    .reduce((s, p) => s + p.amount, 0);
+  const refundOut   = returns_.reduce((s, r) => s + r.refund_amount, 0);
 
-  const hatemReturnOut = returns_
-    .filter(r => r.paid_by === 'حاتم')
-    .reduce((s, r) => s + r.refund_amount, 0);
-  const midoReturnOut = returns_
-    .filter(r => r.paid_by === 'ميدو')
-    .reduce((s, r) => s + r.refund_amount, 0);
+  const totalIn  = expenses.reduce((s, e) => s + e.amount_in, 0) + depositIn + remainingIn + clientPayIn;
+  const totalOut = expenses.reduce((s, e) => s + e.amount_out, 0) + debtOut + refundOut;
+  const netCash  = totalIn - totalOut;
 
-  const hatemIn  = expenses.reduce((s, e) => s + e.hatem_in, 0)  + hatemDepositIn + hatemRemainingIn + hatemPaymentIn;
-  const hatemOut = expenses.reduce((s, e) => s + e.hatem_out, 0) + hatemDebtOut   + hatemReturnOut;
-  const midoIn   = expenses.reduce((s, e) => s + e.mido_in, 0)   + midoDepositIn  + midoPaymentIn;
-  const midoOut  = expenses.reduce((s, e) => s + e.mido_out, 0)  + midoDebtOut    + midoReturnOut;
-
-  const netPartners  = (hatemIn - hatemOut) + (midoIn - midoOut);
   const remainingDebts = debtsData.reduce((s, d) => s + d.remaining, 0);
-
-  const moneyOwedToUs =
+  const moneyOwedToUs  =
     sales.filter(s => s.order_status === 'لم يتم الصرف').reduce((s, sale) => s + sale.remaining, 0) +
     clientAccts.reduce((s, ca) => s + ca.remaining, 0);
 
-  // ── Fabric value (weighted average cost) ───────────────────────
   const fabricConsumed: Record<string, number> = {};
   cuttingOrders.forEach(c => {
     const key = `${c.material_type}|${c.color}`;
@@ -87,7 +63,6 @@ export async function computeSnapshot(): Promise<SnapshotData> {
     fabricValue    += available * wac;
   });
 
-  // ── Ready-stock value ───────────────────────────────────────────
   const newProd: Record<string, number> = {};
   modelProds.forEach(mp => {
     const k = `${mp.model_code}|${mp.color || ''}`;
@@ -128,7 +103,7 @@ export async function computeSnapshot(): Promise<SnapshotData> {
   const accessoriesValue = accessories
     .reduce((s, a) => s + Math.max(0, a.qty_in - a.qty_consumed) * a.cost, 0);
 
-  const cash               = netPartners - remainingDebts;
+  const cash               = netCash - remainingDebts;
   const totalCurrentAssets = fabricValue + stockValue + accessoriesValue + moneyOwedToUs + cash;
 
   return {

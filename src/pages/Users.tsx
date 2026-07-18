@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react';
-import { usersApi, partnersApi, type User, type CreateUserInput, type PartnerRecord } from '../services/api';
+import { usersApi, type User, type CreateUserInput } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../components/Toast';
 import Modal from '../components/Modal';
-import { Plus, Edit2, Trash2, ShieldCheck, Eye, Settings, UserCheck, UserX, Users } from 'lucide-react';
-import { usePartners } from '../contexts/PartnerContext';
+import { Plus, Edit2, Trash2, ShieldCheck, Eye, Settings, UserCheck, UserX } from 'lucide-react';
 
 const ROLE_LABELS: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
   admin:   { label: 'مدير النظام', color: 'bg-purple-100 text-purple-800', icon: <ShieldCheck size={14} /> },
@@ -16,8 +15,7 @@ const emptyForm: CreateUserInput = { username: '', password: '', full_name: '', 
 
 export default function UsersPage() {
   const toast = useToast();
-  const { user: currentUser, isAdmin } = useAuth();
-  const { partners, reload: reloadPartners } = usePartners();
+  const { user: currentUser } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -25,38 +23,6 @@ export default function UsersPage() {
   const [form, setForm] = useState<CreateUserInput & { password?: string }>(emptyForm);
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
-
-  // Partner management state
-  const [deactivateTarget, setDeactivateTarget] = useState<PartnerRecord | null>(null);
-  const [partnerBusy, setPartnerBusy] = useState(false);
-
-  const handleDeactivate = async () => {
-    if (!deactivateTarget) return;
-    setPartnerBusy(true);
-    try {
-      await partnersApi.deactivate(deactivateTarget.id);
-      toast('success', `تم إلغاء تفعيل ${deactivateTarget.name}`);
-      setDeactivateTarget(null);
-      await reloadPartners();
-    } catch (err: unknown) {
-      toast('error', err instanceof Error ? err.message : 'خطأ');
-    } finally {
-      setPartnerBusy(false);
-    }
-  };
-
-  const handleReactivate = async (p: PartnerRecord) => {
-    setPartnerBusy(true);
-    try {
-      await partnersApi.reactivate(p.id);
-      toast('success', `تم إعادة تفعيل ${p.name}`);
-      await reloadPartners();
-    } catch (err: unknown) {
-      toast('error', err instanceof Error ? err.message : 'خطأ');
-    } finally {
-      setPartnerBusy(false);
-    }
-  };
 
   const load = async () => {
     try {
@@ -213,94 +179,6 @@ export default function UsersPage() {
           </tbody>
         </table>
       </div>
-
-      {/* Partner Management */}
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden mt-6">
-        <div className="px-6 py-4 border-b border-gray-100 flex items-center gap-2">
-          <Users size={20} className="text-blue-600" />
-          <h2 className="text-lg font-bold text-gray-800">إدارة الشركاء</h2>
-        </div>
-        <div className="p-4 space-y-3">
-          {partners.length === 0 && (
-            <p className="text-sm text-gray-400 text-center py-4">لا توجد بيانات شركاء — تأكد من تطبيق migration قاعدة البيانات</p>
-          )}
-          {partners.map(p => (
-            <div key={p.id} className="flex items-center justify-between p-4 rounded-xl border border-gray-100 bg-gray-50">
-              <div className="flex items-center gap-3">
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm ${p.is_active ? 'bg-[#1e3a5f]' : 'bg-gray-400'}`}>
-                  {p.name[0]}
-                </div>
-                <div>
-                  <p className="font-semibold text-gray-800">{p.name}</p>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${p.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'}`}>
-                      {p.is_active ? 'نشط' : `خارج منذ ${p.exit_date || '—'}`}
-                    </span>
-                    <span className={`text-xs font-semibold ${p.net_balance >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                      الرصيد: {p.net_balance.toLocaleString('ar-EG')} ج
-                    </span>
-                  </div>
-                </div>
-              </div>
-              {isAdmin && (
-                <div>
-                  {p.is_active ? (
-                    <button
-                      onClick={() => setDeactivateTarget(p)}
-                      disabled={partnerBusy}
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition disabled:opacity-50"
-                    >
-                      <UserX size={14} /> إلغاء التفعيل
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => handleReactivate(p)}
-                      disabled={partnerBusy}
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-green-600 border border-green-200 rounded-lg hover:bg-green-50 transition disabled:opacity-50"
-                    >
-                      <UserCheck size={14} /> إعادة التفعيل
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Deactivate Partner Confirmation Modal */}
-      <Modal isOpen={deactivateTarget !== null} onClose={() => setDeactivateTarget(null)} title="إلغاء تفعيل الشريك">
-        {deactivateTarget && (
-          <div className="space-y-4 p-1">
-            <div className={`rounded-xl p-4 ${Math.abs(deactivateTarget.net_balance) > 0 ? 'bg-amber-50 border border-amber-200' : 'bg-gray-50 border border-gray-200'}`}>
-              <p className="font-semibold text-gray-800 mb-1">الشريك: {deactivateTarget.name}</p>
-              <p className={`text-sm font-bold ${deactivateTarget.net_balance >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
-                الرصيد الحالي: {deactivateTarget.net_balance.toLocaleString('ar-EG')} جنيه
-              </p>
-              {Math.abs(deactivateTarget.net_balance) > 0 && (
-                <p className="text-xs text-amber-700 mt-2">
-                  تحذير: هذا الشريك لديه رصيد غير صفري. يُنصح بتسجيل تسوية نهائية في صفحة المصاريف قبل المتابعة.
-                </p>
-              )}
-            </div>
-            <p className="text-sm text-gray-600">
-              بعد إلغاء التفعيل سيُخفى <strong>{deactivateTarget.name}</strong> من جميع النماذج الجديدة، ولن يظهر في لوحة التحكم. جميع البيانات التاريخية ستُحفظ.
-            </p>
-            <div className="flex gap-3 pt-2">
-              <button
-                onClick={handleDeactivate}
-                disabled={partnerBusy}
-                className="flex-1 bg-red-500 text-white py-2.5 rounded-xl hover:bg-red-600 transition disabled:opacity-60 text-sm"
-              >
-                {partnerBusy ? 'جارٍ...' : 'تأكيد إلغاء التفعيل'}
-              </button>
-              <button onClick={() => setDeactivateTarget(null)} className="flex-1 border border-gray-200 py-2.5 rounded-xl hover:bg-gray-50 transition text-sm text-gray-600">
-                إلغاء
-              </button>
-            </div>
-          </div>
-        )}
-      </Modal>
 
       {/* Add/Edit Modal */}
       <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title={editUser ? 'تعديل مستخدم' : 'إضافة مستخدم جديد'}>

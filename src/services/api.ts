@@ -123,8 +123,8 @@ export type ExpenseRecord = {
   date: string;
   operation_type: string;
   statement: string;
-  hatem_in: number; hatem_out: number;
-  mido_in: number; mido_out: number;
+  amount_in: number;
+  amount_out: number;
   created_at: string;
 };
 
@@ -144,8 +144,6 @@ export type ReadyStockRecord = {
   opening_balance: number;
   cost_per_piece: number;
   location: string;
-  mido_stock: number;
-  hatem_stock: number;
   reserved_quantity: number;
 };
 
@@ -393,12 +391,6 @@ export interface DashboardMetrics {
   total_expenses: number;
   net_profit: number;
   remaining_debts: number;
-  hatem_total_in: number;
-  hatem_total_out: number;
-  hatem_net: number;
-  mido_total_in: number;
-  mido_total_out: number;
-  mido_net: number;
   total_in: number;
   total_out: number;
   cash_available: number;
@@ -439,18 +431,16 @@ export const reportsApi = {
 };
 
 // ===== EMPLOYEE MOVEMENTS =====
-export interface EmployeeTransaction {
+export interface CashFlowTransaction {
   date: string;
   type: string;
   description: string;
   client: string;
   amount: number;
-  employee: string;
   direction: 'in' | 'out';
 }
 
-export interface EmployeeMovementsData {
-  employee: string;
+export interface CashFlowData {
   from_date: string;
   to_date: string;
   summary: {
@@ -459,13 +449,13 @@ export interface EmployeeMovementsData {
     net_balance: number;
     transaction_count: number;
   };
-  expenses_breakdown: Record<string, { exp_in: number; exp_out: number }>;
-  transactions: EmployeeTransaction[];
+  expenses_breakdown: { exp_in: number; exp_out: number };
+  transactions: CashFlowTransaction[];
 }
 
-export const employeeMovementsApi = {
-  get: (employee: string, from_date: string, to_date: string) =>
-    get<EmployeeMovementsData>(`/reports/employee-movements?employee=${encodeURIComponent(employee)}&from_date=${from_date}&to_date=${to_date}`),
+export const cashFlowApi = {
+  get: (from_date: string, to_date: string) =>
+    get<CashFlowData>(`/reports/employee-movements?from_date=${from_date}&to_date=${to_date}`),
 };
 
 export interface CapitalSnapshot {
@@ -477,18 +467,6 @@ export interface CapitalSnapshot {
   total_assets: number;
   total_debts: number;
   net_assets: number;
-}
-
-export interface PartnerSummary {
-  hatem_total_in: number;
-  hatem_total_out: number;
-  hatem_net: number;
-  mido_total_in: number;
-  mido_total_out: number;
-  mido_net: number;
-  total_in: number;
-  total_out: number;
-  total_net: number;
 }
 
 export interface ReportData {
@@ -523,7 +501,6 @@ export interface ReportData {
     total_expenses: number;
     net_profit: number;
   };
-  partner_summary: PartnerSummary;
   customers_report: {
     top_clients: { client: string; value: number; remaining: number }[];
     total_outstanding: number;
@@ -738,24 +715,6 @@ export const snapshotsApi = {
   take:      ()                              => post<SnapshotRecord>('/snapshots/take', {}),
   getProfit: (from_date: string, to_date: string) =>
     get<ProfitResult>(`/snapshots/profit?from_date=${from_date}&to_date=${to_date}`),
-};
-
-// ===== PARTNERS =====
-export type PartnerRecord = {
-  id: number;
-  name: string;
-  is_active: boolean;
-  exit_date: string | null;
-  net_balance: number;
-  created_at: string;
-  updated_at: string;
-};
-
-export const partnersApi = {
-  getAll:      ()         => get<PartnerRecord[]>('/partners'),
-  getActive:   ()         => get<PartnerRecord[]>('/partners/active'),
-  deactivate:  (id: number) => post<PartnerRecord>(`/partners/${id}/deactivate`, {}),
-  reactivate:  (id: number) => post<PartnerRecord>(`/partners/${id}/reactivate`, {}),
 };
 
 // ===== AI ASSISTANT =====

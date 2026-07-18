@@ -165,22 +165,14 @@ async function gatherSnapshot() {
   const bestMarketer = Object.entries(salesByMarketer).sort((a, b) => b[1] - a[1])[0];
 
   // ── Financial metrics ──────────────────────────────────────────────────────
-  const hatemDepositIn = sales.filter(s => s.deposit_receiver === 'حاتم').reduce((s, x) => s + x.deposit_paid, 0);
-  const midoDepositIn  = sales.filter(s => s.deposit_receiver === 'ميدو').reduce((s, x) => s + x.deposit_paid, 0);
-  const hatemRemaining = sales.filter(s => s.order_status === 'تم الصرف').reduce((s, x) => s + x.remaining, 0);
-  const hatemPaymentIn = paymentLogs.filter(p => p.receiver === 'حاتم' && p.type === 'client_payment').reduce((s, p) => s + p.amount, 0);
-  const midoPaymentIn  = paymentLogs.filter(p => p.receiver === 'ميدو' && p.type === 'client_payment').reduce((s, p) => s + p.amount, 0);
-  const hatemDebtOut   = paymentLogs.filter(p => p.type === 'debt_payment' && p.receiver === 'حاتم').reduce((s, p) => s + p.amount, 0);
-  const midoDebtOut    = paymentLogs.filter(p => p.type === 'debt_payment' && p.receiver === 'ميدو').reduce((s, p) => s + p.amount, 0);
-  const hatemReturnOut = returns_.filter(r => r.paid_by === 'حاتم').reduce((s, r) => s + r.refund_amount, 0);
-  const midoReturnOut  = returns_.filter(r => r.paid_by === 'ميدو').reduce((s, r) => s + r.refund_amount, 0);
+  const depositIn   = sales.reduce((s, x) => s + x.deposit_paid, 0);
+  const remainingIn = sales.filter(x => x.order_status === 'تم الصرف').reduce((s, x) => s + x.remaining, 0);
+  const clientPayIn = paymentLogs.filter(p => p.type === 'client_payment').reduce((s, p) => s + p.amount, 0);
+  const debtOut     = paymentLogs.filter(p => p.type === 'debt_payment').reduce((s, p) => s + p.amount, 0);
+  const refundOut   = returns_.reduce((s, r) => s + r.refund_amount, 0);
 
-  const hatemIn  = expenses.reduce((s, e) => s + e.hatem_in, 0)  + hatemDepositIn + hatemRemaining + hatemPaymentIn;
-  const hatemOut = expenses.reduce((s, e) => s + e.hatem_out, 0) + hatemDebtOut   + hatemReturnOut;
-  const midoIn   = expenses.reduce((s, e) => s + e.mido_in, 0)   + midoDepositIn  + midoPaymentIn;
-  const midoOut  = expenses.reduce((s, e) => s + e.mido_out, 0)  + midoDebtOut    + midoReturnOut;
-  const totalIn  = hatemIn + midoIn;
-  const totalOut = hatemOut + midoOut;
+  const totalIn  = expenses.reduce((s, e) => s + e.amount_in, 0) + depositIn + remainingIn + clientPayIn;
+  const totalOut = expenses.reduce((s, e) => s + e.amount_out, 0) + debtOut + refundOut;
   const netCash  = totalIn - totalOut;
 
   // ── Debts ──────────────────────────────────────────────────────────────────
@@ -357,8 +349,6 @@ async function gatherSnapshot() {
       total_in:  totalIn,
       total_out: totalOut,
       net_cash:  netCash,
-      hatem_net: hatemIn - hatemOut,
-      mido_net:  midoIn - midoOut,
     },
     debts: {
       total_remaining: totalDebtsRemaining,
@@ -409,7 +399,7 @@ async function gatherSnapshot() {
 function classifyQuestion(q: string): string[] {
   const topics: string[] = [];
   if (/مبيع|بيع|أوردر|طلب|مسوق|حجز|صرف|إلغاء/.test(q))     topics.push('sales');
-  if (/مال|نقد|دخل|خرج|حاتم|ميدو|صافي|كاش|موازن/.test(q))  topics.push('financial');
+  if (/مال|نقد|دخل|خرج|صافي|كاش|موازن/.test(q))            topics.push('financial');
   if (/دين|ديون|مديون/.test(q))                               topics.push('debts');
   if (/عميل|حساب/.test(q))                                    topics.push('client_accounts');
   if (/قماش|نسيج|خام/.test(q))                                topics.push('fabric');
@@ -463,7 +453,7 @@ const ANALYSIS_PROMPT = `أنت مستشار ذكي متخصص في إدارة �
 
 1. **ملخص الأداء** — أبرز مؤشرات الأداء الرئيسية
 2. **المبيعات** — الأداء الإجمالي، الأوردرات المعلقة، أفضل مسوق
-3. **الوضع المالي** — صافي التدفق النقدي، وضع كل شريك
+3. **الوضع المالي** — صافي التدفق النقدي، المركز النقدي
 4. **المخزون** — قيمة كل مكوّن، إجمالي الأصول الجارية
 5. **الديون** — الديون المتبقية، أبرز المديونين
 6. **الموظفون** — عدد الموظفين، التكلفة المتوقعة هذا الشهر

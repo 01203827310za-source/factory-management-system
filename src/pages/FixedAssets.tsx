@@ -99,7 +99,7 @@ export default function FixedAssets() {
         await fixedAssetsApi.update(editItem.id, form);
         toast('success', 'تم التعديل بنجاح');
       } else {
-        await fixedAssetsApi.add(form as Omit<FixedAssetRecord, 'id' | 'created_at'>);
+        await fixedAssetsApi.add(form);
         toast('success', 'تمت الإضافة بنجاح');
       }
       setModalOpen(false);

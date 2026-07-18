@@ -113,31 +113,54 @@ function DeleteConfirm({ open, onConfirm, onCancel, msg = 'هل أنت متأك�
 // EMPLOYEE FORM
 // ==============================================
 type RateRow = { id?: number; category_name: string; piece_rate: number };
-const EMPTY_EMP_FORM = {
+
+type EmployeeFormState = {
+  employee_code: string;
+  employee_name: string;
+  department: string;
+  job_title: string;
+  employee_type: 'fixed' | 'piecework';
+  base_salary: number;
+  status: 'active' | 'inactive';
+  notes: string;
+};
+
+type EmployeeTextField = 'employee_code' | 'employee_name' | 'department' | 'job_title' | 'notes';
+
+const EMPTY_EMP_FORM: EmployeeFormState = {
   employee_code: '', employee_name: '', department: '', job_title: '',
-  employee_type: 'fixed' as 'fixed' | 'piecework', base_salary: 0,
-  status: 'active' as 'active' | 'inactive', notes: '',
+  employee_type: 'fixed', base_salary: 0,
+  status: 'active', notes: '',
 };
 
 function EmployeeForm({ initial, initialRates, onSave, onCancel, saving }: {
-  initial: typeof EMPTY_EMP_FORM; initialRates: RateRow[];
-  onSave: (f: typeof EMPTY_EMP_FORM, rates: RateRow[]) => void;
+  initial: EmployeeFormState; initialRates: RateRow[];
+  onSave: (f: EmployeeFormState, rates: RateRow[]) => void;
   onCancel: () => void; saving: boolean;
 }) {
   const [f, setF]   = useState(initial);
   const [rates, setRates] = useState<RateRow[]>(initialRates);
 
-  const upd = <K extends keyof typeof f>(k: K, v: typeof f[K]) => setF(p => ({ ...p, [k]: v }));
+  const upd = <K extends keyof EmployeeFormState>(k: K, v: EmployeeFormState[K]) => setF(p => ({ ...p, [k]: v }));
   const addRate   = () => setRates(p => [...p, { category_name: '', piece_rate: 0 }]);
   const delRate   = (i: number) => setRates(p => p.filter((_, idx) => idx !== i));
   const setRate   = (i: number, k: keyof RateRow, v: string | number) =>
     setRates(p => p.map((r, idx) => idx === i ? { ...r, [k]: v } : r));
 
-  const inp = (label: string, k: keyof typeof f, type = 'text') => (
+  const textInput = (label: string, k: EmployeeTextField) => (
     <div key={k}>
       <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
-      <input type={type} value={String(f[k])}
-        onChange={e => upd(k, (type === 'number' ? parseFloat(e.target.value) || 0 : e.target.value) as typeof f[K])}
+      <input type="text" value={f[k]}
+        onChange={e => upd(k, e.target.value)}
+        className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" />
+    </div>
+  );
+
+  const numberInput = (label: string, k: 'base_salary') => (
+    <div key={k}>
+      <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
+      <input type="number" value={f[k]}
+        onChange={e => upd(k, parseFloat(e.target.value) || 0)}
         className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" />
     </div>
   );
@@ -145,28 +168,28 @@ function EmployeeForm({ initial, initialRates, onSave, onCancel, saving }: {
   return (
     <div className="space-y-4 p-1">
       <div className="grid grid-cols-2 gap-3">
-        {inp('كود الموظف *', 'employee_code')}
-        {inp('اسم الموظف *', 'employee_name')}
-        {inp('الإدارة', 'department')}
+        {textInput('كود الموظف *', 'employee_code')}
+        {textInput('اسم الموظف *', 'employee_name')}
+        {textInput('الإدارة', 'department')}
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-1">نوع الموظف</label>
-          <select value={f.employee_type} onChange={e => upd('employee_type', e.target.value as 'fixed' | 'piecework')}
+          <select value={f.employee_type} onChange={e => upd('employee_type', e.target.value === 'piecework' ? 'piecework' : 'fixed')}
             className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]">
             <option value="fixed">راتب ثابت</option>
             <option value="piecework">بالقطعة</option>
           </select>
         </div>
-        {inp('المسمى الوظيفي', 'job_title')}
-        {f.employee_type === 'fixed' && inp('الراتب الأساسي', 'base_salary', 'number')}
+        {textInput('المسمى الوظيفي', 'job_title')}
+        {f.employee_type === 'fixed' && numberInput('الراتب الأساسي', 'base_salary')}
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-1">الحالة</label>
-          <select value={f.status} onChange={e => upd('status', e.target.value as 'active' | 'inactive')}
+          <select value={f.status} onChange={e => upd('status', e.target.value === 'inactive' ? 'inactive' : 'active')}
             className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]">
             <option value="active">نشط</option>
             <option value="inactive">غير نشط</option>
           </select>
         </div>
-        <div className="col-span-2">{inp('ملاحظات', 'notes')}</div>
+        <div className="col-span-2">{textInput('ملاحظات', 'notes')}</div>
       </div>
 
       {f.employee_type === 'piecework' && (
@@ -222,7 +245,7 @@ function EmployeesTab({ employees, loading, reload }: {
   const filtered = employees.filter(e =>
     !search || e.employee_name.includes(search) || e.employee_code.includes(search));
 
-  const handleSave = async (f: typeof EMPTY_EMP_FORM, rates: RateRow[]) => {
+  const handleSave = async (f: EmployeeFormState, rates: RateRow[]) => {
     if (!f.employee_code.trim() || !f.employee_name.trim()) { toast('error', 'كود الموظف والاسم مطلوبان'); return; }
     setSaving(true);
     try {
@@ -549,7 +572,7 @@ function ProductionTab({ employees }: { employees: EmployeeRecord[] }) {
 // ==============================================
 type TxType = 'advances' | 'deductions' | 'bonuses';
 
-interface TxRecord { id: number; employee_id: number; employee: EmployeeRecord; date: string; amount: number; notes?: string; reason?: string; created_at: string; }
+type TxRecord = AdvanceRecord | DeductionRecord | BonusRecord;
 
 const TX_CONFIG: Record<TxType, { label: string; noteLabel: string; color: string }> = {
   advances:   { label: 'السلفة',  noteLabel: 'ملاحظات', color: 'orange' },
@@ -571,31 +594,46 @@ function TransactionsTab({ type, employees }: { type: TxType; employees: Employe
   const [delId, setDelId]   = useState<number | null>(null);
   const [form, setForm]     = useState({ employee_id: '', date: TODAY, amount: 0, note: '' });
 
-  const apiGet    = type === 'advances' ? payrollApi.getAdvances : type === 'deductions' ? payrollApi.getDeductions : payrollApi.getBonuses;
-  const apiAdd    = type === 'advances' ? payrollApi.addAdvance  : type === 'deductions' ? payrollApi.addDeduction  : payrollApi.addBonus;
-  const apiUpdate = type === 'advances' ? payrollApi.updateAdvance : type === 'deductions' ? payrollApi.updateDeduction : payrollApi.updateBonus;
-  const apiDel    = type === 'advances' ? payrollApi.removeAdvance  : type === 'deductions' ? payrollApi.removeDeduction  : payrollApi.removeBonus;
-
   const load = async () => {
     setLoading(true);
-    try { setRecords((await apiGet({ month, year, ...(empFilter ? { employee_id: +empFilter } : {}) })) as TxRecord[]); }
-    catch { toast('error', `خطأ في جلب البيانات`); }
+    try {
+      const params = { month, year, ...(empFilter ? { employee_id: +empFilter } : {}) };
+      const nextRecords =
+        type === 'advances'
+          ? await payrollApi.getAdvances(params)
+          : type === 'deductions'
+            ? await payrollApi.getDeductions(params)
+            : await payrollApi.getBonuses(params);
+      setRecords(nextRecords);
+    } catch { toast('error', `خطأ في جلب البيانات`); }
     finally { setLoading(false); }
   };
 
   useEffect(() => { load(); }, [month, year, empFilter]);
 
+  const txNote = (r: TxRecord) => 'notes' in r ? r.notes : r.reason;
+
   const openAdd = () => { setForm({ employee_id: '', date: TODAY, amount: 0, note: '' }); setEditRec(null); setModal('add'); };
-  const openEdit = (r: TxRecord) => { setForm({ employee_id: String(r.employee_id), date: r.date, amount: r.amount, note: r.notes ?? r.reason ?? '' }); setEditRec(r); setModal('edit'); };
+  const openEdit = (r: TxRecord) => { setForm({ employee_id: String(r.employee_id), date: r.date, amount: r.amount, note: txNote(r) ?? '' }); setEditRec(r); setModal('edit'); };
 
   const handleSave = async () => {
     if (!form.employee_id || !form.date || form.amount <= 0) { toast('error', 'يرجى تعبئة جميع الحقول بشكل صحيح'); return; }
     setSaving(true);
     try {
-      const noteKey = type === 'advances' ? 'notes' : 'reason';
-      const payload = { employee_id: +form.employee_id, date: form.date, amount: form.amount, [noteKey]: form.note };
-      if (modal === 'add') await (apiAdd as (d: typeof payload) => Promise<TxRecord>)(payload);
-      else if (editRec) await (apiUpdate as (id: number, d: Partial<typeof payload>) => Promise<TxRecord>)(editRec.id, payload);
+      const basePayload = { employee_id: +form.employee_id, date: form.date, amount: form.amount };
+      if (type === 'advances') {
+        const payload = { ...basePayload, notes: form.note };
+        if (modal === 'add') await payrollApi.addAdvance(payload);
+        else if (editRec) await payrollApi.updateAdvance(editRec.id, payload);
+      } else if (type === 'deductions') {
+        const payload = { ...basePayload, reason: form.note };
+        if (modal === 'add') await payrollApi.addDeduction(payload);
+        else if (editRec) await payrollApi.updateDeduction(editRec.id, payload);
+      } else {
+        const payload = { ...basePayload, reason: form.note };
+        if (modal === 'add') await payrollApi.addBonus(payload);
+        else if (editRec) await payrollApi.updateBonus(editRec.id, payload);
+      }
       toast('success', 'تم الحفظ'); setModal(null); load();
     } catch { toast('error', 'خطأ في الحفظ'); }
     finally { setSaving(false); }
@@ -603,14 +641,19 @@ function TransactionsTab({ type, employees }: { type: TxType; employees: Employe
 
   const handleDel = async () => {
     if (!delId) return;
-    try { await (apiDel as (id: number) => Promise<{ message: string }>)(delId); toast('success', 'تم الحذف'); load(); }
+    try {
+      if (type === 'advances') await payrollApi.removeAdvance(delId);
+      else if (type === 'deductions') await payrollApi.removeDeduction(delId);
+      else await payrollApi.removeBonus(delId);
+      toast('success', 'تم الحذف'); load();
+    }
     catch { toast('error', 'خطأ'); } finally { setDelId(null); }
   };
 
   const exportExcel = () => {
     const ws = XLSX.utils.json_to_sheet(records.map(r => ({
       'التاريخ': r.date, 'الموظف': r.employee.employee_name,
-      'المبلغ': r.amount, [cfg.noteLabel]: r.notes ?? r.reason ?? '',
+      'المبلغ': r.amount, [cfg.noteLabel]: txNote(r) ?? '',
     })));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, cfg.label);
@@ -653,7 +696,7 @@ function TransactionsTab({ type, employees }: { type: TxType; employees: Employe
                   <td className="px-3 py-2.5 text-gray-600">{r.date}</td>
                   <td className="px-3 py-2.5 font-medium">{r.employee.employee_name}</td>
                   <td className="px-3 py-2.5 font-bold text-blue-700">{fmt(r.amount)}</td>
-                  <td className="px-3 py-2.5 text-gray-500 text-xs">{r.notes ?? r.reason ?? '—'}</td>
+                  <td className="px-3 py-2.5 text-gray-500 text-xs">{txNote(r) ?? '—'}</td>
                   <td className="px-3 py-2.5">
                     <div className="flex gap-1">
                       <button onClick={() => openEdit(r)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg"><Edit2 size={14}/></button>
@@ -761,7 +804,7 @@ function printReceipt(row: SalaryRow, month: number, year: number) {
   setTimeout(() => { w.print(); w.close(); }, 400);
 }
 
-function PayrollTab({ employees }: { employees: EmployeeRecord[] }) {
+function PayrollTab() {
   const toast = useToast();
   const [month, setMonth]   = useState(new Date().getMonth() + 1);
   const [year, setYear]     = useState(CY);
@@ -1098,7 +1141,7 @@ export default function Payroll() {
       {tab === 'advances'   && <TransactionsTab type="advances"   employees={employees}/>}
       {tab === 'deductions' && <TransactionsTab type="deductions" employees={employees}/>}
       {tab === 'bonuses'    && <TransactionsTab type="bonuses"    employees={employees}/>}
-      {tab === 'payroll'    && <PayrollTab      employees={employees}/>}
+      {tab === 'payroll'    && <PayrollTab/>}
       {tab === 'reports'    && <ReportsTab/>}
     </div>
   );

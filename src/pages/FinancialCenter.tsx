@@ -10,7 +10,14 @@ const ic = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:out
 const lc = 'block text-xs font-semibold text-gray-600 mb-1';
 const fmt = (n: number) => n.toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-const emptyForm = { date: '', asset_name: '', value: 0, notes: '' };
+const emptyForm: Omit<FixedAssetRecord, 'id' | 'created_at'> = {
+  name: '',
+  category: '',
+  purchase_date: '',
+  purchase_price: 0,
+  useful_life_years: 1,
+  notes: '',
+};
 
 export default function FinancialCenter() {
   const toast = useToast();
@@ -41,13 +48,20 @@ export default function FinancialCenter() {
   const openAdd = () => { setEditItem(null); setForm(emptyForm); setModalOpen(true); };
   const openEdit = (item: FixedAssetRecord) => {
     setEditItem(item);
-    setForm({ date: item.date, asset_name: item.asset_name, value: item.value, notes: item.notes });
+    setForm({
+      name: item.name,
+      category: item.category,
+      purchase_date: item.purchase_date,
+      purchase_price: item.purchase_price,
+      useful_life_years: item.useful_life_years,
+      notes: item.notes,
+    });
     setModalOpen(true);
   };
 
   const handleSave = async () => {
-    if (!form.asset_name) { toast('error', 'يرجى كتابة اسم الأصل'); return; }
-    if (!form.date) { toast('error', 'يرجى تحديد التاريخ'); return; }
+    if (!form.name) { toast('error', 'يرجى كتابة اسم الأصل'); return; }
+    if (!form.purchase_date) { toast('error', 'يرجى تحديد التاريخ'); return; }
     setSaving(true);
     try {
       if (editItem) {
@@ -190,9 +204,9 @@ export default function FinancialCenter() {
                 {assets.map((item, idx) => (
                   <tr key={item.id} className="hover:bg-gray-50 transition">
                     <td className="px-3 py-2.5 text-gray-400">{idx + 1}</td>
-                    <td className="px-3 py-2.5 font-medium text-gray-800">{item.asset_name}</td>
-                    <td className="px-3 py-2.5 text-gray-600">{item.date}</td>
-                    <td className="px-3 py-2.5 font-bold text-purple-700">{fmt(item.value)}</td>
+                    <td className="px-3 py-2.5 font-medium text-gray-800">{item.name}</td>
+                    <td className="px-3 py-2.5 text-gray-600">{item.purchase_date}</td>
+                    <td className="px-3 py-2.5 font-bold text-purple-700">{fmt(item.purchase_price)}</td>
                     <td className="px-3 py-2.5 text-gray-500">{item.notes || '—'}</td>
                     <td className="px-3 py-2.5">
                       <div className="flex items-center gap-1">
@@ -211,7 +225,7 @@ export default function FinancialCenter() {
                 <tr className="bg-purple-50">
                   <td colSpan={3} className="px-3 py-2.5 font-bold text-purple-800 text-right">الإجمالي</td>
                   <td className="px-3 py-2.5 font-bold text-purple-800">
-                    {fmt(assets.reduce((s, a) => s + a.value, 0))}
+                    {fmt(assets.reduce((s, a) => s + a.purchase_price, 0))}
                   </td>
                   <td colSpan={2} />
                 </tr>
@@ -226,15 +240,15 @@ export default function FinancialCenter() {
         <div className="space-y-4 p-1">
           <div>
             <label className={lc}>اسم الأصل *</label>
-            <input className={ic} value={form.asset_name} onChange={e => setForm({ ...form, asset_name: e.target.value })} placeholder="مثال: سيارة نقل، ماكينة خياطة..." />
+            <input className={ic} value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="مثال: سيارة نقل، ماكينة خياطة..." />
           </div>
           <div>
             <label className={lc}>التاريخ *</label>
-            <input type="date" className={ic} value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
+            <input type="date" className={ic} value={form.purchase_date} onChange={e => setForm({ ...form, purchase_date: e.target.value })} />
           </div>
           <div>
             <label className={lc}>القيمة (ج)</label>
-            <input type="number" min={0} className={ic} value={form.value} onChange={e => setForm({ ...form, value: parseFloat(e.target.value) || 0 })} />
+            <input type="number" min={0} className={ic} value={form.purchase_price} onChange={e => setForm({ ...form, purchase_price: parseFloat(e.target.value) || 0 })} />
           </div>
           <div>
             <label className={lc}>ملاحظات</label>

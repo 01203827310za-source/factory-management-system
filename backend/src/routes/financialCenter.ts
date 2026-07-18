@@ -20,34 +20,28 @@ router.get('/', async (_req: Request, res: Response) => {
       prisma.asset.findMany(),
     ]);
 
-    // --- Reuse same logic as dashboard for current assets ---
-    const hatemPaymentIn = paymentLogs.filter(p => p.receiver === 'حاتم').reduce((s, p) => s + p.amount, 0);
-    const midoPaymentIn = paymentLogs.filter(p => p.receiver === 'ميدو').reduce((s, p) => s + p.amount, 0);
-    const hatemDebtOut = paymentLogs.filter(p => p.type === 'debt_payment' && p.receiver === 'حاتم').reduce((s, p) => s + p.amount, 0);
-    const midoDebtOut = paymentLogs.filter(p => p.type === 'debt_payment' && p.receiver === 'ميدو').reduce((s, p) => s + p.amount, 0);
+    const depositIn   = sales.reduce((s, sale) => s + sale.deposit_paid, 0);
+    const remainingIn = sales
+      .filter(s => s.order_status === 'تم الصرف')
+      .reduce((s, sale) => s + sale.remaining, 0);
+    const clientPayIn = paymentLogs
+      .filter(p => p.type === 'client_payment')
+      .reduce((s, p) => s + p.amount, 0);
+    const debtOut     = paymentLogs
+      .filter(p => p.type === 'debt_payment')
+      .reduce((s, p) => s + p.amount, 0);
+    const refundOut   = returns_.reduce((s, r) => s + r.refund_amount, 0);
 
-    const hatemDepositIn = sales.filter(s => s.deposit_receiver === 'حاتم').reduce((s, sale) => s + sale.deposit_paid, 0);
-    const midoDepositIn = sales.filter(s => s.deposit_receiver === 'ميدو').reduce((s, sale) => s + sale.deposit_paid, 0);
-    const hatemRemainingIn = sales.filter(s => s.order_status === 'تم الصرف').reduce((s, sale) => s + sale.remaining, 0);
-
-    const hatemReturnOut = returns_.filter(r => r.paid_by === 'حاتم').reduce((s, r) => s + r.refund_amount, 0);
-    const midoReturnOut = returns_.filter(r => r.paid_by === 'ميدو').reduce((s, r) => s + r.refund_amount, 0);
-
-    const hatemIn = expenses.reduce((s, e) => s + e.hatem_in, 0) + hatemDepositIn + hatemRemainingIn + hatemPaymentIn;
-    const hatemOut = expenses.reduce((s, e) => s + e.hatem_out, 0) + hatemDebtOut + hatemReturnOut;
-    const midoIn = expenses.reduce((s, e) => s + e.mido_in, 0) + midoDepositIn + midoPaymentIn;
-    const midoOut = expenses.reduce((s, e) => s + e.mido_out, 0) + midoDebtOut + midoReturnOut;
+    const totalIn  = expenses.reduce((s, e) => s + e.amount_in, 0) + depositIn + remainingIn + clientPayIn;
+    const totalOut = expenses.reduce((s, e) => s + e.amount_out, 0) + debtOut + refundOut;
 
     const remainingDebts = debts.reduce((s, d) => s + d.remaining, 0);
-    const moneyOwedToUs =
+    const moneyOwedToUs  =
       sales.filter(s => s.order_status === 'لم يتم الصرف').reduce((s, sale) => s + sale.remaining, 0) +
       clientAccts.reduce((s, ca) => s + ca.remaining, 0);
 
-    const totalIn = hatemIn + midoIn;
-    const totalOut = hatemOut + midoOut;
     const cashAvailable = totalIn - totalOut - remainingDebts;
 
-    // Fabric value
     const cuttingOrders = await prisma.cuttingOrder.findMany();
     const fabricConsumed: Record<string, number> = {};
     cuttingOrders.forEach(c => {
@@ -60,7 +54,6 @@ router.get('/', async (_req: Request, res: Response) => {
       fabricValue += Math.max(0, f.qty_in - consumed) * f.cost_per_kg;
     });
 
-    // Stock value
     const modelProds = await prisma.modelProduction.findMany();
     const newProd: Record<string, number> = {};
     modelProds.forEach(mp => { newProd[mp.model_code] = (newProd[mp.model_code] || 0) + mp.qty_received; });
@@ -82,27 +75,24 @@ router.get('/', async (_req: Request, res: Response) => {
     });
 
     const accessoriesValue = accessories.reduce((s, a) => s + Math.max(0, a.qty_in - a.qty_consumed) * a.cost, 0);
-    const netPartners = (hatemIn - hatemOut) + (midoIn - midoOut);
-    const totalCurrentAssets = fabricValue + stockValue + accessoriesValue + moneyOwedToUs + netPartners - remainingDebts;
+    const netCash          = totalIn - totalOut;
+    const totalCurrentAssets = fabricValue + stockValue + accessoriesValue + moneyOwedToUs + netCash - remainingDebts;
 
-    // Fixed assets
     const totalFixedAssets = fixedAssets.reduce((s, a) => s + a.value, 0);
-
-    // Totals
-    const totalAssets = totalCurrentAssets + totalFixedAssets;
-    const netPosition = totalAssets - remainingDebts;
+    const totalAssets      = totalCurrentAssets + totalFixedAssets;
+    const netPosition      = totalAssets - remainingDebts;
 
     return res.json({
-      fabric_value: fabricValue,
-      stock_value: stockValue,
-      accessories_value: accessoriesValue,
-      money_owed_to_us: moneyOwedToUs,
-      cash_available: cashAvailable,
+      fabric_value:         fabricValue,
+      stock_value:          stockValue,
+      accessories_value:    accessoriesValue,
+      money_owed_to_us:     moneyOwedToUs,
+      cash_available:       cashAvailable,
       total_current_assets: totalCurrentAssets,
-      total_fixed_assets: totalFixedAssets,
-      total_assets: totalAssets,
-      total_debts: remainingDebts,
-      net_position: netPosition,
+      total_fixed_assets:   totalFixedAssets,
+      total_assets:         totalAssets,
+      total_debts:          remainingDebts,
+      net_position:         netPosition,
     });
   } catch (err) {
     console.error(err);

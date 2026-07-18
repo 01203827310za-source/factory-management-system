@@ -9,18 +9,13 @@ import type { Sale, ReturnItem } from '../types';
 import Modal from '../components/Modal';
 import { useToast } from '../components/Toast';
 import { Plus, Edit2, Trash2, Filter, Download, Search, UserPlus, Printer, ArrowLeftRight, RefreshCw, CheckSquare, XCircle, BookmarkPlus } from 'lucide-react';
-import { usePartners } from '../contexts/PartnerContext';
-
 import * as XLSX from 'xlsx';
 
 const ORDER_STATUSES: Sale['order_status'][] = ['تم الصرف', 'لم يتم الصرف', 'حساب عميل', 'تم الحجز', 'تم الإلغاء'];
 const DELIVERY_METHODS = ['ايرجنت', 'مصنع', 'البريد', 'شحن موقف'];
 
-// Marketers now stored in database via API
-
 export default function Sales() {
   const toast = useToast();
-  const { activePartners, solePartner } = usePartners();
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -45,8 +40,8 @@ export default function Sales() {
   const [returns, setReturns] = useState<ReturnItem[]>([]);
   const [readyStock, setReadyStock] = useState<any[]>([]);
   const [returnForm, setReturnForm] = useState({
-    date: '', order_number: '', client_name: '', returned_by: '' as 'حاتم' | 'ميدو' | '',
-    paid_by: '' as 'حاتم' | 'ميدو' | '',
+    date: '', order_number: '', client_name: '', returned_by: '',
+    paid_by: '',
     model_code: '', model_qty: 0, model_color: '', refund_amount: 0, notes: ''
   });
   const [deleteReturnConfirm, setDeleteReturnConfirm] = useState<number | null>(null);
@@ -99,7 +94,7 @@ setReadyStock(stock);
     model3_code: '', model3_qty: 0, model3_color: '',
     model4_code: '', model4_qty: 0, model4_color: '',
     model5_code: '', model5_qty: 0, model5_color: '',
-    invoice_value: 0, deposit_paid: 0, deposit_receiver: '' as 'حاتم' | 'ميدو' | '',
+    invoice_value: 0, deposit_paid: 0, deposit_receiver: '',
     shipping_number: '', order_status: 'تم الصرف' as Sale['order_status'],
     delivery_method: DELIVERY_METHODS[0], warehouse: '', shipping_collected: 0,
   };
@@ -380,7 +375,7 @@ await loadData();(returnForm);
                   <td className="px-2 py-3 text-center text-emerald-600">{sale.deposit_paid.toLocaleString('ar-EG')}</td>
                   <td className="px-2 py-3 text-center">
                     {sale.deposit_receiver ? (
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${sale.deposit_receiver === 'حاتم' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
+                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
                         {sale.deposit_receiver}
                       </span>
                     ) : <span className="text-gray-300">—</span>}
@@ -512,14 +507,7 @@ await loadData();(returnForm);
           </div>
           <div>
             <label className={labelClass}>من استلم العربون</label>
-            {solePartner ? (
-              <input className={inputClass} readOnly value={solePartner.name} />
-            ) : (
-              <select className={inputClass} value={form.deposit_receiver} onChange={e => setForm({...form, deposit_receiver: e.target.value as 'حاتم' | 'ميدو' | ''})}>
-                <option value="">اختر</option>
-                {activePartners.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
-              </select>
-            )}
+            <input className={inputClass} value={form.deposit_receiver} onChange={e => setForm({...form, deposit_receiver: e.target.value})} placeholder="اختياري" />
           </div>
           <div>
             <label className={labelClass}>المتبقي</label>
@@ -636,25 +624,11 @@ await loadData();(returnForm);
           </div>
           <div>
             <label className={labelClass}>من رجع *</label>
-            {solePartner ? (
-              <input className={inputClass} readOnly value={solePartner.name} />
-            ) : (
-              <select className={inputClass} value={returnForm.returned_by} onChange={e => setReturnForm({...returnForm, returned_by: e.target.value as 'حاتم' | 'ميدو' | ''})}>
-                <option value="">اختر</option>
-                {activePartners.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
-              </select>
-            )}
+            <input className={inputClass} value={returnForm.returned_by} onChange={e => setReturnForm({...returnForm, returned_by: e.target.value})} placeholder="اختياري" />
           </div>
           <div>
             <label className={labelClass}>من حول مبلغ المرتجع *</label>
-            {solePartner ? (
-              <input className={inputClass} readOnly value={solePartner.name} />
-            ) : (
-              <select className={inputClass} value={returnForm.paid_by} onChange={e => setReturnForm({...returnForm, paid_by: e.target.value as 'حاتم' | 'ميدو' | ''})}>
-                <option value="">اختر</option>
-                {activePartners.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
-              </select>
-            )}
+            <input className={inputClass} value={returnForm.paid_by} onChange={e => setReturnForm({...returnForm, paid_by: e.target.value})} placeholder="اختياري" />
           </div>
           <div>
             <label className={labelClass}>كود الموديل *</label>
@@ -702,12 +676,12 @@ await loadData();(returnForm);
                     <td className="px-3 py-2">{r.order_number}</td>
                     <td className="px-3 py-2">{r.client_name}</td>
                     <td className="px-3 py-2 text-center">
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${r.returned_by === 'حاتم' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
+                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
                         {r.returned_by || '—'}
                       </span>
                     </td>
                     <td className="px-3 py-2 text-center">
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${r.paid_by === 'حاتم' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
+                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
                         {r.paid_by || '—'}
                       </span>
                     </td>

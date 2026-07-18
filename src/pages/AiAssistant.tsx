@@ -221,18 +221,6 @@ const CATEGORIES: Category[] = [
     ],
   },
   {
-    id: 'partners',
-    icon: '👥',
-    label: 'الشركاء',
-    questions: [
-      { label: 'ملخص الشركاء',           q: 'ما هو ملخص وضع الشركاء؟' },
-      { label: 'صافي عهدة حاتم',          q: 'كام صافي عهدة حاتم؟' },
-      { label: 'صافي عهدة ميدو',          q: 'كام صافي عهدة ميدو؟' },
-      { label: 'مقارنة عهدة الشركاء',     q: 'قارن بين عهدة حاتم وميدو' },
-      { label: 'تحليل حركة الشركاء',      q: 'حلل حركة الشركاء المالية' },
-    ],
-  },
-  {
     id: 'ai',
     icon: '🤖',
     label: 'التحليل الذكي',
@@ -264,7 +252,7 @@ function QuickActionsPanel({ onSend, disabled }: { onSend: (q: string) => void; 
       return next;
     });
 
-  const totalQ = CATEGORIES.reduce((s, c) => s + c.questions.length, 0);
+  const totalQ = CATEGORIES.reduce((s: number, c: Category) => s + c.questions.length, 0);
 
   return (
     <div className="border border-gray-200 rounded-2xl overflow-hidden bg-white shadow-sm mt-3">

@@ -107,7 +107,6 @@ export default function Login() {
             <div className="grid grid-cols-3 gap-2 text-xs">
               {[
                 { user: 'admin', pass: 'admin123', label: 'مدير', color: 'bg-purple-50 text-purple-700' },
-                { user: 'hatem', pass: 'hatem123', label: 'حاتم', color: 'bg-blue-50 text-blue-700' },
                 { user: 'mido', pass: 'mido123', label: 'ميدو', color: 'bg-green-50 text-green-700' },
               ].map(acc => (
                 <button
