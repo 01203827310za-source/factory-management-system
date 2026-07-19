@@ -8,6 +8,7 @@ const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const prisma_1 = __importDefault(require("../lib/prisma"));
 const auth_1 = require("../middleware/auth");
+const rbacService_1 = require("../services/rbacService");
 const router = (0, express_1.Router)();
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
@@ -30,6 +31,7 @@ router.post('/login', async (req, res) => {
             data: { last_login: new Date() },
         });
         const token = jsonwebtoken_1.default.sign({ userId: user.id, username: user.username, role: user.role }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' });
+        const permissions = await (0, rbacService_1.getEffectivePermissionKeys)(user.id);
         return res.json({
             token,
             user: {
@@ -37,6 +39,7 @@ router.post('/login', async (req, res) => {
                 username: user.username,
                 full_name: user.full_name,
                 role: user.role,
+                permissions,
             },
         });
     }
@@ -54,7 +57,7 @@ router.get('/me', auth_1.authenticate, async (req, res) => {
         });
         if (!user)
             return res.status(404).json({ message: 'المستخدم غير موجود' });
-        return res.json(user);
+        return res.json({ ...user, permissions: await (0, rbacService_1.getEffectivePermissionKeys)(user.id) });
     }
     catch (err) {
         return res.status(500).json({ message: 'خطأ في الخادم' });

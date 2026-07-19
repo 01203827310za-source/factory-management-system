@@ -17,6 +17,9 @@ const dashboard_1 = __importDefault(require("./routes/dashboard"));
 const payroll_1 = __importDefault(require("./routes/payroll"));
 const auditLog_1 = __importDefault(require("./routes/auditLog"));
 const aiAssistant_1 = __importDefault(require("./routes/aiAssistant"));
+const snapshots_1 = __importDefault(require("./routes/snapshots"));
+const auth_2 = require("./middleware/auth");
+const rbacService_1 = require("./services/rbacService");
 const entities_1 = require("./routes/entities");
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 3001;
@@ -35,6 +38,11 @@ app.use((0, morgan_1.default)(process.env.NODE_ENV === 'development' ? 'dev' : '
 app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+app.use('/api', (req, res, next) => {
+    if (req.path === '/auth/login')
+        return next();
+    return (0, auth_2.authenticate)(req, res, () => (0, auth_2.requireRoutePermission)(req, res, next));
+});
 // ===== Routes =====
 app.use('/api/auth', auth_1.default);
 app.use('/api/users', users_1.default);
@@ -52,12 +60,14 @@ app.use('/api/payment-log', entities_1.paymentLogRouter);
 app.use('/api/marketers', entities_1.marketersRouter);
 app.use('/api/fixed-assets', entities_1.fixedAssetsRouter);
 app.use('/api/fabric-purchases', entities_1.fabricPurchasesRouter);
+app.use('/api/print-orders', entities_1.printOrdersRouter);
 app.use('/api/reports', reports_1.default);
 app.use('/api/dashboard', dashboard_1.default);
 app.use('/api/financial-center', financialCenter_1.default);
 app.use('/api/payroll', payroll_1.default);
 app.use('/api/audit-log', auditLog_1.default);
 app.use('/api/ai-assistant', aiAssistant_1.default);
+app.use('/api/snapshots', snapshots_1.default);
 // ===== 404 =====
 app.use((_req, res) => {
     res.status(404).json({ message: 'المسار غير موجود' });
@@ -68,10 +78,14 @@ app.use((err, _req, res, _next) => {
     res.status(500).json({ message: 'خطأ داخلي في الخادم' });
 });
 // ===== Start =====
-app.listen(PORT, () => {
+(0, rbacService_1.syncDefaultRbac)().then(() => app.listen(PORT, () => {
     console.log(`\n🚀 Server running on http://localhost:${PORT}`);
     console.log(`📚 Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`🗄️  Database: ${process.env.DATABASE_URL?.split('@')[1] || 'configured'}`);
-    console.log(`🤖 AI Model: gemini-2.5-flash (key ${process.env.GEMINI_API_KEY ? 'set ✅' : 'NOT SET ⚠️'})\n`);
+    console.log(`🤖 AI Provider: Groq`);
+    console.log(`🤖 Model: llama-3.3-70b-versatile (key ${process.env.GROQ_API_KEY ? 'set ✅' : 'NOT SET ⚠️'})\n`);
+})).catch(err => {
+    console.error('Failed to start server:', err);
+    process.exit(1);
 });
 //# sourceMappingURL=index.js.map

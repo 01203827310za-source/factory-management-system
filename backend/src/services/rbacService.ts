@@ -8,6 +8,8 @@ import {
   type PermissionAction,
 } from '../config/rbac';
 
+const ADMIN_ROLE_NAME = 'admin';
+
 export async function syncDefaultRbac() {
   const permissions = new Map<string, { id: number }>();
 
@@ -63,6 +65,7 @@ export async function syncDefaultRbac() {
 
   const roles = await prisma.role.findMany({ select: { id: true, name: true } });
   const roleByName = new Map(roles.map(role => [role.name, role.id]));
+  const adminRoleId = roleByName.get(ADMIN_ROLE_NAME);
   const users = await prisma.user.findMany({ select: { id: true, role: true, role_id: true, username: true } });
 
   for (const user of users) {
@@ -70,6 +73,24 @@ export async function syncDefaultRbac() {
     const roleId = roleByName.get(targetRoleName) ?? roleByName.get('viewer');
     if (roleId && user.role_id !== roleId) {
       await prisma.user.update({ where: { id: user.id }, data: { role_id: roleId } });
+    }
+  }
+
+  if (adminRoleId) {
+    const adminUsers = await prisma.user.findMany({
+      where: {
+        OR: [
+          { role_id: adminRoleId },
+          { role: ADMIN_ROLE_NAME },
+        ],
+      },
+      select: { id: true },
+    });
+
+    if (adminUsers.length) {
+      await prisma.userPermission.deleteMany({
+        where: { user_id: { in: adminUsers.map(user => user.id) } },
+      });
     }
   }
 }
@@ -81,6 +102,7 @@ export async function getEffectivePermissionKeys(userId: number): Promise<string
       role: true,
       role_ref: {
         select: {
+          name: true,
           role_permissions: {
             select: { permission: { select: { key: true } } },
           },
@@ -93,14 +115,16 @@ export async function getEffectivePermissionKeys(userId: number): Promise<string
   });
 
   if (!user) return [];
-  if (user.role === 'admin' && !user.role_ref) return ALL_PERMISSION_KEYS;
+  if (user.role === ADMIN_ROLE_NAME && !user.role_ref) return ALL_PERMISSION_KEYS;
 
   const permissions = new Set<string>();
   user.role_ref?.role_permissions.forEach(rp => permissions.add(rp.permission.key));
 
-  for (const override of user.user_permissions) {
-    if (override.allowed) permissions.add(override.permission.key);
-    else permissions.delete(override.permission.key);
+  if (user.role_ref?.name !== ADMIN_ROLE_NAME) {
+    for (const override of user.user_permissions) {
+      if (override.allowed) permissions.add(override.permission.key);
+      else permissions.delete(override.permission.key);
+    }
   }
 
   return [...permissions].sort();

@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const prisma_1 = __importDefault(require("../lib/prisma"));
 const auth_1 = require("../middleware/auth");
+const auditHelper_1 = require("../services/auditHelper");
 const router = (0, express_1.Router)();
 router.use(auth_1.authenticate);
 function extractModels(data) {
@@ -63,6 +64,8 @@ router.post('/', auth_1.requireManager, async (req, res) => {
         if (isReservation) {
             await adjustReserved(extractModels(data), +1);
         }
+        (0, auditHelper_1.logAudit)({ user: req.user, module: 'Sales', action: 'CREATE', record_id: sale.id,
+            after_data: sale, description: `إضافة عملية بيع: ${sale.client} - ${sale.order_number}` });
         return res.status(201).json(sale);
     }
     catch (err) {
@@ -95,6 +98,8 @@ router.put('/:id', auth_1.requireManager, async (req, res) => {
         if (willBeReservation) {
             await adjustReserved(extractModels(data), +1);
         }
+        (0, auditHelper_1.logAudit)({ user: req.user, module: 'Sales', action: 'UPDATE', record_id: id,
+            before_data: oldSale, after_data: sale, description: `تعديل عملية بيع: ${sale.client} - ${sale.order_number}` });
         return res.json(sale);
     }
     catch {
@@ -111,6 +116,8 @@ router.delete('/:id', auth_1.requireManager, async (req, res) => {
             await adjustReserved(extractModels(sale), -1);
         }
         await prisma_1.default.sale.delete({ where: { id } });
+        (0, auditHelper_1.logAudit)({ user: req.user, module: 'Sales', action: 'DELETE', record_id: id,
+            before_data: sale, description: `حذف عملية بيع: ${sale?.client} - ${sale?.order_number}` });
         return res.json({ message: 'تم حذف الطلب' });
     }
     catch {
@@ -133,6 +140,8 @@ router.post('/:id/convert-reservation', auth_1.requireManager, async (req, res) 
             where: { id },
             data: { order_status: 'تم الصرف' },
         });
+        (0, auditHelper_1.logAudit)({ user: req.user, module: 'Sales', action: 'UPDATE', record_id: id,
+            before_data: sale, after_data: updated, description: `تحويل حجز إلى صرف: ${sale.client} - ${sale.order_number}` });
         return res.json(updated);
     }
     catch (err) {
@@ -156,6 +165,8 @@ router.post('/:id/cancel-reservation', auth_1.requireManager, async (req, res) =
             where: { id },
             data: { order_status: 'تم الإلغاء' },
         });
+        (0, auditHelper_1.logAudit)({ user: req.user, module: 'Sales', action: 'UPDATE', record_id: id,
+            before_data: sale, after_data: updated, description: `إلغاء حجز: ${sale.client} - ${sale.order_number}` });
         return res.json(updated);
     }
     catch (err) {

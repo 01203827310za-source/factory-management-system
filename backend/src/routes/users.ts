@@ -9,6 +9,8 @@ import { logAudit } from '../services/auditHelper';
 const router = Router();
 router.use(authenticate);
 
+const ADMIN_ROLE_NAME = 'admin';
+
 type UserPermissionInput = {
   permissions?: string[];
 };
@@ -19,6 +21,16 @@ async function roleForName(name: string | undefined) {
 
 async function applyUserPermissions(userId: number, permissionKeys?: string[]) {
   if (!permissionKeys) return;
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { role: true, role_ref: { select: { name: true } } },
+  });
+
+  if (user?.role === ADMIN_ROLE_NAME || user?.role_ref?.name === ADMIN_ROLE_NAME) {
+    await prisma.userPermission.deleteMany({ where: { user_id: userId } });
+    return;
+  }
+
   const selected = new Set(permissionKeys);
   const allPermissions = await prisma.permission.findMany({ select: { id: true, key: true } });
   await prisma.userPermission.deleteMany({ where: { user_id: userId } });
