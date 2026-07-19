@@ -47,8 +47,11 @@ export interface AuthUser {
   id: number;
   username: string;
   full_name: string;
-  role: 'admin' | 'manager' | 'viewer';
+  role: UserRole;
+  permissions: string[];
 }
+
+export type UserRole = 'admin' | 'manager' | 'viewer' | 'warehouse' | 'sales' | 'accountant' | string;
 
 // ===== USERS =====
 export const usersApi = {
@@ -57,23 +60,57 @@ export const usersApi = {
   update: (id: number, data: Partial<CreateUserInput & { is_active: boolean }>) =>
     put<User>(`/users/${id}`, data),
   remove: (id: number) => del<{ message: string }>(`/users/${id}`),
+  getRbac: () => get<RbacMetadata>('/users/rbac'),
 };
 
 export interface User {
   id: number;
   username: string;
   full_name: string;
-  role: 'admin' | 'manager' | 'viewer';
+  role: UserRole;
+  role_id?: number | null;
   is_active: boolean;
   last_login?: string;
   created_at: string;
+  permissions: string[];
 }
 
 export interface CreateUserInput {
   username: string;
   password: string;
   full_name: string;
-  role: 'admin' | 'manager' | 'viewer';
+  role: UserRole;
+  permissions?: string[];
+}
+
+export interface RbacRole {
+  id: number;
+  name: string;
+  display_name: string;
+  description: string;
+  is_system: boolean;
+  permissions: string[];
+}
+
+export interface RbacPermission {
+  id: number;
+  key: string;
+  module: string;
+  action: 'view' | 'create' | 'edit' | 'delete';
+  label: string;
+}
+
+export interface RbacModule {
+  key: string;
+  label: string;
+  actions?: readonly RbacPermission['action'][];
+}
+
+export interface RbacMetadata {
+  roles: RbacRole[];
+  permissions: RbacPermission[];
+  modules: RbacModule[];
+  actions: readonly RbacPermission['action'][];
 }
 
 // ===== SALES =====

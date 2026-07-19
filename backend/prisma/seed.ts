@@ -1,5 +1,6 @@
-import { PrismaClient, Role } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { syncDefaultRbac } from '../src/services/rbacService';
 
 const prisma = new PrismaClient();
 
@@ -17,17 +18,19 @@ async function main() {
       username:  process.env.ADMIN_USERNAME || 'admin',
       password:  adminPassword,
       full_name: process.env.ADMIN_FULLNAME || 'مدير النظام',
-      role:      Role.admin,
+      role:      'admin',
     },
   });
 
   await prisma.user.upsert({
     where:  { username: 'mido' },
     update: {},
-    create: { username: 'mido', password: midoPassword, full_name: 'ميدو', role: Role.manager },
+    create: { username: 'mido', password: midoPassword, full_name: 'ميدو', role: 'manager' },
   });
 
   console.log('✅ Users created: admin / mido');
+  await syncDefaultRbac();
+  console.log('✅ Roles and permissions synced');
 
   // ===== MARKETERS =====
   const marketers = ['أحمد', 'محمد', 'خالد', 'عمر', 'يوسف'];

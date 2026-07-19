@@ -1,11 +1,13 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import prisma from '../lib/prisma';
+import { getEffectivePermissionKeys, permissionForRequest } from '../services/rbacService';
 
 export interface AuthPayload {
   userId: number;
   username: string;
   role: string;
+  permissions?: string[];
 }
 
 declare global {
@@ -31,7 +33,12 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
     if (!user || !user.is_active) {
       return res.status(401).json({ message: 'الحساب غير نشط أو غير موجود' });
     }
-    req.user = decoded;
+    req.user = {
+      userId: user.id,
+      username: user.username,
+      role: user.role,
+      permissions: await getEffectivePermissionKeys(user.id),
+    };
     next();
   } catch {
     return res.status(401).json({ message: 'جلسة منتهية، يرجى تسجيل الدخول مجدداً' });
@@ -40,15 +47,31 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
 
 // ===== Role Guards =====
 export const requireAdmin = (req: Request, res: Response, next: NextFunction) => {
-  if (req.user?.role !== 'admin') {
+  if (req.user?.role !== 'admin' && !req.user?.permissions?.some(permission => permission.startsWith('users.'))) {
     return res.status(403).json({ message: 'هذه العملية تتطلب صلاحية مدير النظام' });
   }
   next();
 };
 
 export const requireManager = (req: Request, res: Response, next: NextFunction) => {
-  if (req.user?.role === 'viewer') {
+  if (!req.user?.permissions?.some(permission => permission.endsWith('.create') || permission.endsWith('.edit') || permission.endsWith('.delete'))) {
     return res.status(403).json({ message: 'ليس لديك صلاحية تعديل البيانات' });
+  }
+  next();
+};
+
+export const requirePermission = (permission: string) => (req: Request, res: Response, next: NextFunction) => {
+  if (!req.user?.permissions?.includes(permission)) {
+    return res.status(403).json({ message: 'Forbidden', permission });
+  }
+  next();
+};
+
+export const requireRoutePermission = (req: Request, res: Response, next: NextFunction) => {
+  const permission = permissionForRequest(req.method, req.path);
+  if (!permission) return next();
+  if (!req.user?.permissions?.includes(permission)) {
+    return res.status(403).json({ message: 'Forbidden', permission });
   }
   next();
 };

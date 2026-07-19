@@ -5,10 +5,12 @@ import Modal from '../components/Modal';
 import { useToast } from '../components/Toast';
 import { Plus, Edit2, Trash2, Download, Search, RefreshCw } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { useCrudPermissions } from '../hooks/usePermissions';
 const ic = "w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400";
 const lc = "block text-xs font-semibold text-gray-600 mb-1";
 export default function Accessories() {
   const toast = useToast();
+  const { canCreate, canEdit, canDelete } = useCrudPermissions('accessories');
   const [items, setItems] = useState<ComputedAccessories[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -41,7 +43,7 @@ export default function Accessories() {
         <div className="flex items-center gap-2">
           <button onClick={loadData} disabled={loading} className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg"><RefreshCw size={16} className={loading ? 'animate-spin' : ''} /></button>
           <button onClick={exportExcel} className="flex items-center gap-2 px-3 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700"><Download size={16} /> تصدير</button>
-          <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 text-sm bg-[#1e3a5f] text-white rounded-lg hover:bg-[#16304d]"><Plus size={16} /> إضافة</button>
+          {canCreate && <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 text-sm bg-[#1e3a5f] text-white rounded-lg hover:bg-[#16304d]"><Plus size={16} /> إضافة</button>}
         </div>
       </div>
       <div className="relative max-w-md"><Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="بحث باسم الصنف..." className={`w-full pr-10 ${ic}`} /></div>
@@ -61,8 +63,8 @@ export default function Accessories() {
                 <td className="px-4 py-3 text-center font-bold">{item.available_balance.toLocaleString('ar-EG')}</td>
                 <td className="px-4 py-3 text-center">{item.cost.toLocaleString('ar-EG')}</td>
                 <td className="px-4 py-3 text-center"><div className="flex items-center justify-center gap-1">
-                  <button onClick={() => openEdit(item)} className="p-1.5 text-blue-600 hover:bg-blue-100 rounded-lg"><Edit2 size={15} /></button>
-                  <button onClick={() => setDeleteConfirm(item.id)} className="p-1.5 text-red-600 hover:bg-red-100 rounded-lg"><Trash2 size={15} /></button>
+                  {canEdit && <button onClick={() => openEdit(item)} className="p-1.5 text-blue-600 hover:bg-blue-100 rounded-lg"><Edit2 size={15} /></button>}
+                  {canDelete && <button onClick={() => setDeleteConfirm(item.id)} className="p-1.5 text-red-600 hover:bg-red-100 rounded-lg"><Trash2 size={15} /></button>}
                 </div></td>
               </tr>
             ))}

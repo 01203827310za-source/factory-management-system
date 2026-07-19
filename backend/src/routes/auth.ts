@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import prisma from '../lib/prisma';
 import { authenticate } from '../middleware/auth';
+import { getEffectivePermissionKeys } from '../services/rbacService';
 
 const router = Router();
 
@@ -37,6 +38,7 @@ router.post('/login', async (req: Request, res: Response) => {
       process.env.JWT_SECRET!,
       { expiresIn: process.env.JWT_EXPIRES_IN || '7d' } as jwt.SignOptions
     );
+    const permissions = await getEffectivePermissionKeys(user.id);
 
     return res.json({
       token,
@@ -45,6 +47,7 @@ router.post('/login', async (req: Request, res: Response) => {
         username: user.username,
         full_name: user.full_name,
         role: user.role,
+        permissions,
       },
     });
   } catch (err) {
@@ -61,7 +64,7 @@ router.get('/me', authenticate, async (req: Request, res: Response) => {
       select: { id: true, username: true, full_name: true, role: true, last_login: true },
     });
     if (!user) return res.status(404).json({ message: 'المستخدم غير موجود' });
-    return res.json(user);
+    return res.json({ ...user, permissions: await getEffectivePermissionKeys(user.id) });
   } catch (err) {
     return res.status(500).json({ message: 'خطأ في الخادم' });
   }

@@ -26,6 +26,29 @@ import { useToast } from './components/Toast';
 import Modal from './components/Modal';
 type ExtendedPage = Page | 'users';
 
+function pagePermission(page: ExtendedPage) {
+  const permissions: Record<ExtendedPage, string> = {
+    dashboard: 'dashboard.view',
+    sales: 'sales.view',
+    expenses: 'expenses.view',
+    readyStock: 'ready_stock.view',
+    fabric: 'fabric.view',
+    accessories: 'accessories.view',
+    cutting: 'cutting.view',
+    modelProd: 'model_prod.view',
+    clientAccts: 'client_accounts.view',
+    debts: 'debts.view',
+    financialCenter: 'financial_center.view',
+    fixedAssets: 'assets.view',
+    reports: 'reports.view',
+    payroll: 'payroll.view',
+    auditLog: 'audit_log.view',
+    aiAssistant: 'ai_assistant.view',
+    users: 'users.view',
+  };
+  return permissions[page];
+}
+
 function PageRenderer({ page }: { page: ExtendedPage }) {
   switch (page) {
     case 'dashboard':   return <Dashboard />;
@@ -50,7 +73,7 @@ function PageRenderer({ page }: { page: ExtendedPage }) {
 }
 
 function AppContent() {
-  const { user, isLoading, isAuthenticated, logout, isAdmin } = useAuth();
+  const { user, isLoading, isAuthenticated, logout, isAdmin, can } = useAuth();
   const toast = useToast();
   const [currentPage, setCurrentPage] = useState<ExtendedPage>('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -142,7 +165,7 @@ function AppContent() {
               >
                 <KeyRound size={15} /> تغيير كلمة المرور
               </button>
-              {isAdmin && (
+              {can('users.view') && (
                 <button
                   onClick={() => { setCurrentPage('users'); setUserMenuOpen(false); }}
                   className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition"
@@ -164,7 +187,13 @@ function AppContent() {
       {/* Main Content */}
       <main className="lg:mr-64 min-h-screen transition-all">
         <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto pt-16 lg:pt-8">
-          <PageRenderer key={currentPage} page={currentPage} />
+          {can(pagePermission(currentPage)) ? (
+            <PageRenderer key={currentPage} page={currentPage} />
+          ) : (
+            <div className="bg-white rounded-xl border border-gray-100 p-8 text-center text-gray-500">
+              ليس لديك صلاحية عرض هذه الصفحة
+            </div>
+          )}
         </div>
       </main>
 

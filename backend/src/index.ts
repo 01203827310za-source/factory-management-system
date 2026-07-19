@@ -13,6 +13,8 @@ import payrollRouter from './routes/payroll';
 import auditLogRouter from './routes/auditLog';
 import aiAssistantRouter from './routes/aiAssistant';
 import snapshotsRouter from './routes/snapshots';
+import { authenticate, requireRoutePermission } from './middleware/auth';
+import { syncDefaultRbac } from './services/rbacService';
 import {
   expensesRouter, readyStockRouter, fabricRouter, accessoriesRouter,
   cuttingRouter, modelProdRouter, debtsRouter, clientAccountsRouter,
@@ -38,6 +40,11 @@ app.use(morgan(process.env.NODE_ENV === 'development' ? 'dev' : 'combined'));
 // ===== Health Check =====
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+app.use('/api', (req, res, next) => {
+  if (req.path === '/auth/login') return next();
+  return authenticate(req, res, () => requireRoutePermission(req, res, next));
 });
 
 // ===== Routes =====
@@ -78,10 +85,13 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 });
 
 // ===== Start =====
-app.listen(PORT, () => {
+syncDefaultRbac().then(() => app.listen(PORT, () => {
   console.log(`\n🚀 Server running on http://localhost:${PORT}`);
   console.log(`📚 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`🗄️  Database: ${process.env.DATABASE_URL?.split('@')[1] || 'configured'}`);
   console.log(`🤖 AI Provider: Groq`);
   console.log(`🤖 Model: llama-3.3-70b-versatile (key ${process.env.GROQ_API_KEY ? 'set ✅' : 'NOT SET ⚠️'})\n`);
+})).catch(err => {
+  console.error('Failed to start server:', err);
+  process.exit(1);
 });

@@ -4,6 +4,7 @@ import {
   Wallet, ClipboardCheck, Sparkles,
 } from 'lucide-react';
 import type { Page } from '../types';
+import { useAuth } from '../contexts/AuthContext';
 
 interface SidebarProps {
   currentPage: string;
@@ -34,7 +35,31 @@ const menuItems: { page: Page; label: string; icon: React.ReactNode }[] = [
   { page: 'auditLog', label: 'سجل التعديلات', icon: <ClipboardCheck size={20} /> },
 ];
 
+const pagePermissions: Partial<Record<Page, string>> = {
+  dashboard: 'dashboard.view',
+  fabric: 'fabric.view',
+  readyStock: 'ready_stock.view',
+  cutting: 'cutting.view',
+  modelProd: 'model_prod.view',
+  sales: 'sales.view',
+  expenses: 'expenses.view',
+  debts: 'debts.view',
+  clientAccts: 'client_accounts.view',
+  accessories: 'accessories.view',
+  fixedAssets: 'assets.view',
+  reports: 'reports.view',
+  aiAssistant: 'ai_assistant.view',
+  payroll: 'payroll.view',
+  auditLog: 'audit_log.view',
+};
+
 export default function Sidebar({ currentPage, onNavigate, sidebarOpen, onToggleSidebar, globalSearch, onSearchChange }: SidebarProps) {
+  const { can } = useAuth();
+  const visibleMenuItems = menuItems.filter(item => {
+    const permission = pagePermissions[item.page];
+    return !permission || can(permission);
+  });
+
   return (
     <>
       {sidebarOpen && (
@@ -73,7 +98,7 @@ export default function Sidebar({ currentPage, onNavigate, sidebarOpen, onToggle
         </div>
 
         <nav className="flex-1 overflow-y-auto px-3 py-2 space-y-1">
-          {menuItems.map(({ page, label, icon }) => (
+          {visibleMenuItems.map(({ page, label, icon }) => (
             <button
               key={page}
               onClick={() => {

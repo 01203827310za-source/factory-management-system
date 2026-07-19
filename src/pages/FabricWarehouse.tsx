@@ -6,6 +6,7 @@ import Modal from '../components/Modal';
 import { useToast } from '../components/Toast';
 import { Plus, Edit2, Trash2, Download, Search, RefreshCw, ShoppingCart, ChevronDown, ChevronUp } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { useCrudPermissions } from '../hooks/usePermissions';
 
 const ic = "w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400";
 const lc = "block text-xs font-semibold text-gray-600 mb-1";
@@ -18,6 +19,8 @@ const emptyPurchaseForm = {
 
 export default function FabricWarehouse() {
   const toast = useToast();
+  const fabricPerms = useCrudPermissions('fabric');
+  const purchasePerms = useCrudPermissions('fabric_purchases');
   const [items, setItems] = useState<ComputedFabric[]>([]);
   const [purchases, setPurchases] = useState<FabricPurchaseRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -195,15 +198,15 @@ export default function FabricWarehouse() {
           <button onClick={exportExcel} className="flex items-center gap-2 px-3 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700">
             <Download size={16} /> تصدير
           </button>
-          <button
+          {purchasePerms.canCreate && <button
             onClick={() => { setPurchaseForm(emptyPurchaseForm); setPurchaseModalOpen(true); }}
             className="flex items-center gap-2 px-4 py-2 text-sm bg-orange-600 text-white rounded-lg hover:bg-orange-700"
           >
             <ShoppingCart size={16} /> إضافة مشتريات
-          </button>
-          <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 text-sm bg-[#1e3a5f] text-white rounded-lg hover:bg-[#16304d]">
+          </button>}
+          {fabricPerms.canCreate && <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 text-sm bg-[#1e3a5f] text-white rounded-lg hover:bg-[#16304d]">
             <Plus size={16} /> إضافة وارد
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -250,8 +253,8 @@ export default function FabricWarehouse() {
                     <td className="px-4 py-3 text-center text-gray-600">{fmt(lastPrice)}</td>
                     <td className="px-4 py-3 text-center">
                       <div className="flex items-center justify-center gap-1">
-                        <button onClick={() => openEdit(item)} className="p-1.5 text-blue-600 hover:bg-blue-100 rounded-lg"><Edit2 size={15} /></button>
-                        <button onClick={() => setDeleteConfirm(item.id)} className="p-1.5 text-red-600 hover:bg-red-100 rounded-lg"><Trash2 size={15} /></button>
+                        {fabricPerms.canEdit && <button onClick={() => openEdit(item)} className="p-1.5 text-blue-600 hover:bg-blue-100 rounded-lg"><Edit2 size={15} /></button>}
+                        {fabricPerms.canDelete && <button onClick={() => setDeleteConfirm(item.id)} className="p-1.5 text-red-600 hover:bg-red-100 rounded-lg"><Trash2 size={15} /></button>}
                       </div>
                     </td>
                   </tr>
@@ -303,8 +306,8 @@ export default function FabricWarehouse() {
                     <td className="px-4 py-3 text-center text-xs text-gray-500">{p.notes || '—'}</td>
                     <td className="px-4 py-3 text-center">
                       <div className="flex items-center justify-center gap-1">
-                        <button onClick={() => openEditPurchase(p)} className="p-1.5 text-blue-600 hover:bg-blue-100 rounded-lg" title="تعديل"><Edit2 size={15} /></button>
-                        <button onClick={() => setDeletePurchaseConfirm(p.id)} className="p-1.5 text-red-600 hover:bg-red-100 rounded-lg" title="حذف"><Trash2 size={15} /></button>
+                        {purchasePerms.canEdit && <button onClick={() => openEditPurchase(p)} className="p-1.5 text-blue-600 hover:bg-blue-100 rounded-lg" title="تعديل"><Edit2 size={15} /></button>}
+                        {purchasePerms.canDelete && <button onClick={() => setDeletePurchaseConfirm(p.id)} className="p-1.5 text-red-600 hover:bg-red-100 rounded-lg" title="حذف"><Trash2 size={15} /></button>}
                       </div>
                     </td>
                   </tr>

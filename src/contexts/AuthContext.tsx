@@ -7,6 +7,7 @@ interface AuthContextType {
   isAuthenticated: boolean;
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
+  can: (permission: string) => boolean;
   isAdmin: boolean;
   isViewer: boolean;
 }
@@ -53,6 +54,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   };
 
+  const can = (permission: string) => user?.permissions?.includes(permission) ?? false;
+
   return (
     <AuthContext.Provider value={{
       user,
@@ -60,6 +63,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isAuthenticated: !!user,
       login,
       logout,
+      can,
       isAdmin: user?.role === 'admin',
       isViewer: user?.role === 'viewer',
     }}>

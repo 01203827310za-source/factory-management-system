@@ -12,7 +12,7 @@ datasource db {
 }
 
 // ===== USERS & AUTH =====
-enum Role {
+enum LegacyRole {
   admin    // كل الصلاحيات + إدارة المستخدمين
   manager  // كل العمليات بدون إدارة المستخدمين
   viewer   // قراءة فقط
@@ -23,13 +23,66 @@ model User {
   username   String   @unique
   password   String
   full_name  String
-  role       Role     @default(viewer)
+  role       String   @default("viewer")
+  role_id    Int?
+  role_ref   Role?    @relation(fields: [role_id], references: [id], onDelete: SetNull)
   is_active  Boolean  @default(true)
   last_login DateTime?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
+  user_permissions UserPermission[]
 
   @@map("users")
+}
+
+model Role {
+  id               Int              @id @default(autoincrement())
+  name             String           @unique
+  display_name     String
+  description      String           @default("")
+  is_system        Boolean          @default(true)
+  created_at       DateTime         @default(now())
+  updated_at       DateTime         @updatedAt
+  users            User[]
+  role_permissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id               Int              @id @default(autoincrement())
+  key              String           @unique
+  module           String
+  action           String
+  label            String
+  created_at       DateTime         @default(now())
+  role_permissions RolePermission[]
+  user_permissions UserPermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  id            Int        @id @default(autoincrement())
+  role_id       Int
+  permission_id Int
+  role          Role       @relation(fields: [role_id], references: [id], onDelete: Cascade)
+  permission    Permission @relation(fields: [permission_id], references: [id], onDelete: Cascade)
+
+  @@unique([role_id, permission_id])
+  @@map("role_permissions")
+}
+
+model UserPermission {
+  id            Int        @id @default(autoincrement())
+  user_id       Int
+  permission_id Int
+  allowed       Boolean    @default(true)
+  user          User       @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  permission    Permission @relation(fields: [permission_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, permission_id])
+  @@map("user_permissions")
 }
 
 // ===== SALES =====
