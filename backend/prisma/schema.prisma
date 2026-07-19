@@ -465,6 +465,31 @@ model FinancialSnapshot {
   @@map("financial_snapshots")
 }
 
+// ===== PRINT ORDERS =====
+model PrintOrder {
+  id                   Int      @id @default(autoincrement())
+  order_number         String   @default("")
+  date                 String
+  source_stock_id      Int      @default(0)
+  source_model_code    String   @default("")
+  source_product_name  String   @default("")
+  source_color         String   @default("")
+  quantity             Int      @default(0)
+  blank_unit_cost      Float    @default(0)
+  print_cost_per_piece Float    @default(0)
+  final_unit_cost      Float    @default(0)
+  dest_stock_id        Int      @default(0)
+  dest_model_code      String   @default("")
+  dest_product_name    String   @default("")
+  dest_color           String   @default("")
+  print_type           String   @default("")
+  notes                String   @default("")
+  created_by           String   @default("")
+  created_at           DateTime @default(now())
+
+  @@map("print_orders")
+}
+
 // ===== AUDIT LOG =====
 model AuditLog {
   id          Int      @id @default(autoincrement())

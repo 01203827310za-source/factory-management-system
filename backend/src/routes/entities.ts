@@ -1064,3 +1064,130 @@ fixedAssetsRouter.delete('/:id', requireManager, async (req, res) => {
     return res.json({ message: 'تم الحذف' });
   } catch { return res.status(500).json({ message: 'خطأ في الحذف' }); }
 });
+
+// ===== PRINT ORDERS =====
+export const printOrdersRouter = Router();
+printOrdersRouter.use(authenticate);
+
+// Helper: compute available quantity for a single ready-stock item
+async function computeAvailable(stock: { id: number; model_code: string; color: string; opening_balance: number; reserved_quantity: number }): Promise<number> {
+  const [modelProds, sales, returns_] = await Promise.all([
+    prisma.modelProduction.findMany(),
+    prisma.sale.findMany(),
+    prisma.returnItem.findMany(),
+  ]);
+
+  const mc = stock.model_code;
+  const col = stock.color || '';
+
+  const newProd = modelProds
+    .filter(mp => mp.model_code === mc && (mp.color || '') === col)
+    .reduce((s, mp) => s + mp.qty_received, 0);
+
+  const totalSales = sales
+    .filter(s => s.order_status !== 'تم الحجز' && s.order_status !== 'تم الإلغاء')
+    .reduce((s, sale) => s + [
+      { code: sale.model1_code, qty: sale.model1_qty, color: sale.model1_color },
+      { code: sale.model2_code, qty: sale.model2_qty, color: sale.model2_color },
+      { code: sale.model3_code, qty: sale.model3_qty, color: sale.model3_color },
+      { code: sale.model4_code, qty: sale.model4_qty, color: sale.model4_color },
+      { code: sale.model5_code, qty: sale.model5_qty, color: sale.model5_color },
+    ].reduce((ss, { code, qty, color }) =>
+      code === mc && (color || '') === col ? ss + qty : ss, 0), 0);
+
+  const returnQty = returns_
+    .filter(r => r.model_code === mc && (r.model_color || '') === col)
+    .reduce((s, r) => s + r.model_qty, 0);
+
+  const actual = stock.opening_balance + newProd - totalSales + returnQty;
+  return actual - stock.reserved_quantity;
+}
+
+printOrdersRouter.get('/', async (_req, res) => {
+  try {
+    return res.json(await prisma.printOrder.findMany({ orderBy: { id: 'desc' } }));
+  } catch { return res.status(500).json({ message: 'خطأ' }); }
+});
+
+printOrdersRouter.post('/', requireManager, async (req: Request, res: Response) => {
+  const {
+    source_stock_id, quantity, date,
+    new_model_code, new_product_name, new_color,
+    print_type, print_cost_per_piece, notes,
+  } = req.body;
+
+  if (!source_stock_id || !quantity || !new_model_code || !new_product_name) {
+    return res.status(400).json({ message: 'بيانات ناقصة' });
+  }
+
+  try {
+    const source = await prisma.readyStock.findUnique({ where: { id: parseInt(source_stock_id) } });
+    if (!source) return res.status(404).json({ message: 'الصنف المصدر غير موجود' });
+
+    const available = await computeAvailable(source);
+    const qty = parseInt(quantity);
+    if (qty <= 0) return res.status(400).json({ message: 'الكمية يجب أن تكون أكبر من صفر' });
+    if (qty > available) {
+      return res.status(400).json({
+        message: `الكمية المطلوبة (${qty}) تتجاوز المتاح (${available})`,
+      });
+    }
+
+    const blank_unit_cost = source.cost_per_piece;
+    const print_cost = parseFloat(print_cost_per_piece) || 0;
+    const final_unit_cost = blank_unit_cost + print_cost;
+    const count = await prisma.printOrder.count();
+    const order_number = `PO-${String(count + 1).padStart(4, '0')}`;
+    const dest_color = (new_color || '').trim() || source.color || '';
+    const orderDate = date || new Date().toISOString().slice(0, 10);
+
+    const result = await prisma.$transaction(async (tx) => {
+      await tx.readyStock.update({
+        where: { id: source.id },
+        data: { opening_balance: { decrement: qty } },
+      });
+      const dest = await tx.readyStock.create({
+        data: {
+          model_code: new_model_code,
+          product_name: new_product_name,
+          color: dest_color,
+          opening_balance: qty,
+          cost_per_piece: final_unit_cost,
+          location: source.location || '',
+          reserved_quantity: 0,
+        },
+      });
+      const po = await tx.printOrder.create({
+        data: {
+          order_number,
+          date: orderDate,
+          source_stock_id: source.id,
+          source_model_code: source.model_code,
+          source_product_name: source.product_name,
+          source_color: source.color || '',
+          quantity: qty,
+          blank_unit_cost,
+          print_cost_per_piece: print_cost,
+          final_unit_cost,
+          dest_stock_id: dest.id,
+          dest_model_code: new_model_code,
+          dest_product_name: new_product_name,
+          dest_color,
+          print_type: print_type || '',
+          notes: notes || '',
+          created_by: (req.user as any)?.username || '',
+        },
+      });
+      return { dest, po };
+    });
+
+    logAudit({ user: req.user, module: 'PrintOrders', action: 'CREATE', record_id: result.po.id,
+      after_data: result.po,
+      description: `أمر طباعة ${order_number}: ${source.model_code} → ${new_model_code} (${qty} قطعة)` });
+
+    return res.status(201).json(result.po);
+  } catch (e) {
+    console.error('Print order error:', e);
+    return res.status(500).json({ message: 'خطأ في تنفيذ أمر الطباعة' });
+  }
+});

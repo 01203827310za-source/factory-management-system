@@ -337,6 +337,28 @@ export interface PayrollReportData {
 }
 
 // ===== AUDIT LOG =====
+export interface PrintOrder {
+  id: number;
+  order_number: string;
+  date: string;
+  source_stock_id: number;
+  source_model_code: string;
+  source_product_name: string;
+  source_color: string;
+  quantity: number;
+  blank_unit_cost: number;
+  print_cost_per_piece: number;
+  final_unit_cost: number;
+  dest_stock_id: number;
+  dest_model_code: string;
+  dest_product_name: string;
+  dest_color: string;
+  print_type: string;
+  notes: string;
+  created_by: string;
+  created_at: string;
+}
+
 export interface AuditLog {
   id: number;
   timestamp: string;
