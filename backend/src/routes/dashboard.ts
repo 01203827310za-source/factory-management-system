@@ -66,6 +66,23 @@ router.get('/', async (_req: Request, res: Response) => {
       fabricValue += available * wac;
     });
 
+    // Cutting inventory value: SUM(remaining_pieces × cost_per_meter)
+    const allModelParts = await prisma.modelPart.findMany({
+      include: { model: { select: { qty_from_cutting: true } } },
+    });
+    const usedByKey = new Map<string, number>();
+    allModelParts.forEach(p => {
+      const key = `${p.cut_number}|${p.color}`;
+      usedByKey.set(key, (usedByKey.get(key) || 0) + p.model.qty_from_cutting);
+    });
+    let cuttingInventoryValue = 0;
+    cuttingOrders.forEach(c => {
+      const key = `${c.cut_number}|${c.color}`;
+      const used = usedByKey.get(key) || 0;
+      const remaining = Math.max(0, c.total_pieces - used);
+      cuttingInventoryValue += remaining * (c.cost_per_meter || 0);
+    });
+
     const modelProds = await prisma.modelProduction.findMany();
     const newProd: Record<string, number> = {};
     modelProds.forEach(mp => {
@@ -103,7 +120,7 @@ router.get('/', async (_req: Request, res: Response) => {
     });
 
     const accessoriesValue = accessories.reduce((s, a) => s + Math.max(0, a.qty_in - a.qty_consumed) * a.cost, 0);
-    const totalCurrentAssets = fabricValue + stockValue + accessoriesValue + moneyOwedToUs + netProfit - remainingDebts;
+    const totalCurrentAssets = fabricValue + stockValue + accessoriesValue + cuttingInventoryValue + moneyOwedToUs + netProfit - remainingDebts;
 
     const _today = new Date().toISOString().slice(0, 10);
     setImmediate(() => {
@@ -131,6 +148,7 @@ router.get('/', async (_req: Request, res: Response) => {
       fabric_value: fabricValue,
       stock_value: stockValue,
       accessories_value: accessoriesValue,
+      cutting_value: cuttingInventoryValue,
       total_reservations: totalReservations,
     });
   } catch (err) {

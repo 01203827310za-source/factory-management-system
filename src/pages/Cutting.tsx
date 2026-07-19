@@ -1,51 +1,48 @@
 import { useState, useEffect, useMemo } from 'react';
-import { cuttingStore, fabricStore } from '../data/store';
-import type { CuttingOrder, ComputedFabric } from '../types';
+import { cuttingStore } from '../data/store';
+import type { CuttingOrder } from '../types';
 import Modal from '../components/Modal';
 import { useToast } from '../components/Toast';
 import { Plus, Edit2, Trash2, Download, Search, RefreshCw } from 'lucide-react';
 import * as XLSX from 'xlsx';
 const ic = "w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400";
 const lc = "block text-xs font-semibold text-gray-600 mb-1";
-const fmt = (n: number) => n.toLocaleString('ar-EG', { maximumFractionDigits: 2 });
+const fmt = (n: number) => n.toLocaleString('ar-EG', { maximumFractionDigits: 2 }) + ' ج.م';
 
 export default function Cutting() {
   const toast = useToast();
   const [items, setItems] = useState<CuttingOrder[]>([]);
-  const [fabricItems, setFabricItems] = useState<ComputedFabric[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editItem, setEditItem] = useState<CuttingOrder | null>(null);
   const [search, setSearch] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
-  const emptyForm = { date: '', cut_number: 0, cut_description: '', material_type: '', layers_count: 0, spread_length_m: 0, total_pieces: 0, color: '', kg_consumed: 0, notes: '' };
+  const emptyForm = { date: '', cut_number: 0, cut_description: '', material_type: '', layers_count: 0, spread_length_m: 0, total_pieces: 0, color: '', kg_consumed: 0, cost_per_meter: 0, notes: '' };
   const [form, setForm] = useState(emptyForm);
-
-  // Lookup map: 'type|color' → avg_cost_per_kg
-  const fabricCostMap = useMemo(() => {
-    const m: Record<string, number> = {};
-    fabricItems.forEach(f => {
-      m[`${f.material_type}|${f.color}`] = f.avg_cost_per_kg > 0 ? f.avg_cost_per_kg : f.cost_per_kg;
-    });
-    return m;
-  }, [fabricItems]);
-
-  const getAvgCost = (type: string, color: string) =>
-    fabricCostMap[`${type}|${color}`] || fabricCostMap[`${type}|`] || 0;
 
   const loadData = async () => {
     setLoading(true);
     try {
-      const [cuttingData, fabricData] = await Promise.all([cuttingStore.getAll(), fabricStore.getComputed()]);
-      setItems(cuttingData);
-      setFabricItems(fabricData);
+      setItems(await cuttingStore.getAll());
     } catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'خطأ'); }
     finally { setLoading(false); }
   };
   useEffect(() => { loadData(); }, []);
+
   const openAdd = () => { setEditItem(null); setForm(emptyForm); setModalOpen(true); };
-  const openEdit = (item: CuttingOrder) => { setEditItem(item); setForm({ date: item.date, cut_number: item.cut_number, cut_description: item.cut_description, material_type: item.material_type, layers_count: item.layers_count, spread_length_m: item.spread_length_m, total_pieces: item.total_pieces, color: item.color, kg_consumed: item.kg_consumed, notes: item.notes }); setModalOpen(true); };
+  const openEdit = (item: CuttingOrder) => {
+    setEditItem(item);
+    setForm({
+      date: item.date, cut_number: item.cut_number, cut_description: item.cut_description,
+      material_type: item.material_type, layers_count: item.layers_count,
+      spread_length_m: item.spread_length_m, total_pieces: item.total_pieces,
+      color: item.color, kg_consumed: item.kg_consumed,
+      cost_per_meter: item.cost_per_meter ?? 0, notes: item.notes,
+    });
+    setModalOpen(true);
+  };
+
   const handleSave = async () => {
     if (!form.cut_number || !form.cut_description) { toast('error', 'يرجى ملء رقم القصة والبيان'); return; }
     setSaving(true);
@@ -55,22 +52,36 @@ export default function Cutting() {
       setModalOpen(false); await loadData();
     } catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'خطأ'); } finally { setSaving(false); }
   };
-  const handleDelete = async (id: number) => { try { await cuttingStore.remove(id); toast('success', 'تم الحذف'); setDeleteConfirm(null); await loadData(); } catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'خطأ'); } };
-  const filtered = useMemo(() => { if (!search) return items; const q = search.toLowerCase(); return items.filter(r => r.cut_description.toLowerCase().includes(q) || r.material_type.toLowerCase().includes(q) || String(r.cut_number).includes(q)); }, [items, search]);
+
+  const handleDelete = async (id: number) => {
+    try { await cuttingStore.remove(id); toast('success', 'تم الحذف'); setDeleteConfirm(null); await loadData(); }
+    catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'خطأ'); }
+  };
+
+  const filtered = useMemo(() => {
+    if (!search) return items;
+    const q = search.toLowerCase();
+    return items.filter(r => r.cut_description.toLowerCase().includes(q) || r.material_type.toLowerCase().includes(q) || String(r.cut_number).includes(q));
+  }, [items, search]);
+
   const exportExcel = () => {
     const ws = XLSX.utils.json_to_sheet(items.map(r => {
-      const avgCost = getAvgCost(r.material_type, r.color);
+      const remaining = r.remaining_pieces ?? r.total_pieces;
       return {
         'التاريخ': r.date, 'رقم القصة': r.cut_number, 'البيان': r.cut_description,
         'نوع الخامة': r.material_type, 'عدد الرقات': r.layers_count,
         'طول الفرشة': r.spread_length_m, 'إجمالي القطع': r.total_pieces,
-        'الألوان': r.color, 'كيلوهات': r.kg_consumed,
-        'تكلفة القطع': avgCost > 0 ? Math.round(r.kg_consumed * avgCost * 100) / 100 : 0,
+        'المتبقي': remaining, 'الألوان': r.color, 'كيلوهات': r.kg_consumed,
+        'تكلفة المتر (ج.م)': r.cost_per_meter ?? 0,
+        'قيمة المتبقي (ج.م)': remaining * (r.cost_per_meter ?? 0),
         'ملاحظات': r.notes,
       };
     }));
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'القص'); XLSX.writeFile(wb, 'cutting_export.xlsx');
   };
+
+  const headers = ['#','التاريخ','رقم القصة','البيان','نوع الخامة','عدد الرقات','طول الفرشة (م)','القطع','المتبقي','اللون','كجم','تكلفة المتر','قيمة المتبقي','ملاحظات','إجراءات'];
+
   return (
     <div className="space-y-5">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
@@ -84,37 +95,40 @@ export default function Cutting() {
       <div className="relative max-w-md"><Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="بحث برقم القصة، البيان..." className={`w-full pr-10 ${ic}`} /></div>
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
         <div className="overflow-x-auto"><table className="w-full text-sm whitespace-nowrap">
-          <thead><tr className="bg-[#1e3a5f] text-white">{['#','التاريخ','رقم القصة','البيان','نوع الخامة','عدد الرقات','طول الفرشة (م)','القطع','المتبقي','اللون','كجم','تكلفة القطع','ملاحظات','إجراءات'].map(h => <th key={h} className="px-3 py-3 text-center font-semibold">{h}</th>)}</tr></thead>
+          <thead><tr className="bg-[#1e3a5f] text-white">{headers.map(h => <th key={h} className="px-3 py-3 text-center font-semibold">{h}</th>)}</tr></thead>
           <tbody>
-            {loading && <tr><td colSpan={14} className="text-center py-8 text-gray-400"><RefreshCw size={16} className="animate-spin inline mr-2" />جارٍ التحميل...</td></tr>}
-            {!loading && filtered.length === 0 && <tr><td colSpan={14} className="text-center py-8 text-gray-400">لا توجد بيانات</td></tr>}
+            {loading && <tr><td colSpan={15} className="text-center py-8 text-gray-400"><RefreshCw size={16} className="animate-spin inline mr-2" />جارٍ التحميل...</td></tr>}
+            {!loading && filtered.length === 0 && <tr><td colSpan={15} className="text-center py-8 text-gray-400">لا توجد بيانات</td></tr>}
             {filtered.map((item, idx) => {
-              const avgCost = getAvgCost(item.material_type, item.color);
-              const cuttingCost = item.kg_consumed * avgCost;
+              const remaining = item.remaining_pieces ?? item.total_pieces;
+              const remainingValue = remaining * (item.cost_per_meter ?? 0);
               return (
-              <tr key={item.id} className="border-t border-gray-100 hover:bg-blue-50/40 transition">
-                <td className="px-3 py-3 text-center text-gray-500">{idx + 1}</td>
-                <td className="px-3 py-3 text-center">{item.date}</td>
-                <td className="px-3 py-3 text-center font-bold">{item.cut_number}</td>
-                <td className="px-3 py-3">{item.cut_description}</td>
-                <td className="px-3 py-3 text-center">{item.material_type}</td>
-                <td className="px-3 py-3 text-center">{item.layers_count}</td>
-                <td className="px-3 py-3 text-center">{item.spread_length_m}</td>
-                <td className="px-3 py-3 text-center font-semibold">{item.total_pieces}</td>
-                <td className="px-3 py-3 text-center font-bold" style={{ color: (item.remaining_pieces ?? item.total_pieces) > 0 ? '#15803d' : '#dc2626' }}>
-                  {item.remaining_pieces ?? item.total_pieces}
-                </td>
-                <td className="px-3 py-3 text-center">{item.color}</td>
-                <td className="px-3 py-3 text-center text-red-600 font-semibold">{item.kg_consumed}</td>
-                <td className="px-3 py-3 text-center font-semibold text-purple-700">
-                  {avgCost > 0 ? fmt(cuttingCost) : '—'}
-                </td>
-                <td className="px-3 py-3 text-center text-xs">{item.notes || '-'}</td>
-                <td className="px-3 py-3 text-center"><div className="flex items-center justify-center gap-1">
-                  <button onClick={() => openEdit(item)} className="p-1.5 text-blue-600 hover:bg-blue-100 rounded-lg"><Edit2 size={15} /></button>
-                  <button onClick={() => setDeleteConfirm(item.id)} className="p-1.5 text-red-600 hover:bg-red-100 rounded-lg"><Trash2 size={15} /></button>
-                </div></td>
-              </tr>
+                <tr key={item.id} className="border-t border-gray-100 hover:bg-blue-50/40 transition">
+                  <td className="px-3 py-3 text-center text-gray-500">{idx + 1}</td>
+                  <td className="px-3 py-3 text-center">{item.date}</td>
+                  <td className="px-3 py-3 text-center font-bold">{item.cut_number}</td>
+                  <td className="px-3 py-3">{item.cut_description}</td>
+                  <td className="px-3 py-3 text-center">{item.material_type}</td>
+                  <td className="px-3 py-3 text-center">{item.layers_count}</td>
+                  <td className="px-3 py-3 text-center">{item.spread_length_m}</td>
+                  <td className="px-3 py-3 text-center font-semibold">{item.total_pieces}</td>
+                  <td className="px-3 py-3 text-center font-bold" style={{ color: remaining > 0 ? '#15803d' : '#dc2626' }}>
+                    {remaining}
+                  </td>
+                  <td className="px-3 py-3 text-center">{item.color}</td>
+                  <td className="px-3 py-3 text-center text-red-600 font-semibold">{item.kg_consumed}</td>
+                  <td className="px-3 py-3 text-center text-blue-700 font-semibold">
+                    {(item.cost_per_meter ?? 0) > 0 ? fmt(item.cost_per_meter) : '—'}
+                  </td>
+                  <td className="px-3 py-3 text-center font-semibold text-purple-700">
+                    {(item.cost_per_meter ?? 0) > 0 ? fmt(remainingValue) : '—'}
+                  </td>
+                  <td className="px-3 py-3 text-center text-xs">{item.notes || '-'}</td>
+                  <td className="px-3 py-3 text-center"><div className="flex items-center justify-center gap-1">
+                    <button onClick={() => openEdit(item)} className="p-1.5 text-blue-600 hover:bg-blue-100 rounded-lg"><Edit2 size={15} /></button>
+                    <button onClick={() => setDeleteConfirm(item.id)} className="p-1.5 text-red-600 hover:bg-red-100 rounded-lg"><Trash2 size={15} /></button>
+                  </div></td>
+                </tr>
               );
             })}
           </tbody>
@@ -131,20 +145,19 @@ export default function Cutting() {
           <div><label className={lc}>طول الفرشة (م)</label><input type="number" className={ic} value={form.spread_length_m} onChange={e => setForm({...form, spread_length_m: parseFloat(e.target.value)||0})} min={0} step="0.1" /></div>
           <div><label className={lc}>إجمالي القطع</label><input type="number" className={ic} value={form.total_pieces} onChange={e => setForm({...form, total_pieces: parseInt(e.target.value)||0})} min={0} /></div>
           <div><label className={lc}>الكيلوجرامات المستهلكة</label><input type="number" className={ic} value={form.kg_consumed} onChange={e => setForm({...form, kg_consumed: parseFloat(e.target.value)||0})} min={0} step="0.1" /></div>
+          <div><label className={lc}>تكلفة المتر (ج.م)</label><input type="number" className={ic} value={form.cost_per_meter} onChange={e => setForm({...form, cost_per_meter: parseFloat(e.target.value)||0})} min={0} step="0.01" /></div>
           <div className="md:col-span-2"><label className={lc}>ملاحظات</label><input className={ic} value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} /></div>
         </div>
-        {/* Auto cost display from fabric avg cost */}
-        {form.material_type && (() => {
-          const avgCost = getAvgCost(form.material_type, form.color);
-          const cuttingCost = form.kg_consumed * avgCost;
-          if (avgCost <= 0) return null;
+        {form.cost_per_meter > 0 && (() => {
+          const estRemaining = editItem ? (editItem.remaining_pieces ?? editItem.total_pieces) : form.total_pieces;
+          const remainingValue = estRemaining * form.cost_per_meter;
           return (
             <div className="mt-4 p-3 bg-purple-50 border border-purple-200 rounded-xl text-sm">
-              <p className="font-bold text-purple-800 mb-1">💰 تكلفة القطع المقدرة</p>
+              <p className="font-bold text-purple-800 mb-1">💰 قيمة المتبقي المقدرة</p>
               <div className="grid grid-cols-3 gap-3 text-purple-700">
-                <span>متوسط التكلفة/كجم: <strong>{fmt(avgCost)}</strong></span>
-                <span>الكيلوجرامات: <strong>{form.kg_consumed}</strong></span>
-                <span>التكلفة الإجمالية: <strong className="text-purple-900">{fmt(cuttingCost)} جنيه</strong></span>
+                <span>تكلفة المتر: <strong>{fmt(form.cost_per_meter)}</strong></span>
+                <span>المتبقي: <strong>{estRemaining}</strong></span>
+                <span>القيمة الإجمالية: <strong className="text-purple-900">{fmt(remainingValue)}</strong></span>
               </div>
             </div>
           );

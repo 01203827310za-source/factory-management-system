@@ -228,6 +228,7 @@ export type CuttingRecord = {
   total_pieces: number;
   color: string;
   kg_consumed: number;
+  cost_per_meter: number;
   notes: string;
   created_at: string;
 };

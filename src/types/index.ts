@@ -96,6 +96,7 @@ export interface CuttingOrder {
   total_pieces: number;
   color: string;
   kg_consumed: number;
+  cost_per_meter: number;
   notes: string;
   created_at: string;
   remaining_pieces?: number;
@@ -220,6 +221,7 @@ export interface DashboardMetrics {
   fabric_value: number;
   stock_value: number;
   accessories_value: number;
+  cutting_value: number;
   total_reservations: number;
 }
 
