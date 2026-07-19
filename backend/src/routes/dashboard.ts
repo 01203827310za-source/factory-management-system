@@ -83,7 +83,13 @@ router.get('/', async (_req: Request, res: Response) => {
       cuttingInventoryValue += remaining * (c.cost_per_meter || 0);
     });
 
+    // WIP value: SUM(qty_received × cost_per_piece) WHERE status = 'قيد التشغيل'
+    // Models that move to 'تام' are automatically excluded — no double-counting with stockValue.
     const modelProds = await prisma.modelProduction.findMany();
+    const wipValue = modelProds
+      .filter(mp => mp.status === 'قيد التشغيل')
+      .reduce((s, mp) => s + mp.qty_received * ((mp as any).cost_per_piece || 0), 0);
+
     const newProd: Record<string, number> = {};
     modelProds.forEach(mp => {
       const k = `${mp.model_code}|${mp.color || ''}`;
@@ -120,7 +126,7 @@ router.get('/', async (_req: Request, res: Response) => {
     });
 
     const accessoriesValue = accessories.reduce((s, a) => s + Math.max(0, a.qty_in - a.qty_consumed) * a.cost, 0);
-    const totalCurrentAssets = fabricValue + stockValue + accessoriesValue + cuttingInventoryValue + moneyOwedToUs + netProfit - remainingDebts;
+    const totalCurrentAssets = fabricValue + stockValue + accessoriesValue + cuttingInventoryValue + wipValue + moneyOwedToUs + netProfit - remainingDebts;
 
     const _today = new Date().toISOString().slice(0, 10);
     setImmediate(() => {
@@ -149,6 +155,7 @@ router.get('/', async (_req: Request, res: Response) => {
       stock_value: stockValue,
       accessories_value: accessoriesValue,
       cutting_value: cuttingInventoryValue,
+      wip_value: wipValue,
       total_reservations: totalReservations,
     });
   } catch (err) {

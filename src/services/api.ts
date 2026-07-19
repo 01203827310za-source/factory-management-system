@@ -262,6 +262,7 @@ export type ModelProdRecord = {
   status: string;
   wastage: number;
   qty_received: number;
+  cost_per_piece: number;
   warehouse_entry_date: string;
   created_at: string;
   parts?: ModelPartRecord[];

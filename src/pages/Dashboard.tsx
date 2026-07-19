@@ -18,7 +18,7 @@ const EMPTY: DashboardMetrics = {
   total_in: 0, total_out: 0, cash_available: 0, money_owed_to_us: 0,
   sales_by_marketer: {}, order_status_counts: {}, total_returns: 0, total_refunds: 0,
   total_current_assets: 0, fabric_value: 0, stock_value: 0, accessories_value: 0,
-  cutting_value: 0, total_reservations: 0,
+  cutting_value: 0, wip_value: 0, total_reservations: 0,
 };
 
 export default function Dashboard() {
@@ -128,12 +128,13 @@ export default function Dashboard() {
         {/* Total Assets */}
         <div className="bg-gradient-to-l from-[#1e3a5f] to-[#2d5a8e] rounded-xl p-6 text-white shadow-lg">
           <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><Wallet size={22} /> إجمالي الأصول الحالية</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 mb-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
             {[
               { label: 'القماش المتاح × التكلفة', val: metrics.fabric_value },
               { label: 'الاستوك المتاح × التكلفة', val: metrics.stock_value },
               { label: 'الإكسسوارات × التكلفة', val: metrics.accessories_value },
               { label: 'قطع متبقية × تكلفة المتر', val: metrics.cutting_value },
+              { label: 'قيمة التشغيل (قيد التشغيل)', val: metrics.wip_value },
               { label: 'الفلوس اللي لنا برا', val: metrics.money_owed_to_us },
             ].map(item => (
               <div key={item.label} className="bg-white/10 rounded-lg p-3">

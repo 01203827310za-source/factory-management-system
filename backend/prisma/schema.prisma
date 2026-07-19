@@ -178,6 +178,7 @@ model ModelProduction {
   status               String      @default("قيد التشغيل")
   wastage              Int         @default(0)
   qty_received         Int         @default(0)
+  cost_per_piece       Float       @default(0)
   warehouse_entry_date String      @default("")
   created_at           DateTime    @default(now())
   parts                ModelPart[]

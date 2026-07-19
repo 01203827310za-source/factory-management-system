@@ -9,6 +9,7 @@ import * as XLSX from 'xlsx';
 const STATUSES: ModelProduction['status'][] = ['قيد التشغيل', 'تام', 'هالك'];
 const ic = "w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400";
 const lc = "block text-xs font-semibold text-gray-600 mb-1";
+const fmt = (n: number) => n.toLocaleString('ar-EG', { maximumFractionDigits: 2 }) + ' ج.م';
 
 type PartEntry = { part_type: string; cut_number: number; color: string };
 
@@ -25,6 +26,7 @@ const emptyForm = () => ({
   status: 'تام' as ModelProduction['status'],
   wastage: 0,
   qty_received: 0,
+  cost_per_piece: 0,
   warehouse_entry_date: '',
 });
 
@@ -52,7 +54,6 @@ export default function ModelProductionPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
 
   const [cutNumbers, setCutNumbers] = useState<number[]>([]);
-  // cut_number → list of colors available for that cut
   const [cutColors, setCutColors] = useState<Record<number, string[]>>({});
   const [stockCodes, setStockCodes] = useState<string[]>([]);
   const [stockColors, setStockColors] = useState<Record<string, string[]>>({});
@@ -115,6 +116,7 @@ export default function ModelProductionPage() {
       status: item.status,
       wastage: item.wastage,
       qty_received: item.qty_received,
+      cost_per_piece: item.cost_per_piece ?? 0,
       warehouse_entry_date: item.warehouse_entry_date,
     });
     setModalOpen(true);
@@ -125,7 +127,6 @@ export default function ModelProductionPage() {
     setForm({ ...form, parts: next });
   };
 
-  // When cut_number changes, reset color since available colors differ per cut
   const updatePartCut = (idx: number, newCut: number) => {
     const next = form.parts.map((p, i) => i === idx ? { ...p, cut_number: newCut, color: '' } : p);
     setForm({ ...form, parts: next });
@@ -205,12 +206,16 @@ export default function ModelProductionPage() {
       'الحالة': r.status,
       'الهالك': r.wastage,
       'المستلم': r.qty_received,
+      'تكلفة القطعة (ج.م)': r.cost_per_piece ?? 0,
+      'قيمة التشغيل (ج.م)': r.status === 'قيد التشغيل' ? r.qty_received * (r.cost_per_piece ?? 0) : 0,
       'تاريخ المخزن': r.warehouse_entry_date,
     })));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'الموديلات');
     XLSX.writeFile(wb, 'models_export.xlsx');
   };
+
+  const headers = ['#', 'التاريخ', 'القصص', 'كود الموديل', 'من القص', 'الوصف', 'اللون', 'المقاسات', 'الحالة', 'الهالك', 'المستلم', 'تكلفة القطعة', 'قيمة التشغيل', 'المخزن', 'إجراءات'];
 
   return (
     <div className="space-y-5">
@@ -250,47 +255,56 @@ export default function ModelProductionPage() {
           <table className="w-full text-sm whitespace-nowrap">
             <thead>
               <tr className="bg-[#1e3a5f] text-white">
-                {['#', 'التاريخ', 'القصص', 'كود الموديل', 'من القص', 'الوصف', 'اللون', 'المقاسات', 'الحالة', 'الهالك', 'المستلم', 'المخزن', 'إجراءات']
-                  .map(h => <th key={h} className="px-3 py-3 text-center font-semibold">{h}</th>)}
+                {headers.map(h => <th key={h} className="px-3 py-3 text-center font-semibold">{h}</th>)}
               </tr>
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={13} className="text-center py-8 text-gray-400">
+                <tr><td colSpan={15} className="text-center py-8 text-gray-400">
                   <RefreshCw size={16} className="animate-spin inline mr-2" />جارٍ التحميل...
                 </td></tr>
               )}
               {!loading && filtered.length === 0 && (
-                <tr><td colSpan={13} className="text-center py-8 text-gray-400">لا توجد بيانات</td></tr>
+                <tr><td colSpan={15} className="text-center py-8 text-gray-400">لا توجد بيانات</td></tr>
               )}
-              {filtered.map((item, idx) => (
-                <tr key={item.id} className="border-t border-gray-100 hover:bg-blue-50/40 transition">
-                  <td className="px-3 py-3 text-center text-gray-500">{idx + 1}</td>
-                  <td className="px-3 py-3 text-center">{item.date}</td>
-                  <td className="px-3 py-3 text-center font-bold text-blue-700 text-xs">{partsLabel(item)}</td>
-                  <td className="px-3 py-3 font-medium">{item.model_code}</td>
-                  <td className="px-3 py-3 text-center">{item.qty_from_cutting}</td>
-                  <td className="px-3 py-3">{item.model_description}</td>
-                  <td className="px-3 py-3 text-center">{item.color}</td>
-                  <td className="px-3 py-3 text-center text-xs">{item.sizes}</td>
-                  <td className="px-3 py-3 text-center">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                      item.status === 'تام' ? 'bg-emerald-100 text-emerald-700' :
-                      item.status === 'قيد التشغيل' ? 'bg-amber-100 text-amber-700' :
-                      'bg-red-100 text-red-700'
-                    }`}>{item.status}</span>
-                  </td>
-                  <td className="px-3 py-3 text-center text-red-600">{item.wastage}</td>
-                  <td className="px-3 py-3 text-center font-semibold text-emerald-600">{item.qty_received}</td>
-                  <td className="px-3 py-3 text-center text-xs">{item.warehouse_entry_date || '-'}</td>
-                  <td className="px-3 py-3 text-center">
-                    <div className="flex items-center justify-center gap-1">
-                      <button onClick={() => openEdit(item)} className="p-1.5 text-blue-600 hover:bg-blue-100 rounded-lg"><Edit2 size={15} /></button>
-                      <button onClick={() => setDeleteConfirm(item.id)} className="p-1.5 text-red-600 hover:bg-red-100 rounded-lg"><Trash2 size={15} /></button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {filtered.map((item, idx) => {
+                const isWip = item.status === 'قيد التشغيل';
+                const wipValue = isWip ? item.qty_received * (item.cost_per_piece ?? 0) : 0;
+                return (
+                  <tr key={item.id} className="border-t border-gray-100 hover:bg-blue-50/40 transition">
+                    <td className="px-3 py-3 text-center text-gray-500">{idx + 1}</td>
+                    <td className="px-3 py-3 text-center">{item.date}</td>
+                    <td className="px-3 py-3 text-center font-bold text-blue-700 text-xs">{partsLabel(item)}</td>
+                    <td className="px-3 py-3 font-medium">{item.model_code}</td>
+                    <td className="px-3 py-3 text-center">{item.qty_from_cutting}</td>
+                    <td className="px-3 py-3">{item.model_description}</td>
+                    <td className="px-3 py-3 text-center">{item.color}</td>
+                    <td className="px-3 py-3 text-center text-xs">{item.sizes}</td>
+                    <td className="px-3 py-3 text-center">
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                        item.status === 'تام' ? 'bg-emerald-100 text-emerald-700' :
+                        item.status === 'قيد التشغيل' ? 'bg-amber-100 text-amber-700' :
+                        'bg-red-100 text-red-700'
+                      }`}>{item.status}</span>
+                    </td>
+                    <td className="px-3 py-3 text-center text-red-600">{item.wastage}</td>
+                    <td className="px-3 py-3 text-center font-semibold text-emerald-600">{item.qty_received}</td>
+                    <td className="px-3 py-3 text-center text-blue-700 font-semibold">
+                      {(item.cost_per_piece ?? 0) > 0 ? fmt(item.cost_per_piece) : '—'}
+                    </td>
+                    <td className="px-3 py-3 text-center font-semibold text-amber-700">
+                      {isWip && (item.cost_per_piece ?? 0) > 0 ? fmt(wipValue) : '—'}
+                    </td>
+                    <td className="px-3 py-3 text-center text-xs">{item.warehouse_entry_date || '-'}</td>
+                    <td className="px-3 py-3 text-center">
+                      <div className="flex items-center justify-center gap-1">
+                        <button onClick={() => openEdit(item)} className="p-1.5 text-blue-600 hover:bg-blue-100 rounded-lg"><Edit2 size={15} /></button>
+                        <button onClick={() => setDeleteConfirm(item.id)} className="p-1.5 text-red-600 hover:bg-red-100 rounded-lg"><Trash2 size={15} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -334,7 +348,6 @@ export default function ModelProductionPage() {
                 <div key={idx} className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg border border-gray-200">
                   <span className="text-xs text-gray-400 min-w-[40px] text-center">جزء {idx + 1}</span>
 
-                  {/* Part type */}
                   <input
                     className={`${ic} flex-1`}
                     value={part.part_type}
@@ -342,7 +355,6 @@ export default function ModelProductionPage() {
                     placeholder="نوع (قميص، شورت...)"
                   />
 
-                  {/* Cut number — resets color when changed */}
                   <select
                     className={`${ic} flex-1`}
                     value={part.cut_number}
@@ -352,7 +364,6 @@ export default function ModelProductionPage() {
                     {cutNumbers.map(n => <option key={n} value={n}>{n}</option>)}
                   </select>
 
-                  {/* Part color — filtered by selected cut number */}
                   <select
                     className={`${ic} flex-1 ${!part.color && part.cut_number ? 'border-red-400' : ''}`}
                     value={part.color}
@@ -432,6 +443,13 @@ export default function ModelProductionPage() {
               onChange={e => setForm({ ...form, qty_received: parseInt(e.target.value) || 0 })} min={0} />
           </div>
 
+          {/* Cost per piece */}
+          <div>
+            <label className={lc}>تكلفة القطعة (ج.م)</label>
+            <input type="number" className={ic} value={form.cost_per_piece}
+              onChange={e => setForm({ ...form, cost_per_piece: parseFloat(e.target.value) || 0 })} min={0} step="0.01" />
+          </div>
+
           {/* Warehouse entry date */}
           <div>
             <label className={lc}>تاريخ دخول المخزن</label>
@@ -440,6 +458,18 @@ export default function ModelProductionPage() {
           </div>
 
         </div>
+
+        {/* WIP value preview */}
+        {form.status === 'قيد التشغيل' && form.cost_per_piece > 0 && (
+          <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-xl text-sm">
+            <p className="font-bold text-amber-800 mb-1">🏭 قيمة التشغيل المقدرة</p>
+            <div className="grid grid-cols-3 gap-3 text-amber-700">
+              <span>تكلفة القطعة: <strong>{fmt(form.cost_per_piece)}</strong></span>
+              <span>المستلم: <strong>{form.qty_received}</strong></span>
+              <span>القيمة الإجمالية: <strong className="text-amber-900">{fmt(form.qty_received * form.cost_per_piece)}</strong></span>
+            </div>
+          </div>
+        )}
 
         <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-200">
           <button onClick={() => setModalOpen(false)} className="px-5 py-2 text-sm border border-gray-300 rounded-lg">إلغاء</button>

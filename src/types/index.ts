@@ -123,6 +123,7 @@ export interface ModelProduction {
   status: 'قيد التشغيل' | 'تام' | 'هالك';
   wastage: number;
   qty_received: number;
+  cost_per_piece: number;
   warehouse_entry_date: string;
   created_at: string;
   parts?: ModelPart[];
@@ -222,6 +223,7 @@ export interface DashboardMetrics {
   stock_value: number;
   accessories_value: number;
   cutting_value: number;
+  wip_value: number;
   total_reservations: number;
 }
 
