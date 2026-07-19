@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useCallback, useContext, useState, useEffect, ReactNode } from 'react';
 import { authApi, type AuthUser } from '../services/api';
 
 interface AuthContextType {
@@ -54,7 +54,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   };
 
-  const can = (permission: string) => user?.permissions?.includes(permission) ?? false;
+  const can = useCallback((permission: string) => {
+    if (!user) return false;
+    if (permission === 'dashboard.view') return true;
+    if (user.role === 'admin') return true;
+    return user.permissions?.includes(permission) ?? false;
+  }, [user]);
 
   return (
     <AuthContext.Provider value={{

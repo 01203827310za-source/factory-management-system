@@ -40,7 +40,6 @@ const menuItems: { page: SidebarPage; label: string; icon: React.ReactNode }[] =
 ];
 
 const pagePermissions: Partial<Record<SidebarPage, string>> = {
-  dashboard: 'dashboard.view',
   fabric: 'fabric.view',
   readyStock: 'ready_stock.view',
   cutting: 'cutting.view',

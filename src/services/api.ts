@@ -40,7 +40,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
   if (res.status === 403) {
     const message = data?.message || 'غير مسموح بالوصول';
-    window.dispatchEvent(new CustomEvent('rbac-forbidden', { detail: { path, message } }));
+    window.dispatchEvent(new CustomEvent('rbac-forbidden', { detail: { path, message, permission: data?.permission } }));
     throw new ForbiddenError(message);
   }
 

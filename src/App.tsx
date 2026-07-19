@@ -72,7 +72,6 @@ function toHash(page: ExtendedPage) {
 
 function pagePermission(page: ExtendedPage) {
   const permissions: Partial<Record<ExtendedPage, string>> = {
-    dashboard: 'dashboard.view',
     sales: 'sales.view',
     expenses: 'expenses.view',
     readyStock: 'ready_stock.view',
@@ -155,6 +154,8 @@ function AppContent() {
   const [changePassModal, setChangePassModal] = useState(false);
   const [passForm, setPassForm] = useState({ current: '', next: '', confirm: '' });
   const [passLoading, setPassLoading] = useState(false);
+  const permissionsLoading = isAuthenticated && !Array.isArray(user?.permissions);
+  const authReady = !isLoading && !permissionsLoading;
 
   const showAccessDenied = useCallback((fromPage?: ExtendedPage) => {
     setPreviousPage(prev => {
@@ -168,6 +169,8 @@ function AppContent() {
   }, [currentPage]);
 
   useEffect(() => {
+    if (!authReady || !isAuthenticated) return;
+
     const syncFromHash = () => {
       const hashPage = getPageFromHash();
       if (hashPage === 'accessDenied') {
@@ -186,19 +189,24 @@ function AppContent() {
     syncFromHash();
     window.addEventListener('hashchange', syncFromHash);
     return () => window.removeEventListener('hashchange', syncFromHash);
-  }, [can, currentPage, showAccessDenied]);
+  }, [authReady, can, currentPage, isAuthenticated, showAccessDenied]);
 
   useEffect(() => {
-    const handleForbidden = () => {
+    const handleForbidden = (event: Event) => {
+      if (!authReady || !isAuthenticated || currentPage === 'dashboard') return;
+
+      const permission = (event as CustomEvent<{ permission?: string }>).detail?.permission;
+      if (permission && !permission.endsWith('.view')) return;
+
       showAccessDenied(currentPage);
     };
 
     window.addEventListener('rbac-forbidden', handleForbidden);
     return () => window.removeEventListener('rbac-forbidden', handleForbidden);
-  }, [currentPage, showAccessDenied]);
+  }, [authReady, currentPage, isAuthenticated, showAccessDenied]);
 
   const navigateToPage = (page: ExtendedPage) => {
-    if (page === 'accessDenied') return;
+    if (page === 'accessDenied' || !authReady) return;
 
     const permission = pagePermission(page);
     const hasAccess = !permission || can(permission);
@@ -242,7 +250,7 @@ function AppContent() {
   };
 
   // Loading screen
-  if (isLoading) {
+  if (!authReady) {
     return (
       <div className="min-h-screen bg-[#0f2744] flex items-center justify-center">
         <div className="text-center text-white">

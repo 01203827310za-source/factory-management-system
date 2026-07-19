@@ -19,6 +19,7 @@ export default function Login() {
     setLoading(true);
     try {
       await login(username.trim(), password);
+      window.location.hash = '#dashboard';
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'خطأ في تسجيل الدخول');
     } finally {
