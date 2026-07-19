@@ -1,10 +1,12 @@
 import {
   LayoutDashboard, ClipboardList, DollarSign, Package, Scissors,
   Shirt, CreditCard, BadgeDollarSign, Boxes, X, Search, Landmark, BarChart2,
-  Wallet, ClipboardCheck, Sparkles,
+  Wallet, ClipboardCheck, Sparkles, Lock, Scale, User,
 } from 'lucide-react';
 import type { Page } from '../types';
 import { useAuth } from '../contexts/AuthContext';
+
+type SidebarPage = Page | 'users';
 
 interface SidebarProps {
   currentPage: string;
@@ -17,7 +19,7 @@ interface SidebarProps {
   onUsersPage?: () => void;
 }
 
-const menuItems: { page: Page; label: string; icon: React.ReactNode }[] = [
+const menuItems: { page: SidebarPage; label: string; icon: React.ReactNode }[] = [
   { page: 'dashboard', label: 'لوحة التحكم', icon: <LayoutDashboard size={20} /> },
   { page: 'fabric', label: 'مخزن القماش', icon: <Shirt size={20} /> },
   { page: 'readyStock', label: 'مخزن الاستوك', icon: <Package size={20} /> },
@@ -28,14 +30,16 @@ const menuItems: { page: Page; label: string; icon: React.ReactNode }[] = [
   { page: 'debts', label: 'الديون', icon: <CreditCard size={20} /> },
   { page: 'clientAccts', label: 'حساب عميل', icon: <BadgeDollarSign size={20} /> },
   { page: 'accessories', label: 'مخزن الإكسسوارات', icon: <Boxes size={20} /> },
+  { page: 'financialCenter', label: 'المركز المالي', icon: <Scale size={20} /> },
   { page: 'fixedAssets', label: 'الأصول الثابتة', icon: <Landmark size={20} /> },
-  { page: 'reports',      label: 'التقارير',       icon: <BarChart2 size={20} /> },
+  { page: 'reports', label: 'التقارير', icon: <BarChart2 size={20} /> },
   { page: 'aiAssistant', label: 'المستشار الذكي', icon: <Sparkles size={20} /> },
-  { page: 'payroll',     label: 'المرتبات',        icon: <Wallet size={20} /> },
+  { page: 'payroll', label: 'المرتبات', icon: <Wallet size={20} /> },
   { page: 'auditLog', label: 'سجل التعديلات', icon: <ClipboardCheck size={20} /> },
+  { page: 'users', label: 'إدارة المستخدمين', icon: <User size={20} /> },
 ];
 
-const pagePermissions: Partial<Record<Page, string>> = {
+const pagePermissions: Partial<Record<SidebarPage, string>> = {
   dashboard: 'dashboard.view',
   fabric: 'fabric.view',
   readyStock: 'ready_stock.view',
@@ -46,18 +50,23 @@ const pagePermissions: Partial<Record<Page, string>> = {
   debts: 'debts.view',
   clientAccts: 'client_accounts.view',
   accessories: 'accessories.view',
+  financialCenter: 'financial_center.view',
   fixedAssets: 'assets.view',
   reports: 'reports.view',
   aiAssistant: 'ai_assistant.view',
   payroll: 'payroll.view',
   auditLog: 'audit_log.view',
+  users: 'users.view',
 };
 
 export default function Sidebar({ currentPage, onNavigate, sidebarOpen, onToggleSidebar, globalSearch, onSearchChange }: SidebarProps) {
   const { can } = useAuth();
-  const visibleMenuItems = menuItems.filter(item => {
+  const menuItemsWithAccess = menuItems.map(item => {
     const permission = pagePermissions[item.page];
-    return !permission || can(permission);
+    return {
+      ...item,
+      hasAccess: !permission || can(permission),
+    };
   });
 
   return (
@@ -65,10 +74,10 @@ export default function Sidebar({ currentPage, onNavigate, sidebarOpen, onToggle
       {sidebarOpen && (
         <div className="fixed inset-0 bg-black/40 z-40 lg:hidden" onClick={onToggleSidebar} />
       )}
-      
+
       <aside className={`fixed top-0 right-0 h-full z-50 bg-[#1e3a5f] text-white transition-all duration-300 flex flex-col
         ${sidebarOpen ? 'w-64 translate-x-0' : 'w-64 translate-x-full lg:translate-x-0 lg:w-64'}`}>
-        
+
         <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-lg bg-white/15 flex items-center justify-center">
@@ -98,7 +107,7 @@ export default function Sidebar({ currentPage, onNavigate, sidebarOpen, onToggle
         </div>
 
         <nav className="flex-1 overflow-y-auto px-3 py-2 space-y-1">
-          {visibleMenuItems.map(({ page, label, icon }) => (
+          {menuItemsWithAccess.map(({ page, label, icon, hasAccess }) => (
             <button
               key={page}
               onClick={() => {
@@ -109,10 +118,13 @@ export default function Sidebar({ currentPage, onNavigate, sidebarOpen, onToggle
                 ${currentPage === page
                   ? 'bg-white/20 text-white shadow-lg'
                   : 'text-white/70 hover:bg-white/10 hover:text-white'
-                }`}
+                }
+                ${!hasAccess ? 'cursor-not-allowed opacity-50' : ''}`}
+              aria-disabled={!hasAccess}
             >
               {icon}
               <span>{label}</span>
+              {!hasAccess && <Lock size={14} className="mr-auto" />}
             </button>
           ))}
         </nav>

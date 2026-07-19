@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { Page } from './types';
 import Sidebar from './components/Sidebar';
 import { ToastProvider } from './components/Toast';
@@ -14,20 +14,64 @@ import ClientAccounts from './pages/ClientAccounts';
 import Debts from './pages/Debts';
 import UsersPage from './pages/Users';
 import FixedAssets from './pages/FixedAssets';
+import FinancialCenter from './pages/FinancialCenter';
 import Reports from './pages/Reports';
 import Login from './pages/Login';
 import Payroll from './pages/Payroll';
 import AuditLog from './pages/AuditLog';
 import AiAssistant from './pages/AiAssistant';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
-import { Menu, LogOut, User, ChevronDown, KeyRound } from 'lucide-react';
+import { Menu, LogOut, User, ChevronDown, KeyRound, Lock, Home } from 'lucide-react';
 import { authApi } from './services/api';
 import { useToast } from './components/Toast';
 import Modal from './components/Modal';
-type ExtendedPage = Page | 'users';
+
+type ExtendedPage = Page | 'users' | 'accessDenied';
+
+function getPageFromHash(): ExtendedPage {
+  if (typeof window === 'undefined') return 'dashboard';
+  const hash = window.location.hash.replace(/^#\/?/, '').trim().toLowerCase();
+  switch (hash) {
+    case 'sales': return 'sales';
+    case 'expenses': return 'expenses';
+    case 'ready-stock': return 'readyStock';
+    case 'fabric': return 'fabric';
+    case 'accessories': return 'accessories';
+    case 'cutting': return 'cutting';
+    case 'model-prod': return 'modelProd';
+    case 'client-accounts': return 'clientAccts';
+    case 'debts': return 'debts';
+    case 'financial-center': return 'financialCenter';
+    case 'fixed-assets': return 'fixedAssets';
+    case 'reports': return 'reports';
+    case 'payroll': return 'payroll';
+    case 'audit-log': return 'auditLog';
+    case 'ai-assistant': return 'aiAssistant';
+    case 'users': return 'users';
+    case 'access-denied':
+    case 'accessdenied':
+    case '403': return 'accessDenied';
+    default: return 'dashboard';
+  }
+}
+
+function toHash(page: ExtendedPage) {
+  switch (page) {
+    case 'readyStock': return '#ready-stock';
+    case 'modelProd': return '#model-prod';
+    case 'clientAccts': return '#client-accounts';
+    case 'financialCenter': return '#financial-center';
+    case 'fixedAssets': return '#fixed-assets';
+    case 'auditLog': return '#audit-log';
+    case 'aiAssistant': return '#ai-assistant';
+    case 'accessDenied': return '#access-denied';
+    case 'users': return '#users';
+    default: return `#${page}`;
+  }
+}
 
 function pagePermission(page: ExtendedPage) {
-  const permissions: Record<ExtendedPage, string> = {
+  const permissions: Partial<Record<ExtendedPage, string>> = {
     dashboard: 'dashboard.view',
     sales: 'sales.view',
     expenses: 'expenses.view',
@@ -51,37 +95,134 @@ function pagePermission(page: ExtendedPage) {
 
 function PageRenderer({ page }: { page: ExtendedPage }) {
   switch (page) {
-    case 'dashboard':   return <Dashboard />;
-    case 'sales':       return <Sales />;
-    case 'expenses':    return <Expenses />;
-    case 'readyStock':  return <ReadyStock />;
-    case 'fabric':      return <FabricWarehouse />;
+    case 'dashboard': return <Dashboard />;
+    case 'sales': return <Sales />;
+    case 'expenses': return <Expenses />;
+    case 'readyStock': return <ReadyStock />;
+    case 'fabric': return <FabricWarehouse />;
     case 'accessories': return <Accessories />;
-    case 'cutting':     return <Cutting />;
-    case 'modelProd':   return <ModelProduction />;
+    case 'cutting': return <Cutting />;
+    case 'modelProd': return <ModelProduction />;
     case 'clientAccts': return <ClientAccounts />;
-    case 'debts':       return <Debts />;
+    case 'debts': return <Debts />;
+    case 'financialCenter': return <FinancialCenter />;
     case 'fixedAssets': return <FixedAssets />;
-    case 'reports':     return <Reports />;
-    case 'payroll':     return <Payroll />;
-    case 'auditLog':    return <AuditLog />;
+    case 'reports': return <Reports />;
+    case 'payroll': return <Payroll />;
+    case 'auditLog': return <AuditLog />;
     case 'aiAssistant': return <AiAssistant />;
-    case 'users':       return <UsersPage />;
-
-    default:            return <Dashboard />;
+    case 'users': return <UsersPage />;
+    default: return <Dashboard />;
   }
+}
+
+function AccessDeniedScreen({ onGoHome, onGoBack }: { onGoHome: () => void; onGoBack: () => void }) {
+  return (
+    <div className="flex min-h-[65vh] items-center justify-center px-4">
+      <div className="w-full max-w-xl rounded-3xl border border-gray-200 bg-white p-8 text-center shadow-sm">
+        <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-red-50 text-red-600">
+          <Lock size={30} />
+        </div>
+        <h1 className="text-2xl font-bold text-gray-800">🔒 ليس لديك صلاحية للوصول لهذه الصفحة</h1>
+        <p className="mt-3 text-sm leading-7 text-gray-600">يرجى التواصل مع مدير النظام إذا كنت تحتاج هذه الصلاحية.</p>
+        <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
+          <button
+            onClick={onGoHome}
+            className="flex items-center justify-center gap-2 rounded-xl bg-[#1e3a5f] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#16304d]"
+          >
+            <Home size={16} /> العودة للرئيسية
+          </button>
+          <button
+            onClick={onGoBack}
+            className="rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
+          >
+            رجوع
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function AppContent() {
   const { user, isLoading, isAuthenticated, logout, isAdmin, can } = useAuth();
   const toast = useToast();
-  const [currentPage, setCurrentPage] = useState<ExtendedPage>('dashboard');
+  const [currentPage, setCurrentPage] = useState<ExtendedPage>(() => getPageFromHash());
+  const [previousPage, setPreviousPage] = useState<ExtendedPage>('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState('');
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [changePassModal, setChangePassModal] = useState(false);
   const [passForm, setPassForm] = useState({ current: '', next: '', confirm: '' });
   const [passLoading, setPassLoading] = useState(false);
+
+  const showAccessDenied = useCallback((fromPage?: ExtendedPage) => {
+    setPreviousPage(prev => {
+      const sourcePage = fromPage ?? currentPage;
+      return sourcePage === 'accessDenied' ? prev : sourcePage;
+    });
+    setCurrentPage('accessDenied');
+    if (window.location.hash !== '#access-denied') {
+      window.location.hash = '#access-denied';
+    }
+  }, [currentPage]);
+
+  useEffect(() => {
+    const syncFromHash = () => {
+      const hashPage = getPageFromHash();
+      if (hashPage === 'accessDenied') {
+        setCurrentPage('accessDenied');
+        return;
+      }
+
+      const permission = pagePermission(hashPage);
+      if (!permission || can(permission)) {
+        setCurrentPage(hashPage);
+      } else {
+        showAccessDenied(currentPage);
+      }
+    };
+
+    syncFromHash();
+    window.addEventListener('hashchange', syncFromHash);
+    return () => window.removeEventListener('hashchange', syncFromHash);
+  }, [can, currentPage, showAccessDenied]);
+
+  useEffect(() => {
+    const handleForbidden = () => {
+      showAccessDenied(currentPage);
+    };
+
+    window.addEventListener('rbac-forbidden', handleForbidden);
+    return () => window.removeEventListener('rbac-forbidden', handleForbidden);
+  }, [currentPage, showAccessDenied]);
+
+  const navigateToPage = (page: ExtendedPage) => {
+    if (page === 'accessDenied') return;
+
+    const permission = pagePermission(page);
+    const hasAccess = !permission || can(permission);
+
+    if (!hasAccess) {
+      showAccessDenied(currentPage);
+      return;
+    }
+
+    setPreviousPage(currentPage === 'accessDenied' ? previousPage : currentPage);
+    setCurrentPage(page);
+    window.location.hash = toHash(page);
+  };
+
+  const handleGoHome = () => {
+    setPreviousPage(currentPage === 'accessDenied' ? previousPage : currentPage);
+    setCurrentPage('dashboard');
+    window.location.hash = '#dashboard';
+  };
+
+  const handleGoBack = () => {
+    const fallbackPage = previousPage === 'accessDenied' ? 'dashboard' : previousPage;
+    navigateToPage(fallbackPage);
+  };
 
   const handleChangePassword = async () => {
     if (!passForm.next || !passForm.current) { toast('error', 'يرجى ملء جميع الحقول'); return; }
@@ -115,17 +256,20 @@ function AppContent() {
   // Login screen
   if (!isAuthenticated) return <Login />;
 
+  const permission = pagePermission(currentPage);
+  const hasAccess = currentPage === 'accessDenied' || !permission || can(permission);
+
   return (
     <div className="min-h-screen bg-gray-100" dir="rtl">
       <Sidebar
         currentPage={currentPage}
-        onNavigate={(page) => setCurrentPage(page as ExtendedPage)}
+        onNavigate={page => navigateToPage(page as ExtendedPage)}
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
         globalSearch={globalSearch}
         onSearchChange={setGlobalSearch}
         isAdmin={isAdmin}
-        onUsersPage={() => setCurrentPage('users')}
+        onUsersPage={() => navigateToPage('users')}
       />
 
       {/* Mobile header toggle */}
@@ -167,7 +311,7 @@ function AppContent() {
               </button>
               {can('users.view') && (
                 <button
-                  onClick={() => { setCurrentPage('users'); setUserMenuOpen(false); }}
+                  onClick={() => { navigateToPage('users'); setUserMenuOpen(false); }}
                   className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition"
                 >
                   <User size={15} /> إدارة المستخدمين
@@ -187,12 +331,14 @@ function AppContent() {
       {/* Main Content */}
       <main className="lg:mr-64 min-h-screen transition-all">
         <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto pt-16 lg:pt-8">
-          {can(pagePermission(currentPage)) ? (
-            <PageRenderer key={currentPage} page={currentPage} />
+          {hasAccess ? (
+            currentPage === 'accessDenied' ? (
+              <AccessDeniedScreen onGoHome={handleGoHome} onGoBack={handleGoBack} />
+            ) : (
+              <PageRenderer key={currentPage} page={currentPage} />
+            )
           ) : (
-            <div className="bg-white rounded-xl border border-gray-100 p-8 text-center text-gray-500">
-              ليس لديك صلاحية عرض هذه الصفحة
-            </div>
+            <AccessDeniedScreen onGoHome={handleGoHome} onGoBack={handleGoBack} />
           )}
         </div>
       </main>

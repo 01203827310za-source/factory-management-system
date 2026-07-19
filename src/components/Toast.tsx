@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, useCallback, type ReactNode } from 'react';
 import { CheckCircle, XCircle, Info, X } from 'lucide-react';
 
 export interface ToastMessage {
@@ -27,8 +27,23 @@ interface ToastProviderProps {
 
 export function ToastProvider({ children }: ToastProviderProps) {
   const [toasts, setToasts] = useState<ToastList>([]);
+  const suppressNextToastRef = useRef(false);
+
+  useEffect(() => {
+    const handleForbidden = () => {
+      suppressNextToastRef.current = true;
+    };
+
+    window.addEventListener('rbac-forbidden', handleForbidden);
+    return () => window.removeEventListener('rbac-forbidden', handleForbidden);
+  }, []);
 
   const addToast = useCallback((type: 'success' | 'error' | 'info', message: string) => {
+    if (suppressNextToastRef.current) {
+      suppressNextToastRef.current = false;
+      return;
+    }
+
     const id = Date.now();
     setToasts(prev => [...prev, { id, type, message }]);
     setTimeout(() => {

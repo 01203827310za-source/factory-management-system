@@ -5,6 +5,13 @@
 
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 
+export class ForbiddenError extends Error {
+  constructor(message = 'غير مسموح بالوصول') {
+    super(message);
+    this.name = 'ForbiddenError';
+  }
+}
+
 // ===== HTTP Client =====
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const token = localStorage.getItem('auth_token');
@@ -24,8 +31,20 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     throw new Error('غير مصرح');
   }
 
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.message || 'خطأ في الخادم');
+  let data: any = null;
+  try {
+    data = await res.json();
+  } catch {
+    data = null;
+  }
+
+  if (res.status === 403) {
+    const message = data?.message || 'غير مسموح بالوصول';
+    window.dispatchEvent(new CustomEvent('rbac-forbidden', { detail: { path, message } }));
+    throw new ForbiddenError(message);
+  }
+
+  if (!res.ok) throw new Error(data?.message || 'خطأ في الخادم');
   return data as T;
 }
 
@@ -442,6 +461,8 @@ export interface DashboardMetrics {
   fabric_value: number;
   stock_value: number;
   accessories_value: number;
+  cutting_value: number;
+  wip_value: number;
   total_reservations: number;
 }
 // ===== FIXED ASSETS =====
