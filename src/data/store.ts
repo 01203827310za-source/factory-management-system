@@ -54,13 +54,17 @@ export const readyStockStore = {
     readyStockApi.update(id, data as Partial<ReadyStockRecord>) as Promise<ReadyStock>,
   remove: (id: number): Promise<void> => readyStockApi.remove(id).then(() => void 0),
 
-  // Computed values need cutting+sales+returns data - fetch in parallel
-  getComputed: async (): Promise<ComputedReadyStock[]> => {
+  // Computed values use optional cross-module data only when the user may view it.
+  getComputed: async (options?: {
+    includeSales?: boolean;
+    includeModelProd?: boolean;
+    includeReturns?: boolean;
+  }): Promise<ComputedReadyStock[]> => {
     const [stock, sales, modelProds, returns_] = await Promise.all([
       readyStockApi.getAll(),
-      salesApi.getAll(),
-      modelProdApi.getAll(),
-      returnsApi.getAll(),
+      options?.includeSales ? salesApi.getAll() : Promise.resolve([]),
+      options?.includeModelProd ? modelProdApi.getAll() : Promise.resolve([]),
+      options?.includeReturns ? returnsApi.getAll() : Promise.resolve([]),
     ]);
 
     const newProd: Record<string, number> = {};

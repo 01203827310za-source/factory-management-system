@@ -4,6 +4,7 @@ import { printOrdersApi } from '../services/api';
 import type { ReadyStock, ComputedReadyStock, PrintOrder } from '../types';
 import Modal from '../components/Modal';
 import { useToast } from '../components/Toast';
+import { useAuth } from '../contexts/AuthContext';
 import { Plus, Edit2, Trash2, Download, Search, RefreshCw, Printer, ChevronRight, ChevronLeft, History } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
@@ -27,6 +28,7 @@ const emptyPrint = () => ({
 
 export default function ReadyStock() {
   const toast = useToast();
+  const { can } = useAuth();
   const [items, setItems] = useState<ComputedReadyStock[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -50,7 +52,13 @@ export default function ReadyStock() {
 
   const loadData = async () => {
     setLoading(true);
-    try { setItems(await readyStockStore.getComputed()); }
+    try {
+      setItems(await readyStockStore.getComputed({
+        includeSales: can('sales.view'),
+        includeModelProd: can('model_prod.view'),
+        includeReturns: can('returns.view'),
+      }));
+    }
     catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'خطأ'); }
     finally { setLoading(false); }
   };

@@ -30,8 +30,8 @@ router.post('/login', async (req, res) => {
             where: { id: user.id },
             data: { last_login: new Date() },
         });
-        const token = jsonwebtoken_1.default.sign({ userId: user.id, username: user.username, role: user.role }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' });
         const permissions = await (0, rbacService_1.getEffectivePermissionKeys)(user.id);
+        const token = jsonwebtoken_1.default.sign({ userId: user.id, username: user.username, role: user.role, permissions }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' });
         return res.json({
             token,
             user: {

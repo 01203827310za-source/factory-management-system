@@ -33,12 +33,12 @@ router.post('/login', async (req: Request, res: Response) => {
       data: { last_login: new Date() },
     });
 
+    const permissions = await getEffectivePermissionKeys(user.id);
     const token = jwt.sign(
-      { userId: user.id, username: user.username, role: user.role },
+      { userId: user.id, username: user.username, role: user.role, permissions },
       process.env.JWT_SECRET!,
       { expiresIn: process.env.JWT_EXPIRES_IN || '7d' } as jwt.SignOptions
     );
-    const permissions = await getEffectivePermissionKeys(user.id);
 
     return res.json({
       token,
