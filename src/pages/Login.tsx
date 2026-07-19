@@ -109,6 +109,7 @@ export default function Login() {
               {[
                 { user: 'admin', pass: 'admin123', label: 'مدير', color: 'bg-purple-50 text-purple-700' },
                 { user: 'mido', pass: 'mido123', label: 'ميدو', color: 'bg-green-50 text-green-700' },
+                { user: 'nadia', pass: 'nadia123', label: 'نادية', color: 'bg-pink-50 text-pink-700' },
               ].map(acc => (
                 <button
                   key={acc.user}
