@@ -9,12 +9,13 @@ import {
 } from '../config/rbac';
 
 const ADMIN_ROLE_NAME = 'admin';
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
 
 export async function syncDefaultRbac() {
   const permissions = new Map<string, { id: number }>();
 
   for (const module of PERMISSION_MODULES) {
-    for (const action of module.actions ?? ACTIONS) {
+    for (const action of ACTIONS) {
       const key = `${module.key}.${action}`;
       const permission = await prisma.permission.upsert({
         where: { key },
@@ -69,10 +70,14 @@ export async function syncDefaultRbac() {
   const users = await prisma.user.findMany({ select: { id: true, role: true, role_id: true, username: true } });
 
   for (const user of users) {
-    const targetRoleName = LEGACY_ROLE_TO_RBAC_ROLE[user.role] ?? user.role ?? 'viewer';
+    const isBuiltInAdmin = user.username === ADMIN_USERNAME || user.username === 'admin';
+    const targetRoleName = isBuiltInAdmin
+      ? ADMIN_ROLE_NAME
+      : LEGACY_ROLE_TO_RBAC_ROLE[user.role] ?? user.role ?? 'viewer';
     const roleId = roleByName.get(targetRoleName) ?? roleByName.get('viewer');
-    if (roleId && user.role_id !== roleId) {
-      await prisma.user.update({ where: { id: user.id }, data: { role_id: roleId } });
+    const roleName = roleByName.has(targetRoleName) ? targetRoleName : 'viewer';
+    if (roleId && (user.role_id !== roleId || user.role !== roleName)) {
+      await prisma.user.update({ where: { id: user.id }, data: { role: roleName, role_id: roleId } });
     }
   }
 

@@ -7,18 +7,27 @@ const prisma = new PrismaClient();
 async function main() {
   console.log('🌱 Starting database seed...');
 
+  await syncDefaultRbac();
+
   // ===== USERS =====
+  const adminUsername = process.env.ADMIN_USERNAME || 'admin';
   const adminPassword = await bcrypt.hash(process.env.ADMIN_PASSWORD || 'admin123', 12);
   const midoPassword  = await bcrypt.hash('mido123', 12);
+  const adminRole = await prisma.role.findUnique({ where: { name: 'admin' }, select: { id: true } });
 
   await prisma.user.upsert({
-    where:  { username: 'admin' },
-    update: {},
+    where:  { username: adminUsername },
+    update: {
+      full_name: process.env.ADMIN_FULLNAME || 'مدير النظام',
+      role: 'admin',
+      role_id: adminRole?.id,
+    },
     create: {
-      username:  process.env.ADMIN_USERNAME || 'admin',
+      username:  adminUsername,
       password:  adminPassword,
       full_name: process.env.ADMIN_FULLNAME || 'مدير النظام',
       role:      'admin',
+      role_id:   adminRole?.id,
     },
   });
 

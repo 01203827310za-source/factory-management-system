@@ -119,3 +119,22 @@ BEGIN
       ON DELETE CASCADE ON UPDATE CASCADE;
   END IF;
 END $$;
+
+INSERT INTO "roles" ("name", "display_name", "description", "is_system")
+VALUES ('admin', 'Administrator', 'Full system access', true)
+ON CONFLICT ("name") DO UPDATE
+SET "display_name" = EXCLUDED."display_name",
+    "description" = EXCLUDED."description",
+    "is_system" = true;
+
+UPDATE "users"
+SET "role" = 'admin',
+    "role_id" = (SELECT "id" FROM "roles" WHERE "name" = 'admin')
+WHERE "username" = 'admin';
+
+DELETE FROM "user_permissions"
+WHERE "user_id" IN (
+  SELECT "id"
+  FROM "users"
+  WHERE "username" = 'admin' OR "role" = 'admin'
+);

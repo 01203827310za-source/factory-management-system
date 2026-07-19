@@ -36,12 +36,16 @@ export const PERMISSION_MODULES: PermissionModule[] = [
 ];
 
 export const ALL_PERMISSION_KEYS = PERMISSION_MODULES.flatMap(module =>
+  ACTIONS.map(action => `${module.key}.${action}`)
+);
+
+const defaultRolePermissionKeys = PERMISSION_MODULES.flatMap(module =>
   (module.actions ?? ACTIONS).map(action => `${module.key}.${action}`)
 );
 
 const readOnly = PERMISSION_MODULES.map(module => `${module.key}.view`);
 
-const warehousePermissions = ALL_PERMISSION_KEYS.filter(key =>
+const warehousePermissions = defaultRolePermissionKeys.filter(key =>
   key.startsWith('dashboard.') ||
   key.startsWith('fabric.') ||
   key.startsWith('fabric_purchases.') ||
@@ -53,7 +57,7 @@ const warehousePermissions = ALL_PERMISSION_KEYS.filter(key =>
   key.startsWith('reports.')
 );
 
-const salesPermissions = ALL_PERMISSION_KEYS.filter(key =>
+const salesPermissions = defaultRolePermissionKeys.filter(key =>
   key.startsWith('dashboard.') ||
   key.startsWith('sales.') ||
   key.startsWith('returns.') ||
@@ -63,7 +67,7 @@ const salesPermissions = ALL_PERMISSION_KEYS.filter(key =>
   key.startsWith('reports.')
 );
 
-const accountantPermissions = ALL_PERMISSION_KEYS.filter(key =>
+const accountantPermissions = defaultRolePermissionKeys.filter(key =>
   key.startsWith('dashboard.') ||
   key.startsWith('expenses.') ||
   key.startsWith('debts.') ||
@@ -86,7 +90,7 @@ export const DEFAULT_ROLES = [
     name: 'manager',
     display_name: 'Factory Manager',
     description: 'Operational access without user administration',
-    permissions: ALL_PERMISSION_KEYS.filter(key => !key.startsWith('users.') && !key.startsWith('settings.')),
+    permissions: defaultRolePermissionKeys.filter(key => !key.startsWith('users.') && !key.startsWith('settings.')),
   },
   {
     name: 'warehouse',
