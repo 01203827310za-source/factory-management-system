@@ -70,8 +70,33 @@ function toHash(page: ExtendedPage) {
   }
 }
 
+const FIRST_ALLOWED_PAGE_ORDER: ExtendedPage[] = [
+  'dashboard',
+  'fabric',
+  'readyStock',
+  'cutting',
+  'modelProd',
+  'sales',
+  'expenses',
+  'debts',
+  'clientAccts',
+  'accessories',
+  'fixedAssets',
+  'reports',
+  'users',
+  'aiAssistant',
+  'financialCenter',
+  'payroll',
+  'auditLog',
+];
+
+function hasExplicitHash() {
+  return typeof window !== 'undefined' && window.location.hash.replace(/^#\/?/, '').trim().length > 0;
+}
+
 function pagePermission(page: ExtendedPage) {
   const permissions: Partial<Record<ExtendedPage, string>> = {
+    dashboard: 'dashboard.view',
     sales: 'sales.view',
     expenses: 'expenses.view',
     readyStock: 'ready_stock.view',
@@ -90,6 +115,13 @@ function pagePermission(page: ExtendedPage) {
     users: 'users.view',
   };
   return permissions[page];
+}
+
+function findFirstAllowedPage(can: (permission: string) => boolean): ExtendedPage | null {
+  return FIRST_ALLOWED_PAGE_ORDER.find(page => {
+    const permission = pagePermission(page);
+    return !!permission && can(permission);
+  }) ?? null;
 }
 
 function PageRenderer({ page }: { page: ExtendedPage }) {
@@ -115,7 +147,15 @@ function PageRenderer({ page }: { page: ExtendedPage }) {
   }
 }
 
-function AccessDeniedScreen({ onGoHome, onGoBack }: { onGoHome: () => void; onGoBack: () => void }) {
+function AccessDeniedScreen({
+  onGoHome,
+  onGoBack,
+  message,
+}: {
+  onGoHome: () => void;
+  onGoBack: () => void;
+  message?: string;
+}) {
   return (
     <div className="flex min-h-[65vh] items-center justify-center px-4">
       <div className="w-full max-w-xl rounded-3xl border border-gray-200 bg-white p-8 text-center shadow-sm">
@@ -123,7 +163,7 @@ function AccessDeniedScreen({ onGoHome, onGoBack }: { onGoHome: () => void; onGo
           <Lock size={30} />
         </div>
         <h1 className="text-2xl font-bold text-gray-800">🔒 ليس لديك صلاحية للوصول لهذه الصفحة</h1>
-        <p className="mt-3 text-sm leading-7 text-gray-600">يرجى التواصل مع مدير النظام إذا كنت تحتاج هذه الصلاحية.</p>
+        <p className="mt-3 text-sm leading-7 text-gray-600">{message ?? 'يرجى التواصل مع مدير النظام إذا كنت تحتاج هذه الصلاحية.'}</p>
         <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
           <button
             onClick={onGoHome}
@@ -156,6 +196,9 @@ function AppContent() {
   const [passLoading, setPassLoading] = useState(false);
   const permissionsLoading = isAuthenticated && !Array.isArray(user?.permissions);
   const authReady = !isLoading && !permissionsLoading;
+  const firstAllowedPage = authReady && isAuthenticated ? findFirstAllowedPage(can) : null;
+  const hasNoViewPermissions = authReady && isAuthenticated && !firstAllowedPage;
+  const accessDeniedMessage = hasNoViewPermissions ? 'لم يقم مدير النظام بمنحك أي صلاحيات.' : undefined;
 
   const showAccessDenied = useCallback((fromPage?: ExtendedPage) => {
     setPreviousPage(prev => {
@@ -172,6 +215,22 @@ function AppContent() {
     if (!authReady || !isAuthenticated) return;
 
     const syncFromHash = () => {
+      const shouldRedirectAfterLogin = sessionStorage.getItem('redirect_after_login') === '1';
+      if (shouldRedirectAfterLogin) {
+        sessionStorage.removeItem('redirect_after_login');
+      }
+
+      if (shouldRedirectAfterLogin || !hasExplicitHash()) {
+        if (firstAllowedPage) {
+          setPreviousPage(firstAllowedPage);
+          setCurrentPage(firstAllowedPage);
+          window.location.hash = toHash(firstAllowedPage);
+        } else {
+          showAccessDenied(currentPage);
+        }
+        return;
+      }
+
       const hashPage = getPageFromHash();
       if (hashPage === 'accessDenied') {
         setCurrentPage('accessDenied');
@@ -179,21 +238,21 @@ function AppContent() {
       }
 
       const permission = pagePermission(hashPage);
-      if (!permission || can(permission)) {
+      if (permission && can(permission)) {
         setCurrentPage(hashPage);
       } else {
-        showAccessDenied(currentPage);
+        showAccessDenied(hashPage);
       }
     };
 
     syncFromHash();
     window.addEventListener('hashchange', syncFromHash);
     return () => window.removeEventListener('hashchange', syncFromHash);
-  }, [authReady, can, currentPage, isAuthenticated, showAccessDenied]);
+  }, [authReady, can, currentPage, firstAllowedPage, isAuthenticated, showAccessDenied]);
 
   useEffect(() => {
     const handleForbidden = (event: Event) => {
-      if (!authReady || !isAuthenticated || currentPage === 'dashboard') return;
+      if (!authReady || !isAuthenticated) return;
 
       const permission = (event as CustomEvent<{ permission?: string }>).detail?.permission;
       if (permission && !permission.endsWith('.view')) return;
@@ -209,7 +268,7 @@ function AppContent() {
     if (page === 'accessDenied' || !authReady) return;
 
     const permission = pagePermission(page);
-    const hasAccess = !permission || can(permission);
+    const hasAccess = !!permission && can(permission);
 
     if (!hasAccess) {
       showAccessDenied(currentPage);
@@ -222,13 +281,15 @@ function AppContent() {
   };
 
   const handleGoHome = () => {
-    setPreviousPage(currentPage === 'accessDenied' ? previousPage : currentPage);
-    setCurrentPage('dashboard');
-    window.location.hash = '#dashboard';
+    if (firstAllowedPage) {
+      navigateToPage(firstAllowedPage);
+    } else {
+      showAccessDenied(currentPage);
+    }
   };
 
   const handleGoBack = () => {
-    const fallbackPage = previousPage === 'accessDenied' ? 'dashboard' : previousPage;
+    const fallbackPage = previousPage === 'accessDenied' ? firstAllowedPage ?? 'accessDenied' : previousPage;
     navigateToPage(fallbackPage);
   };
 
@@ -265,7 +326,7 @@ function AppContent() {
   if (!isAuthenticated) return <Login />;
 
   const permission = pagePermission(currentPage);
-  const hasAccess = currentPage === 'accessDenied' || !permission || can(permission);
+  const hasAccess = currentPage === 'accessDenied' || (!!permission && can(permission));
 
   return (
     <div className="min-h-screen bg-gray-100" dir="rtl">
@@ -341,12 +402,12 @@ function AppContent() {
         <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto pt-16 lg:pt-8">
           {hasAccess ? (
             currentPage === 'accessDenied' ? (
-              <AccessDeniedScreen onGoHome={handleGoHome} onGoBack={handleGoBack} />
+              <AccessDeniedScreen onGoHome={handleGoHome} onGoBack={handleGoBack} message={accessDeniedMessage} />
             ) : (
               <PageRenderer key={currentPage} page={currentPage} />
             )
           ) : (
-            <AccessDeniedScreen onGoHome={handleGoHome} onGoBack={handleGoBack} />
+            <AccessDeniedScreen onGoHome={handleGoHome} onGoBack={handleGoBack} message={accessDeniedMessage} />
           )}
         </div>
       </main>

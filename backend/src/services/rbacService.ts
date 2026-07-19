@@ -172,8 +172,6 @@ const apiModuleBySegment: Record<string, string> = {
 export function permissionForRequest(method: string, path: string): string | null {
   const [, rawSegment, ...rest] = path.split('/');
   const segment = rawSegment || '';
-  if (segment === 'dashboard') return null;
-
   const module = apiModuleBySegment[segment];
   if (!module) return null;
 

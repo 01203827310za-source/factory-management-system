@@ -55,10 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const can = useCallback((permission: string) => {
-    if (!user) return false;
-    if (permission === 'dashboard.view') return true;
-    if (user.role === 'admin') return true;
-    return user.permissions?.includes(permission) ?? false;
+    return user?.permissions?.includes(permission) ?? false;
   }, [user]);
 
   return (
