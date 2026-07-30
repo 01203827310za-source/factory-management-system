@@ -17,7 +17,7 @@ router.get('/', async (_req: Request, res: Response) => {
       prisma.fabricWarehouse.findMany(),
       prisma.readyStock.findMany(),
       prisma.accessoriesWarehouse.findMany(),
-      prisma.asset.findMany(),
+      prisma.fixedAsset.findMany(),
     ]);
 
     const depositIn   = sales.reduce((s, sale) => s + sale.deposit_paid, 0);
@@ -40,7 +40,7 @@ router.get('/', async (_req: Request, res: Response) => {
       sales.filter(s => s.order_status === 'لم يتم الصرف').reduce((s, sale) => s + sale.remaining, 0) +
       clientAccts.reduce((s, ca) => s + ca.remaining, 0);
 
-    const cashAvailable = totalIn - totalOut - remainingDebts;
+    const cashAvailable = totalIn - totalOut;
 
     const cuttingOrders = await prisma.cuttingOrder.findMany();
     const fabricConsumed: Record<string, number> = {};
@@ -89,12 +89,11 @@ router.get('/', async (_req: Request, res: Response) => {
     });
 
     const accessoriesValue = accessories.reduce((s, a) => s + Math.max(0, a.qty_in - a.qty_consumed) * a.cost, 0);
-    const netCash          = totalIn - totalOut;
-    const totalCurrentAssets = fabricValue + stockValue + accessoriesValue + moneyOwedToUs + netCash - remainingDebts;
+    const totalCurrentAssets = fabricValue + stockValue + accessoriesValue + moneyOwedToUs + cashAvailable;
 
-    const totalFixedAssets = fixedAssets.reduce((s, a) => s + a.value, 0);
+    const totalFixedAssets = fixedAssets.reduce((s, a) => s + a.purchase_price, 0);
     const totalAssets      = totalCurrentAssets + totalFixedAssets;
-    const netPosition      = totalAssets - remainingDebts;
+    const netPosition      = totalAssets;
 
     return res.json({
       fabric_value:         fabricValue,
