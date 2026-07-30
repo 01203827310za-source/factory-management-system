@@ -55,8 +55,8 @@ export default function ModelProductionPage() {
 
   const [cutNumbers, setCutNumbers] = useState<number[]>([]);
   const [cutColors, setCutColors] = useState<Record<number, string[]>>({});
+  const [cutColorLoading, setCutColorLoading] = useState<Record<number, boolean>>({});
   const [stockCodes, setStockCodes] = useState<string[]>([]);
-  const [stockColors, setStockColors] = useState<Record<string, string[]>>({});
 
   const [form, setForm] = useState(emptyForm());
 
@@ -80,12 +80,6 @@ export default function ModelProductionPage() {
       setCutColors(colorMap);
 
       setStockCodes([...new Set(stock.map(s => s.model_code))]);
-      const colors: Record<string, string[]> = {};
-      stock.forEach(s => {
-        if (!colors[s.model_code]) colors[s.model_code] = [];
-        if (!colors[s.model_code].includes(s.color)) colors[s.model_code].push(s.color);
-      });
-      setStockColors(colors);
     } catch (e: unknown) {
       toast('error', e instanceof Error ? e.message : 'خطأ');
     } finally {
@@ -95,6 +89,39 @@ export default function ModelProductionPage() {
 
   useEffect(() => { loadData(); }, []);
 
+  const loadColorsForCut = async (cutNumber: number): Promise<string[]> => {
+    if (!cutNumber) return [];
+    setCutColorLoading(prev => ({ ...prev, [cutNumber]: true }));
+    try {
+      const colors = await cuttingStore.getColors(cutNumber);
+      setCutColors(prev => ({ ...prev, [cutNumber]: colors }));
+      return colors;
+    } catch (e: unknown) {
+      toast('error', e instanceof Error ? e.message : 'خطأ');
+      setCutColors(prev => ({ ...prev, [cutNumber]: [] }));
+      return [];
+    } finally {
+      setCutColorLoading(prev => ({ ...prev, [cutNumber]: false }));
+    }
+  };
+
+  const productionColorFromParts = (parts: PartEntry[]) => parts[0]?.color || '';
+
+  useEffect(() => {
+    setForm(prev => {
+      let changed = false;
+      const parts = prev.parts.map(part => {
+        const colors = cutColors[part.cut_number] || [];
+        if (part.cut_number && !part.color && colors.length === 1) {
+          changed = true;
+          return { ...part, color: colors[0] };
+        }
+        return part;
+      });
+      return changed ? { ...prev, parts, color: productionColorFromParts(parts) } : prev;
+    });
+  }, [cutColors]);
+
   const openAdd = () => {
     setEditItem(null);
     setForm(emptyForm());
@@ -102,16 +129,17 @@ export default function ModelProductionPage() {
   };
 
   const openEdit = (item: ModelProduction) => {
+    const parts = (item.parts && item.parts.length > 0)
+      ? item.parts.map(p => ({ part_type: p.part_type, cut_number: p.cut_number, color: p.color || '' }))
+      : [{ part_type: '', cut_number: item.cut_number, color: item.color || '' }];
     setEditItem(item);
     setForm({
       date: item.date,
-      parts: (item.parts && item.parts.length > 0)
-        ? item.parts.map(p => ({ part_type: p.part_type, cut_number: p.cut_number, color: p.color || '' }))
-        : [{ part_type: '', cut_number: item.cut_number, color: '' }],
+      parts,
       model_code: item.model_code,
       qty_from_cutting: item.qty_from_cutting,
       model_description: item.model_description,
-      color: item.color,
+      color: productionColorFromParts(parts) || item.color,
       sizes: item.sizes,
       status: item.status,
       wastage: item.wastage,
@@ -120,16 +148,31 @@ export default function ModelProductionPage() {
       warehouse_entry_date: item.warehouse_entry_date,
     });
     setModalOpen(true);
+    [...new Set(parts.map(p => p.cut_number).filter(Boolean))].forEach(cutNumber => {
+      void loadColorsForCut(cutNumber);
+    });
   };
 
   const updatePart = (idx: number, field: keyof PartEntry, value: string | number) => {
-    const next = form.parts.map((p, i) => i === idx ? { ...p, [field]: value } : p);
-    setForm({ ...form, parts: next });
+    setForm(prev => {
+      const parts = prev.parts.map((p, i) => i === idx ? { ...p, [field]: value } : p);
+      return { ...prev, parts, color: productionColorFromParts(parts) };
+    });
   };
 
-  const updatePartCut = (idx: number, newCut: number) => {
-    const next = form.parts.map((p, i) => i === idx ? { ...p, cut_number: newCut, color: '' } : p);
-    setForm({ ...form, parts: next });
+  const updatePartCut = async (idx: number, newCut: number) => {
+    setForm(prev => {
+      const parts = prev.parts.map((p, i) => i === idx ? { ...p, cut_number: newCut, color: '' } : p);
+      return { ...prev, parts, color: productionColorFromParts(parts) };
+    });
+    const colors = await loadColorsForCut(newCut);
+    if (colors.length === 1) {
+      setForm(prev => {
+        if (prev.parts[idx]?.cut_number !== newCut) return prev;
+        const parts = prev.parts.map((p, i) => i === idx ? { ...p, color: colors[0] } : p);
+        return { ...prev, parts, color: productionColorFromParts(parts) };
+      });
+    }
   };
 
   const addPart = () => {
@@ -138,7 +181,8 @@ export default function ModelProductionPage() {
   };
 
   const removePart = (idx: number) => {
-    setForm({ ...form, parts: form.parts.filter((_, i) => i !== idx) });
+    const parts = form.parts.filter((_, i) => i !== idx);
+    setForm({ ...form, parts, color: productionColorFromParts(parts) });
   };
 
   const handleSave = async () => {
@@ -149,9 +193,25 @@ export default function ModelProductionPage() {
       toast('error', `يرجى تحديد رقم القصة واللون للجزء ${badPart + 1}`);
       return;
     }
+    const noColorPart = form.parts.findIndex(p => (cutColors[p.cut_number] || []).length === 0);
+    if (noColorPart >= 0) {
+      toast('error', 'لا توجد ألوان متاحة لهذا رقم القص');
+      return;
+    }
+    const invalidColorPart = form.parts.findIndex(p => !(cutColors[p.cut_number] || []).includes(p.color));
+    if (invalidColorPart >= 0) {
+      toast('error', `لا يمكن اختيار لون غير تابع لرقم القص في الجزء ${invalidColorPart + 1}`);
+      return;
+    }
+    const selectedColor = productionColorFromParts(form.parts);
+    const mixedColorPart = form.parts.findIndex(p => p.color !== selectedColor);
+    if (mixedColorPart >= 0) {
+      toast('error', 'يجب أن تكون كل الأجزاء بنفس اللون');
+      return;
+    }
     setSaving(true);
     try {
-      const payload = { ...form };
+      const payload = { ...form, color: selectedColor };
       if (editItem) {
         await modelProdStore.update(editItem.id, payload as Partial<ModelProduction>);
         toast('success', 'تم التعديل');
@@ -344,8 +404,12 @@ export default function ModelProductionPage() {
               )}
             </div>
             <div className="space-y-2">
-              {form.parts.map((part, idx) => (
-                <div key={idx} className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg border border-gray-200">
+              {form.parts.map((part, idx) => {
+                const colors = cutColors[part.cut_number] || [];
+                const colorsLoading = !!cutColorLoading[part.cut_number];
+                return (
+                <div key={idx} className="space-y-1">
+                <div className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg border border-gray-200">
                   <span className="text-xs text-gray-400 min-w-[40px] text-center">جزء {idx + 1}</span>
 
                   <input
@@ -358,7 +422,7 @@ export default function ModelProductionPage() {
                   <select
                     className={`${ic} flex-1`}
                     value={part.cut_number}
-                    onChange={e => updatePartCut(idx, parseInt(e.target.value) || 0)}
+                    onChange={e => { void updatePartCut(idx, parseInt(e.target.value) || 0); }}
                   >
                     <option value={0}>رقم القصة *</option>
                     {cutNumbers.map(n => <option key={n} value={n}>{n}</option>)}
@@ -368,10 +432,10 @@ export default function ModelProductionPage() {
                     className={`${ic} flex-1 ${!part.color && part.cut_number ? 'border-red-400' : ''}`}
                     value={part.color}
                     onChange={e => updatePart(idx, 'color', e.target.value)}
-                    disabled={!part.cut_number}
+                    disabled={!part.cut_number || colorsLoading || colors.length <= 1}
                   >
-                    <option value="">اللون *</option>
-                    {(cutColors[part.cut_number] || []).map(c => (
+                    <option value="">{colorsLoading ? 'جارٍ تحميل الألوان...' : 'اللون *'}</option>
+                    {colors.map(c => (
                       <option key={c} value={c}>{c}</option>
                     ))}
                   </select>
@@ -386,7 +450,12 @@ export default function ModelProductionPage() {
                     </button>
                   )}
                 </div>
-              ))}
+                {part.cut_number > 0 && !colorsLoading && colors.length === 0 && (
+                  <p className="text-xs text-red-600 px-2">لا توجد ألوان متاحة لهذا رقم القص</p>
+                )}
+                </div>
+              );
+              })}
             </div>
           </div>
 
@@ -407,9 +476,9 @@ export default function ModelProductionPage() {
           {/* Color */}
           <div>
             <label className={lc}>اللون</label>
-            <select className={ic} value={form.color} onChange={e => setForm({ ...form, color: e.target.value })}>
-              <option value="">اختر</option>
-              {(stockColors[form.model_code] || []).map(c => <option key={c} value={c}>{c}</option>)}
+            <select className={ic} value={form.color} disabled>
+              <option value="">اختر اللون من رقم القص</option>
+              {form.color && <option value={form.color}>{form.color}</option>}
             </select>
           </div>
 

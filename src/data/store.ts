@@ -164,6 +164,7 @@ export const accessoriesStore = {
 // ===== CUTTING =====
 export const cuttingStore = {
   getAll: (): Promise<CuttingOrder[]> => cuttingApi.getAll() as Promise<CuttingOrder[]>,
+  getColors: (cutNumber: number): Promise<string[]> => cuttingApi.getColors(cutNumber),
   add: (item: Omit<CuttingOrder, 'id' | 'created_at'>): Promise<CuttingOrder> =>
     cuttingApi.add(item as Omit<CuttingRecord, 'id' | 'created_at'>) as Promise<CuttingOrder>,
   update: (id: number, data: Partial<CuttingOrder>): Promise<CuttingOrder> =>

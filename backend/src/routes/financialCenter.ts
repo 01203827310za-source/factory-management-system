@@ -56,21 +56,35 @@ router.get('/', async (_req: Request, res: Response) => {
 
     const modelProds = await prisma.modelProduction.findMany();
     const newProd: Record<string, number> = {};
-    modelProds.forEach(mp => { newProd[mp.model_code] = (newProd[mp.model_code] || 0) + mp.qty_received; });
+    modelProds.forEach(mp => {
+      const key = `${mp.model_code}|${mp.color || ''}`;
+      newProd[key] = (newProd[key] || 0) + mp.qty_received;
+    });
     const totalSalesQty: Record<string, number> = {};
     sales.forEach(s => {
-      [{ code: s.model1_code, qty: s.model1_qty }, { code: s.model2_code, qty: s.model2_qty },
-       { code: s.model3_code, qty: s.model3_qty }, { code: s.model4_code, qty: s.model4_qty },
-       { code: s.model5_code, qty: s.model5_qty }].forEach(({ code, qty }) => {
-        if (code && qty > 0) totalSalesQty[code] = (totalSalesQty[code] || 0) + qty;
+      [{ code: s.model1_code, qty: s.model1_qty, color: s.model1_color },
+       { code: s.model2_code, qty: s.model2_qty, color: s.model2_color },
+       { code: s.model3_code, qty: s.model3_qty, color: s.model3_color },
+       { code: s.model4_code, qty: s.model4_qty, color: s.model4_color },
+       { code: s.model5_code, qty: s.model5_qty, color: s.model5_color }].forEach(({ code, qty, color }) => {
+        if (code && qty > 0) {
+          const key = `${code}|${color || ''}`;
+          totalSalesQty[key] = (totalSalesQty[key] || 0) + qty;
+        }
       });
     });
     const returnQty: Record<string, number> = {};
-    returns_.forEach(r => { if (r.model_code) returnQty[r.model_code] = (returnQty[r.model_code] || 0) + r.model_qty; });
+    returns_.forEach(r => {
+      if (r.model_code) {
+        const key = `${r.model_code}|${r.model_color || ''}`;
+        returnQty[key] = (returnQty[key] || 0) + r.model_qty;
+      }
+    });
 
     let stockValue = 0;
     readyStock.forEach(rs => {
-      const actual = Math.max(0, rs.opening_balance + (newProd[rs.model_code] || 0) - (totalSalesQty[rs.model_code] || 0) + (returnQty[rs.model_code] || 0));
+      const key = `${rs.model_code}|${rs.color || ''}`;
+      const actual = Math.max(0, rs.opening_balance + (newProd[key] || 0) - (totalSalesQty[key] || 0) + (returnQty[key] || 0));
       stockValue += actual * rs.cost_per_piece;
     });
 

@@ -259,6 +259,23 @@ exports.cuttingRouter.get('/', async (_req, res) => {
         return res.status(500).json({ message: 'خطأ' });
     }
 });
+exports.cuttingRouter.get('/:cutNumber/colors', async (req, res) => {
+    const cut_number = parseInt(req.params.cutNumber);
+    if (!cut_number)
+        return res.status(400).json({ message: 'رقم القص مطلوب' });
+    try {
+        const cuts = await prisma_1.default.cuttingOrder.findMany({
+            where: { cut_number },
+            orderBy: { id: 'asc' },
+            select: { color: true },
+        });
+        const colors = [...new Set(cuts.map(c => (c.color || '').trim()).filter(Boolean))];
+        return res.json(colors);
+    }
+    catch {
+        return res.status(500).json({ message: 'خطأ في جلب الألوان' });
+    }
+});
 exports.cuttingRouter.post('/', auth_1.requireManager, async (req, res) => {
     try {
         const rec = await prisma_1.default.cuttingOrder.create({ data: req.body });
@@ -316,6 +333,97 @@ async function getAvailableForPart(cut_number, color, excludeModelId) {
     const used = usedParts.reduce((s, p) => s + p.model.qty_from_cutting, 0);
     return { total, used, available: total - used };
 }
+async function getColorsForCut(cut_number) {
+    const cuts = await prisma_1.default.cuttingOrder.findMany({
+        where: { cut_number },
+        orderBy: { id: 'asc' },
+        select: { color: true },
+    });
+    return [...new Set(cuts.map(c => (c.color || '').trim()).filter(Boolean))];
+}
+function normalizeParts(parts, fallbackCut, fallbackColor) {
+    const rawParts = Array.isArray(parts) && parts.length > 0
+        ? parts
+        : [{
+                part_type: '',
+                cut_number: parseInt(String(fallbackCut || 0)) || 0,
+                color: String(fallbackColor || ''),
+            }];
+    return rawParts.map(p => ({
+        part_type: p.part_type || '',
+        cut_number: parseInt(String(p.cut_number || 0)) || 0,
+        color: (p.color || '').trim(),
+    }));
+}
+async function validateProductionParts(cleanParts, qty, excludeModelId) {
+    if (cleanParts.length === 0)
+        throw new Error('MISSING_PARTS');
+    const firstColor = cleanParts[0].color;
+    for (const p of cleanParts) {
+        if (!p.cut_number || !p.color)
+            throw new Error('MISSING_PARTS');
+        if (p.color !== firstColor)
+            throw new Error('MIXED_COLORS');
+        const availableColors = await getColorsForCut(p.cut_number);
+        if (availableColors.length === 0)
+            throw new Error('NO_COLORS');
+        if (!availableColors.includes(p.color))
+            throw new Error('INVALID_COLOR');
+        const { available } = await getAvailableForPart(p.cut_number, p.color, excludeModelId);
+        if (available < qty) {
+            const err = new Error('INSUFFICIENT_CUTTING');
+            err.partCut = p.cut_number;
+            err.partColor = p.color;
+            err.available = available;
+            err.required = qty;
+            throw err;
+        }
+    }
+    return { primaryCut: cleanParts[0].cut_number, productionColor: firstColor };
+}
+async function ensureReadyStockRow(tx, data, color) {
+    if (!data.model_code || !color)
+        return;
+    const existing = await tx.readyStock.findFirst({
+        where: { model_code: data.model_code, color },
+    });
+    if (existing)
+        return;
+    await tx.readyStock.create({
+        data: {
+            model_code: data.model_code,
+            product_name: data.model_description || data.model_code,
+            color,
+            opening_balance: 0,
+            cost_per_piece: parseFloat(data.cost_per_piece) || 0,
+            location: '',
+            reserved_quantity: 0,
+        },
+    });
+}
+function modelProductionError(res, err) {
+    if (!(err instanceof Error))
+        return res.status(500).json({ message: 'خطأ' });
+    if (err.message === 'MISSING_PARTS') {
+        return res.status(400).json({ message: 'يرجى تحديد رقم القص واللون' });
+    }
+    if (err.message === 'NO_COLORS') {
+        return res.status(400).json({ message: 'لا توجد ألوان متاحة لهذا رقم القص' });
+    }
+    if (err.message === 'INVALID_COLOR') {
+        return res.status(400).json({ message: 'لا يمكن اختيار لون غير تابع لرقم القص المحدد' });
+    }
+    if (err.message === 'MIXED_COLORS') {
+        return res.status(400).json({ message: 'يجب أن تكون كل الأجزاء بنفس اللون' });
+    }
+    if (err.message === 'INSUFFICIENT_CUTTING') {
+        const e = err;
+        return res.status(400).json({
+            message: `رصيد غير كافٍ للقصة ${e.partCut} - ${e.partColor}.\nالمتاح: ${e.available}\nالمطلوب: ${e.required}`,
+        });
+    }
+    return res.status(500).json({ message: 'خطأ' });
+}
 exports.modelProdRouter.get('/', async (_req, res) => {
     try {
         return res.json(await prisma_1.default.modelProduction.findMany({
@@ -331,40 +439,30 @@ exports.modelProdRouter.post('/', auth_1.requireManager, async (req, res) => {
     try {
         const { parts, ...data } = req.body;
         const qty = parseInt(data.qty_from_cutting) || 0;
-        if (Array.isArray(parts) && parts.length > 0) {
-            for (const p of parts) {
-                const partCut = p.cut_number || 0;
-                const partColor = (p.color || '').trim();
-                if (partCut > 0 && partColor) {
-                    const { available } = await getAvailableForPart(partCut, partColor);
-                    if (available < qty) {
-                        return res.status(400).json({
-                            message: `رصيد غير كافٍ للقصة ${partCut} - ${partColor}.\nالمتاح: ${available}\nالمطلوب: ${qty}`,
-                        });
-                    }
-                }
-            }
-        }
-        const primaryCut = Array.isArray(parts) && parts.length > 0
-            ? (parts[0].cut_number || 0) : (data.cut_number || 0);
-        const rec = await prisma_1.default.modelProduction.create({ data: { ...data, cut_number: primaryCut } });
-        if (Array.isArray(parts) && parts.length > 0) {
-            await prisma_1.default.modelPart.createMany({
-                data: parts.map(p => ({
+        const cleanParts = normalizeParts(parts, data.cut_number, data.color);
+        const validated = await validateProductionParts(cleanParts, qty);
+        const safeData = { ...data, color: validated.productionColor };
+        const createdFresh = await prisma_1.default.$transaction(async (tx) => {
+            const rec = await tx.modelProduction.create({
+                data: { ...safeData, cut_number: validated.primaryCut },
+            });
+            await tx.modelPart.createMany({
+                data: cleanParts.map(p => ({
                     model_id: rec.id,
-                    part_type: p.part_type || '',
-                    cut_number: p.cut_number || 0,
-                    color: (p.color || '').trim(),
+                    part_type: p.part_type,
+                    cut_number: p.cut_number,
+                    color: p.color,
                 })),
             });
-        }
-        const fresh = await prisma_1.default.modelProduction.findUnique({ where: { id: rec.id }, include: PARTS_INCLUDE });
-        (0, auditHelper_1.logAudit)({ user: req.user, module: 'ModelProduction', action: 'CREATE', record_id: rec.id,
-            after_data: fresh, description: `إضافة إنتاج موديل: ${rec.model_code} - ${rec.model_description}` });
-        return res.status(201).json(fresh);
+            await ensureReadyStockRow(tx, safeData, validated.productionColor);
+            return tx.modelProduction.findUnique({ where: { id: rec.id }, include: PARTS_INCLUDE });
+        });
+        (0, auditHelper_1.logAudit)({ user: req.user, module: 'ModelProduction', action: 'CREATE', record_id: createdFresh?.id || 0,
+            after_data: createdFresh, description: `إضافة إنتاج موديل: ${createdFresh?.model_code} - ${createdFresh?.model_description}` });
+        return res.status(201).json(createdFresh);
     }
-    catch {
-        return res.status(500).json({ message: 'خطأ' });
+    catch (err) {
+        return modelProductionError(res, err);
     }
 });
 exports.modelProdRouter.put('/:id', auth_1.requireManager, async (req, res) => {
@@ -372,45 +470,34 @@ exports.modelProdRouter.put('/:id', auth_1.requireManager, async (req, res) => {
     try {
         const { parts, ...data } = req.body;
         const qty = parseInt(data.qty_from_cutting) || 0;
-        if (Array.isArray(parts) && parts.length > 0) {
-            for (const p of parts) {
-                const partCut = p.cut_number || 0;
-                const partColor = (p.color || '').trim();
-                if (partCut > 0 && partColor) {
-                    const { available } = await getAvailableForPart(partCut, partColor, id);
-                    if (available < qty) {
-                        return res.status(400).json({
-                            message: `رصيد غير كافٍ للقصة ${partCut} - ${partColor}.\nالمتاح: ${available}\nالمطلوب: ${qty}`,
-                        });
-                    }
-                }
-            }
-        }
-        const primaryCut = Array.isArray(parts) && parts.length > 0
-            ? (parts[0].cut_number || 0) : (data.cut_number || 0);
+        const cleanParts = normalizeParts(parts, data.cut_number, data.color);
+        const validated = await validateProductionParts(cleanParts, qty, id);
+        const safeData = { ...data, color: validated.productionColor };
         const before = await prisma_1.default.modelProduction.findUnique({ where: { id }, include: PARTS_INCLUDE });
-        await prisma_1.default.modelProduction.update({ where: { id }, data: { ...data, cut_number: primaryCut } });
-        if (Array.isArray(parts)) {
-            await prisma_1.default.modelPart.deleteMany({ where: { model_id: id } });
-            if (parts.length > 0) {
-                await prisma_1.default.modelPart.createMany({
-                    data: parts.map(p => ({
-                        model_id: id,
-                        part_type: p.part_type || '',
-                        cut_number: p.cut_number || 0,
-                        color: (p.color || '').trim(),
-                    })),
-                });
-            }
-        }
-        const fresh = await prisma_1.default.modelProduction.findUnique({ where: { id }, include: PARTS_INCLUDE });
+        const updatedFresh = await prisma_1.default.$transaction(async (tx) => {
+            await tx.modelProduction.update({
+                where: { id },
+                data: { ...safeData, cut_number: validated.primaryCut },
+            });
+            await tx.modelPart.deleteMany({ where: { model_id: id } });
+            await tx.modelPart.createMany({
+                data: cleanParts.map(p => ({
+                    model_id: id,
+                    part_type: p.part_type,
+                    cut_number: p.cut_number,
+                    color: p.color,
+                })),
+            });
+            await ensureReadyStockRow(tx, safeData, validated.productionColor);
+            return tx.modelProduction.findUnique({ where: { id }, include: PARTS_INCLUDE });
+        });
         (0, auditHelper_1.logAudit)({ user: req.user, module: 'ModelProduction', action: 'UPDATE', record_id: id,
-            before_data: before, after_data: fresh,
-            description: `تعديل إنتاج موديل: ${fresh?.model_code} - ${fresh?.model_description}` });
-        return res.json(fresh);
+            before_data: before, after_data: updatedFresh,
+            description: `تعديل إنتاج موديل: ${updatedFresh?.model_code} - ${updatedFresh?.model_description}` });
+        return res.json(updatedFresh);
     }
-    catch {
-        return res.status(500).json({ message: 'خطأ' });
+    catch (err) {
+        return modelProductionError(res, err);
     }
 });
 exports.modelProdRouter.delete('/:id', auth_1.requireManager, async (req, res) => {

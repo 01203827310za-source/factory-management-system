@@ -268,6 +268,7 @@ export type AccessoriesRecord = {
 // ===== CUTTING =====
 export const cuttingApi = {
   getAll: () => get<CuttingRecord[]>('/cutting'),
+  getColors: (cutNumber: number) => get<string[]>(`/cutting/${cutNumber}/colors`),
   add: (data: Omit<CuttingRecord, 'id' | 'created_at'>) => post<CuttingRecord>('/cutting', data),
   update: (id: number, data: Partial<CuttingRecord>) => put<CuttingRecord>(`/cutting/${id}`, data),
   remove: (id: number) => del<{ message: string }>(`/cutting/${id}`),
