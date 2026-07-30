@@ -93,7 +93,7 @@ router.get('/', async (_req: Request, res: Response) => {
 
     const totalFixedAssets = fixedAssets.reduce((s, a) => s + a.purchase_price, 0);
     const totalAssets      = totalCurrentAssets + totalFixedAssets;
-    const netPosition      = totalAssets;
+    const netPosition      = totalAssets - remainingDebts;
 
     return res.json({
       fabric_value:         fabricValue,
