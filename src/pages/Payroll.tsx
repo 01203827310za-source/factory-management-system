@@ -7,7 +7,7 @@ import { useState, useEffect, useMemo } from 'react';
 import {
   Users, ClipboardCheck, DollarSign, Wallet,
   Plus, Edit2, Trash2, Printer, Download, Search,
-  ChevronLeft, ChevronRight, FileDown,
+  ChevronLeft, ChevronRight, FileDown, Clock, CheckCircle2, RotateCcw,
 } from 'lucide-react';
 import {
   payrollApi,
@@ -352,21 +352,40 @@ function EmployeesTab({ employees, loading, reload }: {
 // ==============================================
 type AttendanceFormState = {
   employee_id: string; date: string; check_in: string; check_out: string;
-  status: AttendanceStatus; notes: string;
+  overtime_hours: number; status: AttendanceStatus; notes: string;
 };
 
 const EMPTY_ATT_FORM: AttendanceFormState = {
-  employee_id: '', date: TODAY, check_in: '', check_out: '', status: 'present', notes: '',
+  employee_id: '', date: TODAY, check_in: '', check_out: '', overtime_hours: 0, status: 'present', notes: '',
 };
 
-function previewHours(f: AttendanceFormState, dailyHours: number) {
-  if (f.status === 'absent' || !f.check_in || !f.check_out) return null;
-  const [inH, inM]   = f.check_in.split(':').map(Number);
-  const [outH, outM] = f.check_out.split(':').map(Number);
-  if ([inH, inM, outH, outM].some(n => Number.isNaN(n))) return null;
-  let minutes = (outH * 60 + outM) - (inH * 60 + inM);
-  if (minutes < 0) minutes += 24 * 60;
-  const worked = Math.round((minutes / 60) * 100) / 100;
+// ─── time helpers ──────────────────────────────
+const nowTimeStr = () => {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+
+// "HH:MM" (24h, as produced by <input type="time">) → minutes since midnight
+function timeToMinutes(t: string): number | null {
+  const [h, m] = t.split(':').map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return null;
+  return h * 60 + m;
+}
+
+// decimal hours → "8h 30m"
+function formatHM(hours: number): string {
+  const totalMinutes = Math.round(Math.abs(hours) * 60);
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  return `${hours < 0 ? '-' : ''}${h}h ${m}m`;
+}
+
+// automatic worked/overtime preview from check-in/out — mirrors the backend calc
+function autoHours(check_in: string, check_out: string, dailyHours: number) {
+  const inMin  = timeToMinutes(check_in);
+  const outMin = timeToMinutes(check_out);
+  if (inMin == null || outMin == null || outMin < inMin) return null;
+  const worked   = Math.round(((outMin - inMin) / 60) * 100) / 100;
   const overtime = Math.round(Math.max(0, worked - dailyHours) * 100) / 100;
   return { worked, overtime };
 }
@@ -383,6 +402,9 @@ function AttendanceTab({ employees }: { employees: EmployeeRecord[] }) {
   const [saving, setSaving]   = useState(false);
   const [delId, setDelId]     = useState<number | null>(null);
   const [form, setForm]       = useState<AttendanceFormState>(EMPTY_ATT_FORM);
+  // true once the manager has manually edited the overtime field (or it was
+  // already a manual value on the loaded record) — stops auto-recalculation.
+  const [overtimeTouched, setOvertimeTouched] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -393,20 +415,42 @@ function AttendanceTab({ employees }: { employees: EmployeeRecord[] }) {
 
   useEffect(() => { load(); }, [month, year, empFilter]);
 
-  const openAdd  = () => { setForm(EMPTY_ATT_FORM); setEditRec(null); setModal('add'); };
+  const selectedEmp = employees.find(e => e.id === +form.employee_id);
+  const dailyHours  = selectedEmp?.daily_hours ?? 8;
+  const auto        = form.status !== 'absent' ? autoHours(form.check_in, form.check_out, dailyHours) : null;
+
+  // keep overtime in sync with the automatic calculation until manually overridden
+  useEffect(() => {
+    if (!overtimeTouched) setForm(p => ({ ...p, overtime_hours: auto?.overtime ?? 0 }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.check_in, form.check_out, form.status, dailyHours, overtimeTouched]);
+
+  const openAdd = () => { setForm(EMPTY_ATT_FORM); setOvertimeTouched(false); setEditRec(null); setModal('add'); };
   const openEdit = (r: AttendanceRecord) => {
-    setForm({ employee_id: String(r.employee_id), date: r.date, check_in: r.check_in, check_out: r.check_out, status: r.status, notes: r.notes });
+    const emp  = employees.find(e => e.id === r.employee_id);
+    const calc = emp ? autoHours(r.check_in, r.check_out, emp.daily_hours) : null;
+    const isManual = calc ? Math.abs(calc.overtime - r.overtime_hours) > 0.005 : r.overtime_hours > 0;
+    setForm({ employee_id: String(r.employee_id), date: r.date, check_in: r.check_in, check_out: r.check_out,
+      overtime_hours: r.overtime_hours, status: r.status, notes: r.notes });
+    setOvertimeTouched(isManual);
     setEditRec(r); setModal('edit');
   };
 
-  const selectedEmp = employees.find(e => e.id === +form.employee_id);
-  const preview = selectedEmp ? previewHours(form, selectedEmp.daily_hours) : null;
+  const setStatus = (status: AttendanceStatus) => {
+    setForm(p => ({ ...p, status, ...(status === 'absent' ? { check_in: '', check_out: '', overtime_hours: 0 } : {}) }));
+    if (status === 'absent') setOvertimeTouched(false);
+  };
+
+  const fillCheckIn  = () => setForm(p => ({ ...p, check_in: nowTimeStr() }));
+  const fillCheckOut = () => setForm(p => ({ ...p, check_out: nowTimeStr() }));
 
   const handleSave = async () => {
     if (!form.employee_id || !form.date) { toast('error', 'اختر الموظف والتاريخ'); return; }
-    if (form.status !== 'absent' && (!form.check_in || !form.check_out)) {
-      toast('error', 'يرجى إدخال وقت الحضور والانصراف'); return;
+    if (form.status !== 'absent') {
+      if (!form.check_in || !form.check_out) { toast('error', 'يرجى إدخال وقت الحضور والانصراف'); return; }
+      if (form.check_out < form.check_in) { toast('error', 'وقت الانصراف لا يمكن أن يكون قبل وقت الحضور'); return; }
     }
+    if (form.overtime_hours < 0) { toast('error', 'ساعات العمل الإضافي لا يمكن أن تكون سالبة'); return; }
     setSaving(true);
     try {
       const payload = {
@@ -414,6 +458,7 @@ function AttendanceTab({ employees }: { employees: EmployeeRecord[] }) {
         check_in: form.status === 'absent' ? '' : form.check_in,
         check_out: form.status === 'absent' ? '' : form.check_out,
         notes: form.notes,
+        ...(overtimeTouched ? { overtime_hours: form.overtime_hours } : {}),
       };
       if (modal === 'add') await payrollApi.addAttendance(payload);
       else if (editRec) await payrollApi.updateAttendance(editRec.id, payload);
@@ -479,8 +524,8 @@ function AttendanceTab({ employees }: { employees: EmployeeRecord[] }) {
                   <td className="px-3 py-2.5 font-medium">{r.employee.name}</td>
                   <td className="px-3 py-2.5">{r.check_in || '—'}</td>
                   <td className="px-3 py-2.5">{r.check_out || '—'}</td>
-                  <td className="px-3 py-2.5 font-semibold">{r.worked_hours ? fmtN(r.worked_hours) : '—'}</td>
-                  <td className="px-3 py-2.5 text-amber-700 font-semibold">{r.overtime_hours ? fmtN(r.overtime_hours) : '—'}</td>
+                  <td className="px-3 py-2.5 font-semibold">{r.worked_hours ? formatHM(r.worked_hours) : '—'}</td>
+                  <td className="px-3 py-2.5 text-amber-700 font-semibold">{r.overtime_hours ? formatHM(r.overtime_hours) : '—'}</td>
                   <td className="px-3 py-2.5">
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_CONFIG[r.status].color}`}>{STATUS_CONFIG[r.status].label}</span>
                   </td>
@@ -498,58 +543,90 @@ function AttendanceTab({ employees }: { employees: EmployeeRecord[] }) {
         </div>
       </div>
 
-      {/* Add/Edit Modal */}
+      {/* Add/Edit Modal — workflow: employee → date → check-in → check-out → worked (auto) → overtime (auto/editable) → status → notes */}
       <Modal isOpen={!!modal} onClose={() => setModal(null)} title={modal === 'add' ? 'تسجيل حضور' : 'تعديل سجل الحضور'}>
         <div className="space-y-3 p-1">
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">الموظف *</label>
+            <select value={form.employee_id} onChange={e => setForm(p => ({ ...p, employee_id: e.target.value }))}
+              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]">
+              <option value="">اختر الموظف</option>
+              {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">التاريخ *</label>
+            <input type="date" value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))}
+              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]"/>
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">الموظف *</label>
-              <select value={form.employee_id} onChange={e => setForm(p => ({ ...p, employee_id: e.target.value }))}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]">
-                <option value="">اختر الموظف</option>
-                {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
-              </select>
+              <label className="flex items-center gap-1 text-xs font-medium text-gray-600 mb-1">
+                <Clock size={12}/> وقت الحضور {form.status !== 'absent' && '*'}
+              </label>
+              <div className="flex gap-1.5">
+                <input type="time" value={form.check_in} disabled={form.status === 'absent'}
+                  onChange={e => setForm(p => ({ ...p, check_in: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] disabled:bg-gray-100 disabled:text-gray-400"/>
+                <button type="button" onClick={fillCheckIn} disabled={form.status === 'absent'} title="تسجيل الوقت الحالي"
+                  className="shrink-0 px-2.5 rounded-xl border border-gray-200 text-emerald-600 hover:bg-emerald-50 disabled:opacity-40 disabled:hover:bg-transparent transition">
+                  <CheckCircle2 size={16}/>
+                </button>
+              </div>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">التاريخ *</label>
-              <input type="date" value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]"/>
+              <label className="flex items-center gap-1 text-xs font-medium text-gray-600 mb-1">
+                <Clock size={12}/> وقت الانصراف {form.status !== 'absent' && '*'}
+              </label>
+              <div className="flex gap-1.5">
+                <input type="time" value={form.check_out} disabled={form.status === 'absent'}
+                  onChange={e => setForm(p => ({ ...p, check_out: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] disabled:bg-gray-100 disabled:text-gray-400"/>
+                <button type="button" onClick={fillCheckOut} disabled={form.status === 'absent'} title="تسجيل الوقت الحالي"
+                  className="shrink-0 px-2.5 rounded-xl border border-gray-200 text-emerald-600 hover:bg-emerald-50 disabled:opacity-40 disabled:hover:bg-transparent transition">
+                  <CheckCircle2 size={16}/>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">ساعات العمل (تلقائي)</label>
+              <div className="w-full border border-gray-100 bg-gray-50 rounded-xl px-3 py-2 text-sm text-gray-700 font-semibold">
+                {auto ? formatHM(auto.worked) : '—'}
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-medium text-gray-600">ساعات إضافي</label>
+                {overtimeTouched && (
+                  <button type="button"
+                    onClick={() => { setOvertimeTouched(false); setForm(p => ({ ...p, overtime_hours: auto?.overtime ?? 0 })); }}
+                    className="flex items-center gap-1 text-[#1e3a5f] hover:underline text-[11px]">
+                    <RotateCcw size={11}/> تلقائي
+                  </button>
+                )}
+              </div>
+              <input type="number" min="0" step="0.25" value={form.overtime_hours} disabled={form.status === 'absent'}
+                onChange={e => { setOvertimeTouched(true); setForm(p => ({ ...p, overtime_hours: Math.max(0, parseFloat(e.target.value) || 0) })); }}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] disabled:bg-gray-100 disabled:text-gray-400"/>
+              <p className="text-[11px] text-gray-400 mt-1">{formatHM(form.overtime_hours)}{!overtimeTouched && ' — محسوبة تلقائياً'}</p>
             </div>
           </div>
 
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">حالة الحضور *</label>
-            <select value={form.status}
-              onChange={e => {
-                const status = e.target.value as AttendanceStatus;
-                setForm(p => ({ ...p, status, ...(status === 'absent' ? { check_in: '', check_out: '' } : {}) }));
-              }}
+            <select value={form.status} onChange={e => setStatus(e.target.value as AttendanceStatus)}
               className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]">
               {(Object.keys(STATUS_CONFIG) as AttendanceStatus[]).map(s => <option key={s} value={s}>{STATUS_CONFIG[s].label}</option>)}
             </select>
+            {form.status === 'absent' && (
+              <p className="text-[11px] text-gray-400 mt-1">لا حاجة لإدخال وقت الحضور أو الانصراف في حالة الغياب.</p>
+            )}
           </div>
-
-          {form.status !== 'absent' && (
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">وقت الحضور *</label>
-                <input type="time" value={form.check_in} onChange={e => setForm(p => ({ ...p, check_in: e.target.value }))}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]"/>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">وقت الانصراف *</label>
-                <input type="time" value={form.check_out} onChange={e => setForm(p => ({ ...p, check_out: e.target.value }))}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]"/>
-              </div>
-            </div>
-          )}
-
-          {preview && (
-            <div className="bg-blue-50 rounded-xl px-3 py-2 text-sm text-blue-800 font-semibold flex justify-between">
-              <span>ساعات العمل: {fmtN(preview.worked)}</span>
-              {preview.overtime > 0 && <span className="text-amber-700">الإضافي: {fmtN(preview.overtime)}</span>}
-            </div>
-          )}
 
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">ملاحظات</label>

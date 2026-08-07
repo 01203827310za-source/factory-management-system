@@ -643,9 +643,9 @@ export const payrollApi = {
   // Attendance
   getAttendance: (p?: { month?: number; year?: number; employee_id?: number }) =>
     get<AttendanceRecord[]>('/payroll/attendance' + buildQS(p)),
-  addAttendance: (data: { employee_id: number; date: string; check_in?: string; check_out?: string; status: AttendanceStatus; notes?: string }) =>
+  addAttendance: (data: { employee_id: number; date: string; check_in?: string; check_out?: string; status: AttendanceStatus; notes?: string; overtime_hours?: number }) =>
     post<AttendanceRecord>('/payroll/attendance', data),
-  updateAttendance: (id: number, data: Partial<{ employee_id: number; date: string; check_in: string; check_out: string; status: AttendanceStatus; notes: string }>) =>
+  updateAttendance: (id: number, data: Partial<{ employee_id: number; date: string; check_in: string; check_out: string; status: AttendanceStatus; notes: string; overtime_hours: number }>) =>
     put<AttendanceRecord>(`/payroll/attendance/${id}`, data),
   removeAttendance: (id: number) => del<{ message: string }>(`/payroll/attendance/${id}`),
 

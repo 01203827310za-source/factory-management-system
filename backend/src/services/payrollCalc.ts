@@ -29,28 +29,54 @@ export function daysInMonth(year: number, month: number) {
   return new Date(year, month, 0).getDate();
 }
 
+// ─── Time parsing / validation ────────────────────────────────────────────────
+function parseTimeToMinutes(t: string): number | null {
+  const [h, m] = t.split(':').map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return null;
+  return h * 60 + m;
+}
+
+// Returns an Arabic error message if the times are invalid, otherwise null.
+export function validateAttendanceTimes(
+  check_in: string | null | undefined,
+  check_out: string | null | undefined,
+): string | null {
+  if (!check_in || !check_out) return null;
+  const inMin  = parseTimeToMinutes(check_in);
+  const outMin = parseTimeToMinutes(check_out);
+  if (inMin == null || outMin == null) return 'صيغة الوقت غير صحيحة';
+  if (outMin < inMin) return 'وقت الانصراف لا يمكن أن يكون قبل وقت الحضور';
+  return null;
+}
+
 // ─── Worked / overtime hours from check-in & check-out ───────────────────────
+// `overtimeOverride`: when a manager manually edits the overtime field, pass
+// the value here and it wins over the automatic (worked - daily hours) calc.
+// Callers must validate the times with validateAttendanceTimes() first.
 export function computeWorkedOvertime(
   status: string,
   check_in: string | null | undefined,
   check_out: string | null | undefined,
   dailyHours: number,
+  overtimeOverride?: number | null,
 ) {
   if (status === 'absent' || !check_in || !check_out) {
-    return { worked_hours: 0, overtime_hours: 0 };
+    const overtime_hours = overtimeOverride != null ? round2(Math.max(0, overtimeOverride)) : 0;
+    return { worked_hours: 0, overtime_hours };
   }
 
-  const [inH, inM]   = check_in.split(':').map(Number);
-  const [outH, outM] = check_out.split(':').map(Number);
-  if ([inH, inM, outH, outM].some(n => Number.isNaN(n))) {
-    return { worked_hours: 0, overtime_hours: 0 };
+  const inMin  = parseTimeToMinutes(check_in);
+  const outMin = parseTimeToMinutes(check_out);
+  if (inMin == null || outMin == null || outMin < inMin) {
+    const overtime_hours = overtimeOverride != null ? round2(Math.max(0, overtimeOverride)) : 0;
+    return { worked_hours: 0, overtime_hours };
   }
 
-  let minutes = (outH * 60 + outM) - (inH * 60 + inM);
-  if (minutes < 0) minutes += 24 * 60; // overnight shift safety
-  const worked   = round2(minutes / 60);
-  const overtime = round2(Math.max(0, worked - dailyHours));
-  return { worked_hours: worked, overtime_hours: overtime };
+  const worked = round2((outMin - inMin) / 60);
+  const overtime_hours = overtimeOverride != null
+    ? round2(Math.max(0, overtimeOverride))
+    : round2(Math.max(0, worked - dailyHours));
+  return { worked_hours: worked, overtime_hours };
 }
 
 // ─── Full payroll calculation for one employee / one month ──────────────────

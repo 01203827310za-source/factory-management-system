@@ -7,7 +7,7 @@ import { Router } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate, requireManager } from '../middleware/auth';
 import { logAudit } from '../services/auditHelper';
-import { calcEmployeePayroll, computeWorkedOvertime, daysInMonth } from '../services/payrollCalc';
+import { calcEmployeePayroll, computeWorkedOvertime, daysInMonth, validateAttendanceTimes } from '../services/payrollCalc';
 
 const router = Router();
 router.use(authenticate);
@@ -128,7 +128,7 @@ router.get('/attendance', async (req, res) => {
 
 router.post('/attendance', requireManager, async (req, res) => {
   try {
-    const { employee_id, date, check_in, check_out, status, notes } = req.body;
+    const { employee_id, date, check_in, check_out, status, notes, overtime_hours: overtimeInput } = req.body;
     if (!employee_id || !date) return res.status(400).json({ message: 'الموظف والتاريخ مطلوبان' });
     const st = ATTENDANCE_STATUSES.includes(status) ? status : 'present';
 
@@ -139,8 +139,16 @@ router.post('/attendance', requireManager, async (req, res) => {
       return res.status(400).json({ message: 'يجب إدخال وقت الحضور والانصراف معاً' });
     }
 
+    const timeError = validateAttendanceTimes(check_in, check_out);
+    if (timeError) return res.status(400).json({ message: timeError });
+
+    const overtimeOverride = overtimeInput != null && overtimeInput !== '' ? Number(overtimeInput) : null;
+    if (overtimeOverride != null && (Number.isNaN(overtimeOverride) || overtimeOverride < 0)) {
+      return res.status(400).json({ message: 'ساعات العمل الإضافي لا يمكن أن تكون سالبة' });
+    }
+
     const isAbsent = st === 'absent';
-    const { worked_hours, overtime_hours } = computeWorkedOvertime(st, check_in, check_out, employee.daily_hours);
+    const { worked_hours, overtime_hours } = computeWorkedOvertime(st, check_in, check_out, employee.daily_hours, overtimeOverride);
 
     const rec = await prisma.attendance.create({
       data: {
@@ -171,7 +179,7 @@ router.put('/attendance/:id', requireManager, async (req, res) => {
     const before = await prisma.attendance.findUnique({ where: { id }, include: WITH_EMP });
     if (!before) return res.status(404).json({ message: 'السجل غير موجود' });
 
-    const { employee_id, date, check_in, check_out, status, notes } = req.body;
+    const { employee_id, date, check_in, check_out, status, notes, overtime_hours: overtimeInput } = req.body;
     const st = ATTENDANCE_STATUSES.includes(status) ? status : before.status;
     const empId = employee_id ? Number(employee_id) : before.employee_id;
 
@@ -182,8 +190,16 @@ router.put('/attendance/:id', requireManager, async (req, res) => {
       return res.status(400).json({ message: 'يجب إدخال وقت الحضور والانصراف معاً' });
     }
 
+    const timeError = validateAttendanceTimes(check_in, check_out);
+    if (timeError) return res.status(400).json({ message: timeError });
+
+    const overtimeOverride = overtimeInput != null && overtimeInput !== '' ? Number(overtimeInput) : null;
+    if (overtimeOverride != null && (Number.isNaN(overtimeOverride) || overtimeOverride < 0)) {
+      return res.status(400).json({ message: 'ساعات العمل الإضافي لا يمكن أن تكون سالبة' });
+    }
+
     const isAbsent = st === 'absent';
-    const { worked_hours, overtime_hours } = computeWorkedOvertime(st, check_in, check_out, employee.daily_hours);
+    const { worked_hours, overtime_hours } = computeWorkedOvertime(st, check_in, check_out, employee.daily_hours, overtimeOverride);
 
     const rec = await prisma.attendance.update({
       where: { id },
