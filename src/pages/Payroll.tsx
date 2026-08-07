@@ -1,24 +1,22 @@
 // ============================================
-// Payroll Page — المرتبات
-// 7 tabs: Employees | Production | Advances
-//         Deductions | Bonuses | Payroll | Reports
+// Attendance & Payroll Page — الحضور والانصراف والمرتبات
+// 4 tabs: Employees | Attendance | Advances & Deductions | Payroll
 // ============================================
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
-  Users, Factory, TrendingDown, Award, FileText, BarChart2,
-  Plus, Edit2, Trash2, Printer, Download, Search, X,
+  Users, ClipboardCheck, DollarSign, Wallet,
+  Plus, Edit2, Trash2, Printer, Download, Search,
+  ChevronLeft, ChevronRight, FileDown,
 } from 'lucide-react';
 import {
   payrollApi,
   type EmployeeRecord,
-  type PieceRateRecord,
-  type ProductionRecord,
-  type AdvanceRecord,
-  type DeductionRecord,
-  type BonusRecord,
-  type SalaryRow,
-  type PayrollReportData,
+  type AttendanceRecord,
+  type AttendanceStatus,
+  type SalaryAdjustmentRecord,
+  type AdjustmentType,
+  type PayrollRow,
 } from '../services/api';
 import { useToast } from '../components/Toast';
 import Modal from '../components/Modal';
@@ -29,12 +27,27 @@ const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','
 const CY = new Date().getFullYear();
 const YEARS = Array.from({ length: 6 }, (_, i) => CY - 2 + i);
 const TODAY = new Date().toISOString().slice(0, 10);
+const PAGE_SIZE = 8;
+
+const STATUS_CONFIG: Record<AttendanceStatus, { label: string; color: string }> = {
+  present:       { label: 'حاضر',     color: 'bg-green-100 text-green-700' },
+  absent:        { label: 'غائب',     color: 'bg-red-100 text-red-700' },
+  half_day:      { label: 'نصف يوم',  color: 'bg-amber-100 text-amber-700' },
+  vacation:      { label: 'إجازة',    color: 'bg-blue-100 text-blue-700' },
+  business_trip: { label: 'مأمورية',  color: 'bg-purple-100 text-purple-700' },
+};
+
+const ADJ_CONFIG: Record<AdjustmentType, { label: string; color: string }> = {
+  advance:    { label: 'سلفة',    color: 'orange' },
+  deduction:  { label: 'خصم',     color: 'red' },
+  bonus:      { label: 'مكافأة',  color: 'green' },
+};
 
 // ─── helpers ─────────────────────────────────
-const fmt = (n: number) => n.toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmt  = (n: number) => n.toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtN = (n: number) => n.toLocaleString('ar-EG', { maximumFractionDigits: 0 });
 
-type Tab = 'employees' | 'production' | 'advances' | 'deductions' | 'bonuses' | 'payroll' | 'reports';
+type Tab = 'employees' | 'attendance' | 'adjustments' | 'payroll';
 
 // ─── shared month/year bar ────────────────────
 function MonthYearBar({ month, year, setMonth, setYear }: { month: number; year: number; setMonth: (m: number) => void; setYear: (y: number) => void }) {
@@ -62,7 +75,7 @@ function EmpSelect({ employees, value, onChange, placeholder = 'كل الموظ�
       className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]">
       {includeAll && <option value="">{placeholder}</option>}
       {employees.map(e => (
-        <option key={e.id} value={e.id}>{e.employee_name}</option>
+        <option key={e.id} value={e.id}>{e.name}</option>
       ))}
     </select>
   );
@@ -74,7 +87,7 @@ function TH({ children, center }: { children: React.ReactNode; center?: boolean 
 }
 
 // ─── summary card ─────────────────────────────
-function SumCard({ label, value, color }: { label: string; value: number; color: string }) {
+function SumCard({ label, value, color, suffix = 'ج.م' }: { label: string; value: number; color: string; suffix?: string }) {
   const colors: Record<string, string> = {
     blue:   'from-blue-600 to-blue-800',
     green:  'from-emerald-600 to-emerald-800',
@@ -82,12 +95,13 @@ function SumCard({ label, value, color }: { label: string; value: number; color:
     orange: 'from-orange-500 to-orange-700',
     purple: 'from-purple-600 to-purple-800',
     teal:   'from-teal-600 to-teal-800',
+    amber:  'from-amber-500 to-amber-700',
   };
   return (
     <div className={`bg-gradient-to-br ${colors[color] ?? colors.blue} text-white rounded-2xl p-4 shadow`}>
       <p className="text-xs text-white/70 mb-1">{label}</p>
-      <p className="text-xl font-bold">{fmt(value)}</p>
-      <p className="text-xs text-white/50">ج.م</p>
+      <p className="text-xl font-bold">{suffix === 'ج.م' ? fmt(value) : fmtN(value)}</p>
+      <p className="text-xs text-white/50">{suffix}</p>
     </div>
   );
 }
@@ -109,79 +123,88 @@ function DeleteConfirm({ open, onConfirm, onCancel, msg = 'هل أنت متأك�
   );
 }
 
-// ==============================================
-// EMPLOYEE FORM
-// ==============================================
-type RateRow = { id?: number; category_name: string; piece_rate: number };
+// ─── shared pagination bar ─────────────────────
+function PaginationBar({ page, totalPages, setPage }: { page: number; totalPages: number; setPage: (p: number | ((prev: number) => number)) => void }) {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="flex items-center justify-between px-5 py-3 border-t border-gray-100">
+      <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
+        className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-gray-200 text-sm disabled:opacity-40 hover:bg-gray-50 transition">
+        <ChevronRight size={15}/> السابق
+      </button>
+      <div className="flex gap-1">
+        {Array.from({ length: Math.min(5, totalPages) }, (_, idx) => {
+          const p = Math.max(1, Math.min(totalPages - 4, page - 2)) + idx;
+          return (
+            <button key={p} onClick={() => setPage(p)}
+              className={`w-8 h-8 rounded-lg text-sm transition ${p === page ? 'bg-[#1e3a5f] text-white' : 'hover:bg-gray-100'}`}>
+              {p}
+            </button>
+          );
+        })}
+      </div>
+      <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}
+        className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-gray-200 text-sm disabled:opacity-40 hover:bg-gray-50 transition">
+        التالي <ChevronLeft size={15}/>
+      </button>
+    </div>
+  );
+}
 
+// ─── empty state ────────────────────────────────
+function EmptyRow({ colSpan, text }: { colSpan: number; text: string }) {
+  return <tr><td colSpan={colSpan} className="py-12 text-center text-gray-400">{text}</td></tr>;
+}
+
+// ==============================================
+// EMPLOYEES TAB
+// ==============================================
 type EmployeeFormState = {
-  employee_code: string;
-  employee_name: string;
-  department: string;
-  job_title: string;
-  employee_type: 'fixed' | 'piecework';
-  base_salary: number;
-  status: 'active' | 'inactive';
-  notes: string;
+  name: string; phone: string; job_title: string;
+  monthly_salary: number; daily_hours: number; status: 'active' | 'inactive';
 };
-
-type EmployeeTextField = 'employee_code' | 'employee_name' | 'department' | 'job_title' | 'notes';
 
 const EMPTY_EMP_FORM: EmployeeFormState = {
-  employee_code: '', employee_name: '', department: '', job_title: '',
-  employee_type: 'fixed', base_salary: 0,
-  status: 'active', notes: '',
+  name: '', phone: '', job_title: '', monthly_salary: 0, daily_hours: 8, status: 'active',
 };
 
-function EmployeeForm({ initial, initialRates, onSave, onCancel, saving }: {
-  initial: EmployeeFormState; initialRates: RateRow[];
-  onSave: (f: EmployeeFormState, rates: RateRow[]) => void;
-  onCancel: () => void; saving: boolean;
+function EmployeeForm({ initial, onSave, onCancel, saving }: {
+  initial: EmployeeFormState; onSave: (f: EmployeeFormState) => void; onCancel: () => void; saving: boolean;
 }) {
-  const [f, setF]   = useState(initial);
-  const [rates, setRates] = useState<RateRow[]>(initialRates);
-
+  const [f, setF] = useState(initial);
   const upd = <K extends keyof EmployeeFormState>(k: K, v: EmployeeFormState[K]) => setF(p => ({ ...p, [k]: v }));
-  const addRate   = () => setRates(p => [...p, { category_name: '', piece_rate: 0 }]);
-  const delRate   = (i: number) => setRates(p => p.filter((_, idx) => idx !== i));
-  const setRate   = (i: number, k: keyof RateRow, v: string | number) =>
-    setRates(p => p.map((r, idx) => idx === i ? { ...r, [k]: v } : r));
-
-  const textInput = (label: string, k: EmployeeTextField) => (
-    <div key={k}>
-      <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
-      <input type="text" value={f[k]}
-        onChange={e => upd(k, e.target.value)}
-        className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" />
-    </div>
-  );
-
-  const numberInput = (label: string, k: 'base_salary') => (
-    <div key={k}>
-      <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
-      <input type="number" value={f[k]}
-        onChange={e => upd(k, parseFloat(e.target.value) || 0)}
-        className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" />
-    </div>
-  );
 
   return (
     <div className="space-y-4 p-1">
       <div className="grid grid-cols-2 gap-3">
-        {textInput('كود الموظف *', 'employee_code')}
-        {textInput('اسم الموظف *', 'employee_name')}
-        {textInput('الإدارة', 'department')}
-        <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">نوع الموظف</label>
-          <select value={f.employee_type} onChange={e => upd('employee_type', e.target.value === 'piecework' ? 'piecework' : 'fixed')}
-            className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]">
-            <option value="fixed">راتب ثابت</option>
-            <option value="piecework">بالقطعة</option>
-          </select>
+        <div className="col-span-2">
+          <label className="block text-xs font-medium text-gray-600 mb-1">الاسم الكامل *</label>
+          <input type="text" value={f.name} onChange={e => upd('name', e.target.value)}
+            className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" />
         </div>
-        {textInput('المسمى الوظيفي', 'job_title')}
-        {f.employee_type === 'fixed' && numberInput('الراتب الأساسي', 'base_salary')}
         <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">رقم الهاتف</label>
+          <input type="text" value={f.phone} onChange={e => upd('phone', e.target.value)}
+            className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">المسمى الوظيفي</label>
+          <input type="text" value={f.job_title} onChange={e => upd('job_title', e.target.value)}
+            className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">الراتب الشهري</label>
+          <input type="number" min="0" value={f.monthly_salary}
+            onChange={e => upd('monthly_salary', parseFloat(e.target.value) || 0)}
+            className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">ساعات العمل اليومية</label>
+          <input type="number" min="1" step="0.5" value={f.daily_hours}
+            onChange={e => upd('daily_hours', parseFloat(e.target.value) || 8)}
+            className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" />
+        </div>
+        <div className="col-span-2">
           <label className="block text-xs font-medium text-gray-600 mb-1">الحالة</label>
           <select value={f.status} onChange={e => upd('status', e.target.value === 'inactive' ? 'inactive' : 'active')}
             className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]">
@@ -189,37 +212,10 @@ function EmployeeForm({ initial, initialRates, onSave, onCancel, saving }: {
             <option value="inactive">غير نشط</option>
           </select>
         </div>
-        <div className="col-span-2">{textInput('ملاحظات', 'notes')}</div>
       </div>
 
-      {f.employee_type === 'piecework' && (
-        <div className="border border-gray-200 rounded-xl p-3 space-y-2">
-          <div className="flex justify-between items-center">
-            <h4 className="text-sm font-semibold text-gray-700">فئات الإنتاج</h4>
-            <button type="button" onClick={addRate}
-              className="flex items-center gap-1 text-xs bg-[#1e3a5f] text-white px-2.5 py-1 rounded-lg hover:bg-[#16304d]">
-              <Plus size={12}/> إضافة فئة
-            </button>
-          </div>
-          {rates.length === 0 && <p className="text-xs text-gray-400 text-center py-2">لا توجد فئات — أضف فئة</p>}
-          {rates.map((r, i) => (
-            <div key={i} className="flex gap-2 items-center">
-              <input placeholder="اسم الفئة" value={r.category_name}
-                onChange={e => setRate(i, 'category_name', e.target.value)}
-                className="flex-1 border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" />
-              <input type="number" min="0" step="0.01" placeholder="السعر" value={r.piece_rate}
-                onChange={e => setRate(i, 'piece_rate', parseFloat(e.target.value) || 0)}
-                className="w-28 border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" />
-              <span className="text-xs text-gray-400">ج.م</span>
-              <button type="button" onClick={() => delRate(i)}
-                className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg"><X size={13}/></button>
-            </div>
-          ))}
-        </div>
-      )}
-
       <div className="flex gap-3">
-        <button onClick={() => onSave(f, rates)} disabled={saving}
+        <button onClick={() => onSave(f)} disabled={saving}
           className="flex-1 bg-[#1e3a5f] text-white py-2.5 rounded-xl hover:bg-[#16304d] transition disabled:opacity-60 text-sm font-medium">
           {saving ? 'جارٍ الحفظ...' : 'حفظ'}
         </button>
@@ -229,32 +225,34 @@ function EmployeeForm({ initial, initialRates, onSave, onCancel, saving }: {
   );
 }
 
-// ==============================================
-// EMPLOYEES TAB
-// ==============================================
 function EmployeesTab({ employees, loading, reload }: {
   employees: EmployeeRecord[]; loading: boolean; reload: () => void;
 }) {
   const toast = useToast();
-  const [search, setSearch]       = useState('');
-  const [modal, setModal]         = useState<'add' | 'edit' | null>(null);
-  const [editEmp, setEditEmp]     = useState<EmployeeRecord | null>(null);
-  const [saving, setSaving]       = useState(false);
-  const [delId, setDelId]         = useState<number | null>(null);
+  const [search, setSearch]   = useState('');
+  const [page, setPage]       = useState(1);
+  const [modal, setModal]     = useState<'add' | 'edit' | null>(null);
+  const [editEmp, setEditEmp] = useState<EmployeeRecord | null>(null);
+  const [saving, setSaving]   = useState(false);
+  const [delId, setDelId]     = useState<number | null>(null);
 
   const filtered = employees.filter(e =>
-    !search || e.employee_name.includes(search) || e.employee_code.includes(search));
+    !search || e.name.includes(search) || e.phone.includes(search) || e.job_title.includes(search));
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  const handleSave = async (f: EmployeeFormState, rates: RateRow[]) => {
-    if (!f.employee_code.trim() || !f.employee_name.trim()) { toast('error', 'كود الموظف والاسم مطلوبان'); return; }
+  useEffect(() => { setPage(1); }, [search]);
+
+  const handleSave = async (f: EmployeeFormState) => {
+    if (!f.name.trim()) { toast('error', 'اسم الموظف مطلوب'); return; }
+    if (f.daily_hours <= 0) { toast('error', 'ساعات العمل اليومية يجب أن تكون أكبر من صفر'); return; }
     setSaving(true);
     try {
-      const payload = { ...f, piece_rates: f.employee_type === 'piecework' ? rates : [] };
       if (modal === 'add') {
-        await payrollApi.addEmployee(payload);
+        await payrollApi.addEmployee(f);
         toast('success', 'تم إضافة الموظف');
       } else if (editEmp) {
-        await payrollApi.updateEmployee(editEmp.id, payload);
+        await payrollApi.updateEmployee(editEmp.id, f);
         toast('success', 'تم تعديل الموظف');
       }
       setModal(null); setEditEmp(null); reload();
@@ -265,15 +263,15 @@ function EmployeesTab({ employees, loading, reload }: {
   const handleDel = async () => {
     if (!delId) return;
     try { await payrollApi.removeEmployee(delId); toast('success', 'تم الحذف'); reload(); }
-    catch { toast('error', 'خطأ في الحذف'); }
+    catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'خطأ في الحذف'); }
     finally { setDelId(null); }
   };
 
   const exportExcel = () => {
     const ws = XLSX.utils.json_to_sheet(filtered.map(e => ({
-      'الكود': e.employee_code, 'الاسم': e.employee_name, 'الإدارة': e.department,
-      'النوع': e.employee_type === 'fixed' ? 'راتب ثابت' : 'بالقطعة',
-      'الراتب الأساسي': e.base_salary, 'الحالة': e.status === 'active' ? 'نشط' : 'غير نشط',
+      'الاسم': e.name, 'الهاتف': e.phone, 'الوظيفة': e.job_title,
+      'الراتب الشهري': e.monthly_salary, 'ساعات العمل اليومية': e.daily_hours,
+      'الحالة': e.status === 'active' ? 'نشط' : 'غير نشط',
     })));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'الموظفون');
@@ -285,8 +283,8 @@ function EmployeesTab({ employees, loading, reload }: {
       <div className="flex flex-wrap gap-3 justify-between items-center">
         <div className="relative">
           <Search size={15} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"/>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="بحث..."
-            className="pr-9 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] w-52"/>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="بحث بالاسم أو الهاتف أو الوظيفة..."
+            className="pr-9 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] w-64"/>
         </div>
         <div className="flex gap-2">
           <button onClick={exportExcel} className="flex items-center gap-1.5 bg-emerald-600 text-white px-3 py-2 rounded-xl text-sm hover:bg-emerald-700">
@@ -303,36 +301,18 @@ function EmployeesTab({ employees, loading, reload }: {
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-[#1e3a5f] text-white text-xs">
-              <tr><TH>الكود</TH><TH>الاسم</TH><TH>الإدارة</TH><TH>النوع</TH><TH>الراتب / فئات الإنتاج</TH><TH>الحالة</TH><TH>إجراءات</TH></tr>
+              <tr><TH>الاسم</TH><TH>الهاتف</TH><TH>الوظيفة</TH><TH>الراتب الشهري</TH><TH>ساعات العمل</TH><TH>الحالة</TH><TH>إجراءات</TH></tr>
             </thead>
             <tbody>
-              {loading ? (
-                <tr><td colSpan={7} className="py-12 text-center text-gray-400">جارٍ التحميل...</td></tr>
-              ) : filtered.length === 0 ? (
-                <tr><td colSpan={7} className="py-12 text-center text-gray-400">لا يوجد موظفون</td></tr>
-              ) : filtered.map((emp, i) => (
+              {loading ? <EmptyRow colSpan={7} text="جارٍ التحميل..."/>
+              : paged.length === 0 ? <EmptyRow colSpan={7} text="لا يوجد موظفون"/>
+              : paged.map((emp, i) => (
                 <tr key={emp.id} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                  <td className="px-3 py-2.5 font-mono text-xs">{emp.employee_code}</td>
-                  <td className="px-3 py-2.5 font-medium">{emp.employee_name}</td>
-                  <td className="px-3 py-2.5 text-gray-500 text-xs">{emp.department}</td>
-                  <td className="px-3 py-2.5">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${emp.employee_type === 'fixed' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
-                      {emp.employee_type === 'fixed' ? 'راتب ثابت' : 'بالقطعة'}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2.5">
-                    {emp.employee_type === 'fixed' ? (
-                      <span className="font-semibold">{fmt(emp.base_salary)} ج.م</span>
-                    ) : emp.piece_rates?.length ? (
-                      <div className="flex flex-wrap gap-1">
-                        {emp.piece_rates.map((r: PieceRateRecord) => (
-                          <span key={r.id} className="bg-purple-50 text-purple-700 border border-purple-200 px-1.5 py-0.5 rounded text-xs">
-                            {r.category_name}: {fmt(r.piece_rate)}
-                          </span>
-                        ))}
-                      </div>
-                    ) : <span className="text-gray-400 text-xs">لا فئات</span>}
-                  </td>
+                  <td className="px-3 py-2.5 font-medium">{emp.name}</td>
+                  <td className="px-3 py-2.5 text-gray-500 text-xs">{emp.phone || '—'}</td>
+                  <td className="px-3 py-2.5 text-gray-600">{emp.job_title || '—'}</td>
+                  <td className="px-3 py-2.5 font-semibold">{fmt(emp.monthly_salary)} ج.م</td>
+                  <td className="px-3 py-2.5">{fmtN(emp.daily_hours)} ساعة</td>
                   <td className="px-3 py-2.5">
                     <span className={`px-2 py-0.5 rounded-full text-xs ${emp.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                       {emp.status === 'active' ? 'نشط' : 'غير نشط'}
@@ -349,95 +329,119 @@ function EmployeesTab({ employees, loading, reload }: {
             </tbody>
           </table>
         </div>
+        <PaginationBar page={page} totalPages={totalPages} setPage={setPage}/>
       </div>
 
       <Modal isOpen={!!modal} onClose={() => { setModal(null); setEditEmp(null); }}
         title={modal === 'add' ? 'إضافة موظف جديد' : 'تعديل بيانات الموظف'}>
         <EmployeeForm
-          initial={editEmp ? { employee_code: editEmp.employee_code, employee_name: editEmp.employee_name,
-            department: editEmp.department, job_title: editEmp.job_title, employee_type: editEmp.employee_type,
-            base_salary: editEmp.base_salary, status: editEmp.status, notes: editEmp.notes }
+          initial={editEmp ? { name: editEmp.name, phone: editEmp.phone, job_title: editEmp.job_title,
+            monthly_salary: editEmp.monthly_salary, daily_hours: editEmp.daily_hours, status: editEmp.status }
             : { ...EMPTY_EMP_FORM }}
-          initialRates={editEmp?.piece_rates?.map(r => ({ id: r.id, category_name: r.category_name, piece_rate: r.piece_rate })) ?? []}
           onSave={handleSave} onCancel={() => { setModal(null); setEditEmp(null); }} saving={saving}
         />
       </Modal>
       <DeleteConfirm open={!!delId} onConfirm={handleDel} onCancel={() => setDelId(null)}
-        msg="سيتم حذف الموظف وجميع بيانات الإنتاج والسلف والخصومات المرتبطة به." />
+        msg="سيتم حذف الموظف وجميع سجلات الحضور والسلف والخصومات والمرتبات المرتبطة به." />
     </div>
   );
 }
 
 // ==============================================
-// PRODUCTION TAB
+// ATTENDANCE TAB
 // ==============================================
-function ProductionTab({ employees }: { employees: EmployeeRecord[] }) {
+type AttendanceFormState = {
+  employee_id: string; date: string; check_in: string; check_out: string;
+  status: AttendanceStatus; notes: string;
+};
+
+const EMPTY_ATT_FORM: AttendanceFormState = {
+  employee_id: '', date: TODAY, check_in: '', check_out: '', status: 'present', notes: '',
+};
+
+function previewHours(f: AttendanceFormState, dailyHours: number) {
+  if (f.status === 'absent' || !f.check_in || !f.check_out) return null;
+  const [inH, inM]   = f.check_in.split(':').map(Number);
+  const [outH, outM] = f.check_out.split(':').map(Number);
+  if ([inH, inM, outH, outM].some(n => Number.isNaN(n))) return null;
+  let minutes = (outH * 60 + outM) - (inH * 60 + inM);
+  if (minutes < 0) minutes += 24 * 60;
+  const worked = Math.round((minutes / 60) * 100) / 100;
+  const overtime = Math.round(Math.max(0, worked - dailyHours) * 100) / 100;
+  return { worked, overtime };
+}
+
+function AttendanceTab({ employees }: { employees: EmployeeRecord[] }) {
   const toast = useToast();
   const [month, setMonth] = useState(new Date().getMonth() + 1);
   const [year, setYear]   = useState(CY);
   const [empFilter, setEmpFilter] = useState('');
-  const [records, setRecords] = useState<ProductionRecord[]>([]);
+  const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [modal, setModal]     = useState<'add' | 'edit' | null>(null);
-  const [editRec, setEditRec] = useState<ProductionRecord | null>(null);
+  const [editRec, setEditRec] = useState<AttendanceRecord | null>(null);
   const [saving, setSaving]   = useState(false);
   const [delId, setDelId]     = useState<number | null>(null);
-
-  const [form, setForm] = useState({ employee_id: '', category_name: '', piece_rate: 0, quantity: 0, date: TODAY, notes: '' });
-  const selectedEmp = employees.find(e => e.id === +form.employee_id);
-  const categories  = selectedEmp?.piece_rates ?? [];
+  const [form, setForm]       = useState<AttendanceFormState>(EMPTY_ATT_FORM);
 
   const load = async () => {
     setLoading(true);
-    try { setRecords(await payrollApi.getProduction({ month, year, ...(empFilter ? { employee_id: +empFilter } : {}) })); }
-    catch { toast('error', 'خطأ في جلب الإنتاج'); }
+    try { setRecords(await payrollApi.getAttendance({ month, year, ...(empFilter ? { employee_id: +empFilter } : {}) })); }
+    catch { toast('error', 'خطأ في جلب سجلات الحضور'); }
     finally { setLoading(false); }
   };
 
   useEffect(() => { load(); }, [month, year, empFilter]);
 
-  const openAdd = () => {
-    setForm({ employee_id: '', category_name: '', piece_rate: 0, quantity: 0, date: TODAY, notes: '' });
-    setEditRec(null); setModal('add');
-  };
-  const openEdit = (r: ProductionRecord) => {
-    setForm({ employee_id: String(r.employee_id), category_name: r.category_name,
-      piece_rate: r.piece_rate, quantity: r.quantity, date: r.date, notes: r.notes });
+  const openAdd  = () => { setForm(EMPTY_ATT_FORM); setEditRec(null); setModal('add'); };
+  const openEdit = (r: AttendanceRecord) => {
+    setForm({ employee_id: String(r.employee_id), date: r.date, check_in: r.check_in, check_out: r.check_out, status: r.status, notes: r.notes });
     setEditRec(r); setModal('edit');
   };
 
+  const selectedEmp = employees.find(e => e.id === +form.employee_id);
+  const preview = selectedEmp ? previewHours(form, selectedEmp.daily_hours) : null;
+
   const handleSave = async () => {
-    if (!form.employee_id || !form.category_name || !form.date) { toast('error', 'اختر الموظف والفئة والتاريخ'); return; }
+    if (!form.employee_id || !form.date) { toast('error', 'اختر الموظف والتاريخ'); return; }
+    if (form.status !== 'absent' && (!form.check_in || !form.check_out)) {
+      toast('error', 'يرجى إدخال وقت الحضور والانصراف'); return;
+    }
     setSaving(true);
     try {
-      const payload = { employee_id: +form.employee_id, category_name: form.category_name,
-        piece_rate: form.piece_rate, quantity: form.quantity, date: form.date, notes: form.notes };
-      if (modal === 'add') await payrollApi.addProduction(payload);
-      else if (editRec) await payrollApi.updateProduction(editRec.id, payload);
+      const payload = {
+        employee_id: +form.employee_id, date: form.date, status: form.status,
+        check_in: form.status === 'absent' ? '' : form.check_in,
+        check_out: form.status === 'absent' ? '' : form.check_out,
+        notes: form.notes,
+      };
+      if (modal === 'add') await payrollApi.addAttendance(payload);
+      else if (editRec) await payrollApi.updateAttendance(editRec.id, payload);
       toast('success', 'تم الحفظ'); setModal(null); load();
-    } catch { toast('error', 'خطأ في الحفظ'); }
+    } catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'خطأ في الحفظ'); }
     finally { setSaving(false); }
   };
 
   const handleDel = async () => {
     if (!delId) return;
-    try { await payrollApi.removeProduction(delId); toast('success', 'تم الحذف'); load(); }
+    try { await payrollApi.removeAttendance(delId); toast('success', 'تم الحذف'); load(); }
     catch { toast('error', 'خطأ'); } finally { setDelId(null); }
   };
 
   const exportExcel = () => {
     const ws = XLSX.utils.json_to_sheet(records.map(r => ({
-      'التاريخ': r.date, 'الموظف': r.employee.employee_name, 'الفئة': r.category_name,
-      'السعر': r.piece_rate, 'الكمية': r.quantity, 'قيمة الإنتاج': r.production_value, 'ملاحظات': r.notes,
+      'التاريخ': r.date, 'الموظف': r.employee.name, 'الحضور': r.check_in || '—', 'الانصراف': r.check_out || '—',
+      'ساعات العمل': r.worked_hours, 'الساعات الإضافية': r.overtime_hours,
+      'الحالة': STATUS_CONFIG[r.status].label, 'ملاحظات': r.notes,
     })));
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'الإنتاج');
-    XLSX.writeFile(wb, `إنتاج_${MONTHS[month-1]}_${year}.xlsx`);
+    XLSX.utils.book_append_sheet(wb, ws, 'الحضور والانصراف');
+    XLSX.writeFile(wb, `الحضور_${MONTHS[month-1]}_${year}.xlsx`);
   };
 
-  const filtered = records.filter(r => !empFilter || r.employee_id === +empFilter);
-  const totalQty = filtered.reduce((s, r) => s + r.quantity, 0);
-  const totalVal = filtered.reduce((s, r) => s + r.production_value, 0);
+  const totalWorked   = records.reduce((s, r) => s + r.worked_hours, 0);
+  const totalOvertime = records.reduce((s, r) => s + r.overtime_hours, 0);
+  const totalAbsent   = records.filter(r => r.status === 'absent').length;
 
   return (
     <div className="space-y-4">
@@ -448,15 +452,15 @@ function ProductionTab({ employees }: { employees: EmployeeRecord[] }) {
         </div>
         <div className="flex gap-2">
           <button onClick={exportExcel} className="flex items-center gap-1.5 bg-emerald-600 text-white px-3 py-2 rounded-xl text-sm hover:bg-emerald-700"><Download size={14}/> Excel</button>
-          <button onClick={openAdd} className="flex items-center gap-2 bg-[#1e3a5f] text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-[#16304d]"><Plus size={16}/> إضافة إنتاج</button>
+          <button onClick={openAdd} className="flex items-center gap-2 bg-[#1e3a5f] text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-[#16304d]"><Plus size={16}/> تسجيل حضور</button>
         </div>
       </div>
 
-      {/* Totals */}
-      {filtered.length > 0 && (
-        <div className="grid grid-cols-2 gap-3">
-          <SumCard label="إجمالي الكميات" value={totalQty} color="blue"/>
-          <SumCard label="إجمالي قيمة الإنتاج" value={totalVal} color="purple"/>
+      {records.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <SumCard label="إجمالي ساعات العمل" value={totalWorked} color="blue" suffix="ساعة"/>
+          <SumCard label="إجمالي الساعات الإضافية" value={totalOvertime} color="amber" suffix="ساعة"/>
+          <SumCard label="أيام الغياب" value={totalAbsent} color="red" suffix="يوم"/>
         </div>
       )}
 
@@ -464,20 +468,23 @@ function ProductionTab({ employees }: { employees: EmployeeRecord[] }) {
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-[#1e3a5f] text-white text-xs">
-              <tr><TH>التاريخ</TH><TH>الموظف</TH><TH>الفئة</TH><TH>السعر</TH><TH>الكمية</TH><TH>قيمة الإنتاج</TH><TH>ملاحظات</TH><TH>إجراءات</TH></tr>
+              <tr><TH>التاريخ</TH><TH>الموظف</TH><TH>الحضور</TH><TH>الانصراف</TH><TH>ساعات العمل</TH><TH>الإضافي</TH><TH>الحالة</TH><TH>ملاحظات</TH><TH>إجراءات</TH></tr>
             </thead>
             <tbody>
-              {loading ? <tr><td colSpan={8} className="py-10 text-center text-gray-400">جارٍ التحميل...</td></tr>
-              : filtered.length === 0 ? <tr><td colSpan={8} className="py-10 text-center text-gray-400">لا يوجد سجلات إنتاج</td></tr>
-              : filtered.map((r, i) => (
+              {loading ? <EmptyRow colSpan={9} text="جارٍ التحميل..."/>
+              : records.length === 0 ? <EmptyRow colSpan={9} text="لا يوجد سجلات حضور"/>
+              : records.map((r, i) => (
                 <tr key={r.id} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                   <td className="px-3 py-2.5 text-gray-600">{r.date}</td>
-                  <td className="px-3 py-2.5 font-medium">{r.employee.employee_name}</td>
-                  <td className="px-3 py-2.5"><span className="bg-purple-50 text-purple-700 px-2 py-0.5 rounded text-xs">{r.category_name}</span></td>
-                  <td className="px-3 py-2.5 text-gray-600">{fmt(r.piece_rate)}</td>
-                  <td className="px-3 py-2.5 font-semibold">{fmtN(r.quantity)}</td>
-                  <td className="px-3 py-2.5 font-bold text-blue-700">{fmt(r.production_value)}</td>
-                  <td className="px-3 py-2.5 text-gray-500 text-xs max-w-xs truncate">{r.notes}</td>
+                  <td className="px-3 py-2.5 font-medium">{r.employee.name}</td>
+                  <td className="px-3 py-2.5">{r.check_in || '—'}</td>
+                  <td className="px-3 py-2.5">{r.check_out || '—'}</td>
+                  <td className="px-3 py-2.5 font-semibold">{r.worked_hours ? fmtN(r.worked_hours) : '—'}</td>
+                  <td className="px-3 py-2.5 text-amber-700 font-semibold">{r.overtime_hours ? fmtN(r.overtime_hours) : '—'}</td>
+                  <td className="px-3 py-2.5">
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_CONFIG[r.status].color}`}>{STATUS_CONFIG[r.status].label}</span>
+                  </td>
+                  <td className="px-3 py-2.5 text-gray-500 text-xs max-w-xs truncate">{r.notes || '—'}</td>
                   <td className="px-3 py-2.5">
                     <div className="flex gap-1">
                       <button onClick={() => openEdit(r)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg"><Edit2 size={14}/></button>
@@ -487,72 +494,69 @@ function ProductionTab({ employees }: { employees: EmployeeRecord[] }) {
                 </tr>
               ))}
             </tbody>
-            {filtered.length > 0 && (
-              <tfoot className="bg-[#1e3a5f] text-white text-sm font-bold">
-                <tr>
-                  <td colSpan={4} className="px-3 py-2.5">الإجمالي</td>
-                  <td className="px-3 py-2.5">{fmtN(totalQty)}</td>
-                  <td className="px-3 py-2.5">{fmt(totalVal)}</td>
-                  <td colSpan={2}></td>
-                </tr>
-              </tfoot>
-            )}
           </table>
         </div>
       </div>
 
       {/* Add/Edit Modal */}
-      <Modal isOpen={!!modal} onClose={() => setModal(null)} title={modal === 'add' ? 'إضافة إنتاج' : 'تعديل إنتاج'}>
+      <Modal isOpen={!!modal} onClose={() => setModal(null)} title={modal === 'add' ? 'تسجيل حضور' : 'تعديل سجل الحضور'}>
         <div className="space-y-3 p-1">
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">الموظف *</label>
-            <select value={form.employee_id} onChange={e => { setForm(p => ({ ...p, employee_id: e.target.value, category_name: '', piece_rate: 0 })); }}
-              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]">
-              <option value="">اختر الموظف</option>
-              {employees.filter(e => e.employee_type === 'piecework').map(e => <option key={e.id} value={e.id}>{e.employee_name}</option>)}
-            </select>
-          </div>
-          {selectedEmp && (
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">الفئة *</label>
-              <select value={form.category_name}
-                onChange={e => {
-                  const cat = categories.find(c => c.category_name === e.target.value);
-                  setForm(p => ({ ...p, category_name: e.target.value, piece_rate: cat?.piece_rate ?? 0 }));
-                }}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]">
-                <option value="">اختر الفئة</option>
-                {categories.map(c => <option key={c.id} value={c.category_name}>{c.category_name} — {fmt(c.piece_rate)} ج.م</option>)}
-              </select>
-            </div>
-          )}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">السعر (ج.م)</label>
-              <input type="number" value={form.piece_rate} readOnly className="w-full border border-gray-100 bg-gray-50 rounded-xl px-3 py-2 text-sm text-gray-500"/>
+              <label className="block text-xs font-medium text-gray-600 mb-1">الموظف *</label>
+              <select value={form.employee_id} onChange={e => setForm(p => ({ ...p, employee_id: e.target.value }))}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]">
+                <option value="">اختر الموظف</option>
+                {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+              </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">الكمية *</label>
-              <input type="number" min="0" value={form.quantity}
-                onChange={e => setForm(p => ({ ...p, quantity: parseFloat(e.target.value) || 0 }))}
+              <label className="block text-xs font-medium text-gray-600 mb-1">التاريخ *</label>
+              <input type="date" value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))}
                 className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]"/>
             </div>
           </div>
-          {form.piece_rate > 0 && form.quantity > 0 && (
-            <div className="bg-blue-50 rounded-xl px-3 py-2 text-sm text-blue-800 font-semibold">
-              قيمة الإنتاج: {fmt(form.quantity * form.piece_rate)} ج.م
+
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">حالة الحضور *</label>
+            <select value={form.status}
+              onChange={e => {
+                const status = e.target.value as AttendanceStatus;
+                setForm(p => ({ ...p, status, ...(status === 'absent' ? { check_in: '', check_out: '' } : {}) }));
+              }}
+              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]">
+              {(Object.keys(STATUS_CONFIG) as AttendanceStatus[]).map(s => <option key={s} value={s}>{STATUS_CONFIG[s].label}</option>)}
+            </select>
+          </div>
+
+          {form.status !== 'absent' && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">وقت الحضور *</label>
+                <input type="time" value={form.check_in} onChange={e => setForm(p => ({ ...p, check_in: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]"/>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">وقت الانصراف *</label>
+                <input type="time" value={form.check_out} onChange={e => setForm(p => ({ ...p, check_out: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]"/>
+              </div>
             </div>
           )}
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">التاريخ *</label>
-            <input type="date" value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))}
-              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]"/>
-          </div>
+
+          {preview && (
+            <div className="bg-blue-50 rounded-xl px-3 py-2 text-sm text-blue-800 font-semibold flex justify-between">
+              <span>ساعات العمل: {fmtN(preview.worked)}</span>
+              {preview.overtime > 0 && <span className="text-amber-700">الإضافي: {fmtN(preview.overtime)}</span>}
+            </div>
+          )}
+
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">ملاحظات</label>
             <input value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))}
               className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]"/>
           </div>
+
           <div className="flex gap-3">
             <button onClick={handleSave} disabled={saving}
               className="flex-1 bg-[#1e3a5f] text-white py-2.5 rounded-xl hover:bg-[#16304d] disabled:opacity-60 text-sm font-medium">
@@ -568,100 +572,69 @@ function ProductionTab({ employees }: { employees: EmployeeRecord[] }) {
 }
 
 // ==============================================
-// GENERIC TRANSACTIONS TAB (Advances / Deductions / Bonuses)
+// ADJUSTMENTS TAB (Advances / Deductions / Bonuses)
 // ==============================================
-type TxType = 'advances' | 'deductions' | 'bonuses';
-
-type TxRecord = AdvanceRecord | DeductionRecord | BonusRecord;
-
-const TX_CONFIG: Record<TxType, { label: string; noteLabel: string; color: string }> = {
-  advances:   { label: 'السلفة',  noteLabel: 'ملاحظات', color: 'orange' },
-  deductions: { label: 'الخصم',   noteLabel: 'السبب',    color: 'red'    },
-  bonuses:    { label: 'المكافأة', noteLabel: 'السبب',    color: 'green'  },
-};
-
-function TransactionsTab({ type, employees }: { type: TxType; employees: EmployeeRecord[] }) {
+function AdjustmentsTab({ employees }: { employees: EmployeeRecord[] }) {
   const toast = useToast();
-  const cfg = TX_CONFIG[type];
   const [month, setMonth] = useState(new Date().getMonth() + 1);
   const [year, setYear]   = useState(CY);
   const [empFilter, setEmpFilter] = useState('');
-  const [records, setRecords] = useState<TxRecord[]>([]);
+  const [typeFilter, setTypeFilter] = useState<AdjustmentType | ''>('');
+  const [records, setRecords] = useState<SalaryAdjustmentRecord[]>([]);
   const [loading, setLoading] = useState(false);
-  const [modal, setModal]   = useState<'add' | 'edit' | null>(null);
-  const [editRec, setEditRec] = useState<TxRecord | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [delId, setDelId]   = useState<number | null>(null);
-  const [form, setForm]     = useState({ employee_id: '', date: TODAY, amount: 0, note: '' });
+  const [modal, setModal]     = useState<'add' | 'edit' | null>(null);
+  const [editRec, setEditRec] = useState<SalaryAdjustmentRecord | null>(null);
+  const [saving, setSaving]   = useState(false);
+  const [delId, setDelId]     = useState<number | null>(null);
+  const [form, setForm]       = useState({ employee_id: '', date: TODAY, type: 'advance' as AdjustmentType, amount: 0, reason: '' });
 
   const load = async () => {
     setLoading(true);
     try {
-      const params = { month, year, ...(empFilter ? { employee_id: +empFilter } : {}) };
-      const nextRecords =
-        type === 'advances'
-          ? await payrollApi.getAdvances(params)
-          : type === 'deductions'
-            ? await payrollApi.getDeductions(params)
-            : await payrollApi.getBonuses(params);
-      setRecords(nextRecords);
-    } catch { toast('error', `خطأ في جلب البيانات`); }
+      setRecords(await payrollApi.getAdjustments({
+        month, year, ...(empFilter ? { employee_id: +empFilter } : {}), ...(typeFilter ? { type: typeFilter } : {}),
+      }));
+    } catch { toast('error', 'خطأ في جلب البيانات'); }
     finally { setLoading(false); }
   };
 
-  useEffect(() => { load(); }, [month, year, empFilter]);
+  useEffect(() => { load(); }, [month, year, empFilter, typeFilter]);
 
-  const txNote = (r: TxRecord) => 'notes' in r ? r.notes : r.reason;
-
-  const openAdd = () => { setForm({ employee_id: '', date: TODAY, amount: 0, note: '' }); setEditRec(null); setModal('add'); };
-  const openEdit = (r: TxRecord) => { setForm({ employee_id: String(r.employee_id), date: r.date, amount: r.amount, note: txNote(r) ?? '' }); setEditRec(r); setModal('edit'); };
+  const openAdd  = () => { setForm({ employee_id: '', date: TODAY, type: 'advance', amount: 0, reason: '' }); setEditRec(null); setModal('add'); };
+  const openEdit = (r: SalaryAdjustmentRecord) => { setForm({ employee_id: String(r.employee_id), date: r.date, type: r.type, amount: r.amount, reason: r.reason }); setEditRec(r); setModal('edit'); };
 
   const handleSave = async () => {
-    if (!form.employee_id || !form.date || form.amount <= 0) { toast('error', 'يرجى تعبئة جميع الحقول بشكل صحيح'); return; }
+    if (!form.employee_id || !form.date) { toast('error', 'اختر الموظف والتاريخ'); return; }
+    if (form.amount <= 0) { toast('error', 'المبلغ يجب أن يكون أكبر من صفر'); return; }
     setSaving(true);
     try {
-      const basePayload = { employee_id: +form.employee_id, date: form.date, amount: form.amount };
-      if (type === 'advances') {
-        const payload = { ...basePayload, notes: form.note };
-        if (modal === 'add') await payrollApi.addAdvance(payload);
-        else if (editRec) await payrollApi.updateAdvance(editRec.id, payload);
-      } else if (type === 'deductions') {
-        const payload = { ...basePayload, reason: form.note };
-        if (modal === 'add') await payrollApi.addDeduction(payload);
-        else if (editRec) await payrollApi.updateDeduction(editRec.id, payload);
-      } else {
-        const payload = { ...basePayload, reason: form.note };
-        if (modal === 'add') await payrollApi.addBonus(payload);
-        else if (editRec) await payrollApi.updateBonus(editRec.id, payload);
-      }
+      const payload = { employee_id: +form.employee_id, date: form.date, type: form.type, amount: form.amount, reason: form.reason };
+      if (modal === 'add') await payrollApi.addAdjustment(payload);
+      else if (editRec) await payrollApi.updateAdjustment(editRec.id, payload);
       toast('success', 'تم الحفظ'); setModal(null); load();
-    } catch { toast('error', 'خطأ في الحفظ'); }
+    } catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'خطأ في الحفظ'); }
     finally { setSaving(false); }
   };
 
   const handleDel = async () => {
     if (!delId) return;
-    try {
-      if (type === 'advances') await payrollApi.removeAdvance(delId);
-      else if (type === 'deductions') await payrollApi.removeDeduction(delId);
-      else await payrollApi.removeBonus(delId);
-      toast('success', 'تم الحذف'); load();
-    }
+    try { await payrollApi.removeAdjustment(delId); toast('success', 'تم الحذف'); load(); }
     catch { toast('error', 'خطأ'); } finally { setDelId(null); }
   };
 
   const exportExcel = () => {
     const ws = XLSX.utils.json_to_sheet(records.map(r => ({
-      'التاريخ': r.date, 'الموظف': r.employee.employee_name,
-      'المبلغ': r.amount, [cfg.noteLabel]: txNote(r) ?? '',
+      'التاريخ': r.date, 'الموظف': r.employee.name, 'النوع': ADJ_CONFIG[r.type].label,
+      'المبلغ': r.amount, 'السبب': r.reason || '',
     })));
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, cfg.label);
-    XLSX.writeFile(wb, `${cfg.label}_${MONTHS[month-1]}_${year}.xlsx`);
+    XLSX.utils.book_append_sheet(wb, ws, 'السلف والخصومات');
+    XLSX.writeFile(wb, `السلف_والخصومات_${MONTHS[month-1]}_${year}.xlsx`);
   };
 
-  const filtered = records.filter(r => !empFilter || r.employee_id === +empFilter);
-  const total = filtered.reduce((s, r) => s + r.amount, 0);
+  const totalAdvances   = records.filter(r => r.type === 'advance').reduce((s, r) => s + r.amount, 0);
+  const totalDeductions = records.filter(r => r.type === 'deduction').reduce((s, r) => s + r.amount, 0);
+  const totalBonuses    = records.filter(r => r.type === 'bonus').reduce((s, r) => s + r.amount, 0);
 
   return (
     <div className="space-y-4">
@@ -669,34 +642,44 @@ function TransactionsTab({ type, employees }: { type: TxType; employees: Employe
         <div className="flex gap-2 flex-wrap items-center">
           <MonthYearBar month={month} year={year} setMonth={setMonth} setYear={setYear}/>
           <EmpSelect employees={employees} value={empFilter} onChange={setEmpFilter} placeholder="كل الموظفين" includeAll/>
+          <select value={typeFilter} onChange={e => setTypeFilter(e.target.value as AdjustmentType | '')}
+            className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]">
+            <option value="">كل الأنواع</option>
+            {(Object.keys(ADJ_CONFIG) as AdjustmentType[]).map(t => <option key={t} value={t}>{ADJ_CONFIG[t].label}</option>)}
+          </select>
         </div>
         <div className="flex gap-2">
           <button onClick={exportExcel} className="flex items-center gap-1.5 bg-emerald-600 text-white px-3 py-2 rounded-xl text-sm hover:bg-emerald-700"><Download size={14}/> Excel</button>
-          <button onClick={openAdd} className="flex items-center gap-2 bg-[#1e3a5f] text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-[#16304d]"><Plus size={16}/> إضافة {cfg.label}</button>
+          <button onClick={openAdd} className="flex items-center gap-2 bg-[#1e3a5f] text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-[#16304d]"><Plus size={16}/> إضافة حركة</button>
         </div>
       </div>
 
-      {total > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-sm">
-          <SumCard label={`إجمالي ${type === 'bonuses' ? 'المكافآت' : type === 'advances' ? 'السلف' : 'الخصومات'}`} value={total} color={cfg.color}/>
-        </div>
-      )}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <SumCard label="إجمالي السلف" value={totalAdvances} color="orange"/>
+        <SumCard label="إجمالي الخصومات" value={totalDeductions} color="red"/>
+        <SumCard label="إجمالي المكافآت" value={totalBonuses} color="green"/>
+      </div>
 
       <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-[#1e3a5f] text-white text-xs">
-              <tr><TH>التاريخ</TH><TH>الموظف</TH><TH>المبلغ</TH><TH>{cfg.noteLabel}</TH><TH>إجراءات</TH></tr>
+              <tr><TH>التاريخ</TH><TH>الموظف</TH><TH>النوع</TH><TH>المبلغ</TH><TH>السبب</TH><TH>إجراءات</TH></tr>
             </thead>
             <tbody>
-              {loading ? <tr><td colSpan={5} className="py-10 text-center text-gray-400">جارٍ التحميل...</td></tr>
-              : filtered.length === 0 ? <tr><td colSpan={5} className="py-10 text-center text-gray-400">لا يوجد سجلات</td></tr>
-              : filtered.map((r, i) => (
+              {loading ? <EmptyRow colSpan={6} text="جارٍ التحميل..."/>
+              : records.length === 0 ? <EmptyRow colSpan={6} text="لا يوجد سجلات"/>
+              : records.map((r, i) => (
                 <tr key={r.id} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                   <td className="px-3 py-2.5 text-gray-600">{r.date}</td>
-                  <td className="px-3 py-2.5 font-medium">{r.employee.employee_name}</td>
+                  <td className="px-3 py-2.5 font-medium">{r.employee.name}</td>
+                  <td className="px-3 py-2.5">
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium bg-${ADJ_CONFIG[r.type].color}-100 text-${ADJ_CONFIG[r.type].color}-700`}>
+                      {ADJ_CONFIG[r.type].label}
+                    </span>
+                  </td>
                   <td className="px-3 py-2.5 font-bold text-blue-700">{fmt(r.amount)}</td>
-                  <td className="px-3 py-2.5 text-gray-500 text-xs">{txNote(r) ?? '—'}</td>
+                  <td className="px-3 py-2.5 text-gray-500 text-xs">{r.reason || '—'}</td>
                   <td className="px-3 py-2.5">
                     <div className="flex gap-1">
                       <button onClick={() => openEdit(r)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg"><Edit2 size={14}/></button>
@@ -706,28 +689,26 @@ function TransactionsTab({ type, employees }: { type: TxType; employees: Employe
                 </tr>
               ))}
             </tbody>
-            {filtered.length > 0 && (
-              <tfoot className="bg-[#1e3a5f] text-white text-sm font-bold">
-                <tr>
-                  <td colSpan={2} className="px-3 py-2.5">الإجمالي</td>
-                  <td className="px-3 py-2.5">{fmt(total)}</td>
-                  <td colSpan={2}></td>
-                </tr>
-              </tfoot>
-            )}
           </table>
         </div>
       </div>
 
       {/* Add/Edit Modal */}
-      <Modal isOpen={!!modal} onClose={() => setModal(null)} title={modal === 'add' ? `إضافة ${cfg.label}` : `تعديل ${cfg.label}`}>
+      <Modal isOpen={!!modal} onClose={() => setModal(null)} title={modal === 'add' ? 'إضافة حركة' : 'تعديل حركة'}>
         <div className="space-y-3 p-1">
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">الموظف *</label>
             <select value={form.employee_id} onChange={e => setForm(p => ({ ...p, employee_id: e.target.value }))}
               className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]">
               <option value="">اختر الموظف</option>
-              {employees.map(e => <option key={e.id} value={e.id}>{e.employee_name}</option>)}
+              {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">النوع *</label>
+            <select value={form.type} onChange={e => setForm(p => ({ ...p, type: e.target.value as AdjustmentType }))}
+              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]">
+              {(Object.keys(ADJ_CONFIG) as AdjustmentType[]).map(t => <option key={t} value={t}>{ADJ_CONFIG[t].label}</option>)}
             </select>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -744,8 +725,8 @@ function TransactionsTab({ type, employees }: { type: TxType; employees: Employe
             </div>
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">{cfg.noteLabel}</label>
-            <input value={form.note} onChange={e => setForm(p => ({ ...p, note: e.target.value }))}
+            <label className="block text-xs font-medium text-gray-600 mb-1">السبب</label>
+            <input value={form.reason} onChange={e => setForm(p => ({ ...p, reason: e.target.value }))}
               className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]"/>
           </div>
           <div className="flex gap-3">
@@ -763,40 +744,41 @@ function TransactionsTab({ type, employees }: { type: TxType; employees: Employe
 }
 
 // ==============================================
-// PAYROLL TAB (كشف المرتبات)
+// PAYROLL TAB (كشف المرتبات — توليد تلقائي)
 // ==============================================
-function printReceipt(row: SalaryRow, month: number, year: number) {
-  const emp     = row.employee;
-  const isFixed = emp.employee_type === 'fixed';
-  const prodRows = row.productions.map(p =>
-    `<tr><td>${p.category_name}</td><td>${fmtN(p.quantity)} قطعة × ${fmt(p.piece_rate)} ج.م</td><td>${fmt(p.production_value)} ج.م</td></tr>`
-  ).join('');
+function printPayrollSheet(rows: PayrollRow[], month: number, year: number) {
+  const body = rows.map(r => `
+    <tr>
+      <td>${r.employee.name}</td>
+      <td>${fmtN(r.attendance_days)}</td>
+      <td>${fmtN(r.absent_days)}</td>
+      <td>${fmtN(r.half_days)}</td>
+      <td>${fmtN(r.worked_hours)}</td>
+      <td>${fmtN(r.overtime_hours)}</td>
+      <td>${fmt(r.overtime_amount)}</td>
+      <td>${fmt(r.advances)}</td>
+      <td>${fmt(r.deductions)}</td>
+      <td>${fmt(r.bonuses)}</td>
+      <td>${fmt(r.base_salary)}</td>
+      <td style="font-weight:bold">${fmt(r.net_salary)}</td>
+    </tr>`).join('');
 
-  const html = `<html dir="rtl"><head><meta charset="utf-8"><title>إيصال راتب</title>
-  <style>body{font-family:Arial;padding:25px;font-size:13px}h2{text-align:center;border-bottom:2px solid #000;padding-bottom:8px}
-  table{width:100%;border-collapse:collapse;margin-top:12px}td,th{padding:6px 10px;border:1px solid #ccc;text-align:right}
-  .lbl{background:#f5f5f5;font-weight:bold;width:40%}.tot td{font-weight:bold;background:#e8f5e9;font-size:15px}
-  .phead th{background:#1e3a5f;color:white}.sig{margin-top:40px;display:flex;justify-content:space-between}
-  .sig div{text-align:center;border-top:1px solid #000;padding-top:6px;width:160px}
+  const totalNet = rows.reduce((s, r) => s + r.net_salary, 0);
+
+  const html = `<html dir="rtl"><head><meta charset="utf-8"><title>كشف المرتبات</title>
+  <style>body{font-family:Arial;padding:20px;font-size:12px}h2{text-align:center;border-bottom:2px solid #000;padding-bottom:8px}
+  table{width:100%;border-collapse:collapse;margin-top:12px}td,th{padding:6px 8px;border:1px solid #ccc;text-align:right}
+  th{background:#1e3a5f;color:#fff}.tot td{font-weight:bold;background:#e8f5e9}
   .print-date{text-align:left;color:#666;font-size:11px;margin-top:8px}</style></head><body>
-  <h2>إيصال راتب — ${MONTHS[month-1]} ${year}</h2>
-  <table><tr><td class="lbl">اسم الموظف</td><td>${emp.employee_name}</td><td class="lbl">كود الموظف</td><td>${emp.employee_code}</td></tr>
-  <tr><td class="lbl">الإدارة</td><td>${emp.department}</td><td class="lbl">النوع</td><td>${isFixed ? 'راتب ثابت' : 'موظف بالقطعة'}</td></tr>
-  <tr><td class="lbl">الشهر</td><td>${MONTHS[month-1]}</td><td class="lbl">السنة</td><td>${year}</td></tr></table>
-  <table style="margin-top:14px">
-  ${isFixed ? `<tr><td class="lbl">الراتب الأساسي</td><td>${fmt(emp.base_salary)} ج.م</td></tr>` : `
-  <tr><th class="phead" colspan="3">تفصيل الإنتاج</th></tr>
-  <tr class="phead"><th>الفئة</th><th>الكمية × السعر</th><th>القيمة</th></tr>
-  ${prodRows}
-  <tr><td class="lbl" colspan="2">إجمالي الإنتاج</td><td>${fmt(row.production_value)} ج.م</td></tr>`}
-  <tr><td class="lbl">المكافآت</td><td style="color:green">+ ${fmt(row.total_bonuses)} ج.م</td></tr>
-  <tr><td class="lbl">السلف</td><td style="color:red">− ${fmt(row.total_advances)} ج.م</td></tr>
-  <tr><td class="lbl">الخصومات</td><td style="color:red">− ${fmt(row.total_deductions)} ج.م</td></tr>
-  <tr class="tot"><td colspan="${isFixed ? 1 : 2}">صافي الراتب</td><td>${fmt(row.net_salary)} ج.م</td></tr>
+  <h2>كشف المرتبات — ${MONTHS[month-1]} ${year}</h2>
+  <table>
+    <thead><tr><th>الموظف</th><th>أيام حضور</th><th>أيام غياب</th><th>نصف يوم</th><th>ساعات عمل</th><th>ساعات إضافية</th><th>مبلغ الإضافي</th><th>سلف</th><th>خصومات</th><th>مكافآت</th><th>الراتب الأساسي</th><th>صافي الراتب</th></tr></thead>
+    <tbody>${body}</tbody>
+    <tfoot><tr class="tot"><td colspan="11">الإجمالي</td><td>${fmt(totalNet)} ج.م</td></tr></tfoot>
   </table>
-  <div class="sig"><div>توقيع الموظف</div><div>توقيع المدير</div><div>الختم</div></div>
   <p class="print-date">تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')}</p>
   </body></html>`;
+
   const w = window.open('', '_blank');
   if (!w) return;
   w.document.write(html);
@@ -806,72 +788,84 @@ function printReceipt(row: SalaryRow, month: number, year: number) {
 
 function PayrollTab() {
   const toast = useToast();
-  const [month, setMonth]   = useState(new Date().getMonth() + 1);
-  const [year, setYear]     = useState(CY);
-  const [rows, setRows]     = useState<SalaryRow[]>([]);
+  const [month, setMonth]     = useState(new Date().getMonth() + 1);
+  const [year, setYear]       = useState(CY);
+  const [rows, setRows]       = useState<PayrollRow[]>([]);
   const [loading, setLoading] = useState(false);
-  const [search, setSearch] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const [generated, setGenerated]   = useState(false);
 
   const load = async () => {
     setLoading(true);
-    try { setRows(await payrollApi.getSalary(month, year)); }
-    catch { toast('error', 'خطأ في حساب المرتبات'); }
+    setGenerated(false);
+    try { setRows(await payrollApi.getRecords(month, year)); }
+    catch { toast('error', 'خطأ في جلب كشف المرتبات'); }
     finally { setLoading(false); }
   };
 
   useEffect(() => { load(); }, [month, year]);
 
-  const filtered = rows.filter(r =>
-    !search || r.employee.employee_name.includes(search) || r.employee.employee_code.includes(search));
-
-  const totalFixed    = filtered.filter(r => r.employee.employee_type === 'fixed').reduce((s, r) => s + r.net_salary, 0);
-  const totalPiece    = filtered.filter(r => r.employee.employee_type === 'piecework').reduce((s, r) => s + r.net_salary, 0);
-  const totalAdvances = filtered.reduce((s, r) => s + r.total_advances, 0);
-  const totalDed      = filtered.reduce((s, r) => s + r.total_deductions, 0);
-  const totalBon      = filtered.reduce((s, r) => s + r.total_bonuses, 0);
-  const totalCost     = filtered.reduce((s, r) => s + r.net_salary, 0);
-
-  const printAllReceipts = () => filtered.forEach(r => setTimeout(() => printReceipt(r, month, year), 300));
+  const handleGenerate = async () => {
+    setGenerating(true);
+    try {
+      const result = await payrollApi.generate(month, year);
+      setRows(result);
+      setGenerated(true);
+      toast('success', result.length ? 'تم توليد المرتبات بنجاح' : 'لا يوجد موظفون نشطون لتوليد مرتباتهم');
+    } catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'خطأ في توليد المرتبات'); }
+    finally { setGenerating(false); }
+  };
 
   const exportExcel = () => {
-    const ws = XLSX.utils.json_to_sheet(filtered.map(r => ({
-      'الكود': r.employee.employee_code, 'الاسم': r.employee.employee_name,
-      'النوع': r.employee.employee_type === 'fixed' ? 'راتب ثابت' : 'بالقطعة',
-      'الراتب/قيمة الإنتاج': r.employee.employee_type === 'fixed' ? r.employee.base_salary : r.production_value,
-      'المكافآت': r.total_bonuses, 'السلف': r.total_advances, 'الخصومات': r.total_deductions,
-      'صافي الراتب': r.net_salary,
+    const ws = XLSX.utils.json_to_sheet(rows.map(r => ({
+      'الموظف': r.employee.name, 'أيام الحضور': r.attendance_days, 'أيام الغياب': r.absent_days, 'نصف يوم': r.half_days,
+      'ساعات العمل': r.worked_hours, 'ساعات إضافية': r.overtime_hours, 'مبلغ الإضافي': r.overtime_amount,
+      'سلف': r.advances, 'خصومات': r.deductions, 'مكافآت': r.bonuses,
+      'الراتب الأساسي': r.base_salary, 'صافي الراتب': r.net_salary,
     })));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'كشف المرتبات');
     XLSX.writeFile(wb, `مرتبات_${MONTHS[month-1]}_${year}.xlsx`);
   };
 
+  const totalBase      = rows.reduce((s, r) => s + r.base_salary, 0);
+  const totalOvertime  = rows.reduce((s, r) => s + r.overtime_amount, 0);
+  const totalAdvances  = rows.reduce((s, r) => s + r.advances, 0);
+  const totalDed       = rows.reduce((s, r) => s + r.deductions, 0);
+  const totalBonuses   = rows.reduce((s, r) => s + r.bonuses, 0);
+  const totalNet        = rows.reduce((s, r) => s + r.net_salary, 0);
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-3 justify-between items-center">
-        <div className="flex gap-2 flex-wrap items-center">
-          <MonthYearBar month={month} year={year} setMonth={setMonth} setYear={setYear}/>
-          <div className="relative">
-            <Search size={15} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"/>
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="بحث..."
-              className="pr-9 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] w-40"/>
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <button onClick={exportExcel} className="flex items-center gap-1.5 bg-emerald-600 text-white px-3 py-2 rounded-xl text-sm hover:bg-emerald-700"><Download size={14}/> Excel</button>
-          <button onClick={printAllReceipts} className="flex items-center gap-1.5 bg-gray-600 text-white px-3 py-2 rounded-xl text-sm hover:bg-gray-700"><Printer size={14}/> طباعة الكل</button>
+        <MonthYearBar month={month} year={year} setMonth={setMonth} setYear={setYear}/>
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={handleGenerate} disabled={generating}
+            className="flex items-center gap-2 bg-[#1e3a5f] text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-[#16304d] disabled:opacity-60">
+            <Wallet size={16}/> {generating ? 'جارٍ التوليد...' : 'توليد المرتبات'}
+          </button>
+          {rows.length > 0 && <>
+            <button onClick={exportExcel} className="flex items-center gap-1.5 bg-emerald-600 text-white px-3 py-2 rounded-xl text-sm hover:bg-emerald-700"><Download size={14}/> Excel</button>
+            <button onClick={() => printPayrollSheet(rows, month, year)} className="flex items-center gap-1.5 bg-gray-600 text-white px-3 py-2 rounded-xl text-sm hover:bg-gray-700"><Printer size={14}/> طباعة</button>
+            <button onClick={() => printPayrollSheet(rows, month, year)} className="flex items-center gap-1.5 bg-slate-700 text-white px-3 py-2 rounded-xl text-sm hover:bg-slate-800"><FileDown size={14}/> تصدير PDF</button>
+          </>}
         </div>
       </div>
 
-      {/* Summary cards */}
-      {filtered.length > 0 && (
+      {!generated && rows.length > 0 && (
+        <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+          هذه آخر مرتبات تم توليدها لهذا الشهر — اضغط "توليد المرتبات" لإعادة الحساب بعد أي تعديل على الحضور أو السلف أو الخصومات.
+        </p>
+      )}
+
+      {rows.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          <SumCard label="رواتب ثابتة"  value={totalFixed}    color="blue"/>
-          <SumCard label="رواتب قطعة"   value={totalPiece}    color="purple"/>
-          <SumCard label="إجمالي المكافآت" value={totalBon}   color="green"/>
-          <SumCard label="إجمالي السلف"  value={totalAdvances} color="orange"/>
-          <SumCard label="إجمالي الخصومات" value={totalDed}   color="red"/>
-          <SumCard label="إجمالي التكلفة" value={totalCost}   color="teal"/>
+          <SumCard label="الرواتب الأساسية" value={totalBase} color="blue"/>
+          <SumCard label="إجمالي الإضافي" value={totalOvertime} color="amber"/>
+          <SumCard label="إجمالي المكافآت" value={totalBonuses} color="green"/>
+          <SumCard label="إجمالي السلف" value={totalAdvances} color="orange"/>
+          <SumCard label="إجمالي الخصومات" value={totalDed} color="red"/>
+          <SumCard label="صافي إجمالي الرواتب" value={totalNet} color="teal"/>
         </div>
       )}
 
@@ -880,50 +874,41 @@ function PayrollTab() {
           <table className="w-full text-sm">
             <thead className="bg-[#1e3a5f] text-white text-xs">
               <tr>
-                <TH>الكود</TH><TH>الاسم</TH><TH>النوع</TH>
-                <TH>الراتب / قيمة الإنتاج</TH><TH>مكافآت</TH><TH>سلف</TH><TH>خصومات</TH>
-                <TH>صافي الراتب</TH><TH center>إيصال</TH>
+                <TH>الموظف</TH><TH center>أيام حضور</TH><TH center>أيام غياب</TH><TH center>نصف يوم</TH>
+                <TH center>ساعات عمل</TH><TH center>ساعات إضافية</TH><TH>مبلغ الإضافي</TH>
+                <TH>سلف</TH><TH>خصومات</TH><TH>مكافآت</TH><TH>الراتب الأساسي</TH><TH>صافي الراتب</TH>
               </tr>
             </thead>
             <tbody>
-              {loading ? <tr><td colSpan={9} className="py-12 text-center text-gray-400">جارٍ التحميل...</td></tr>
-              : filtered.length === 0 ? <tr><td colSpan={9} className="py-10 text-center text-gray-400">لا يوجد بيانات</td></tr>
-              : filtered.map((r, i) => {
-                const isFixed = r.employee.employee_type === 'fixed';
-                return (
-                  <tr key={r.employee.id} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                    <td className="px-3 py-2.5 font-mono text-xs">{r.employee.employee_code}</td>
-                    <td className="px-3 py-2.5 font-medium">{r.employee.employee_name}</td>
-                    <td className="px-3 py-2.5">
-                      <span className={`px-1.5 py-0.5 rounded text-xs ${isFixed ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
-                        {isFixed ? 'ثابت' : 'قطعة'}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5 font-semibold">{fmt(isFixed ? r.employee.base_salary : r.production_value)}</td>
-                    <td className="px-3 py-2.5 text-green-700 font-semibold">{fmt(r.total_bonuses)}</td>
-                    <td className="px-3 py-2.5 text-orange-600">{fmt(r.total_advances)}</td>
-                    <td className="px-3 py-2.5 text-red-600">{fmt(r.total_deductions)}</td>
-                    <td className="px-3 py-2.5 font-bold text-blue-800 text-base">{fmt(r.net_salary)}</td>
-                    <td className="px-3 py-2.5 text-center">
-                      <button onClick={() => printReceipt(r, month, year)}
-                        className="p-1.5 text-gray-600 hover:bg-gray-100 rounded-lg" title="طباعة إيصال">
-                        <Printer size={15}/>
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
+              {loading ? <EmptyRow colSpan={12} text="جارٍ التحميل..."/>
+              : rows.length === 0 ? <EmptyRow colSpan={12} text={`لا توجد مرتبات مولّدة لشهر ${MONTHS[month-1]} ${year} — اضغط "توليد المرتبات"`}/>
+              : rows.map((r, i) => (
+                <tr key={r.id} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                  <td className="px-3 py-2.5 font-medium">{r.employee.name}</td>
+                  <td className="px-3 py-2.5 text-center">{fmtN(r.attendance_days)}</td>
+                  <td className="px-3 py-2.5 text-center text-red-600">{fmtN(r.absent_days)}</td>
+                  <td className="px-3 py-2.5 text-center">{fmtN(r.half_days)}</td>
+                  <td className="px-3 py-2.5 text-center">{fmtN(r.worked_hours)}</td>
+                  <td className="px-3 py-2.5 text-center text-amber-700">{fmtN(r.overtime_hours)}</td>
+                  <td className="px-3 py-2.5">{fmt(r.overtime_amount)}</td>
+                  <td className="px-3 py-2.5 text-orange-600">{fmt(r.advances)}</td>
+                  <td className="px-3 py-2.5 text-red-600">{fmt(r.deductions)}</td>
+                  <td className="px-3 py-2.5 text-green-700">{fmt(r.bonuses)}</td>
+                  <td className="px-3 py-2.5 font-semibold">{fmt(r.base_salary)}</td>
+                  <td className="px-3 py-2.5 font-bold text-blue-800 text-base">{fmt(r.net_salary)}</td>
+                </tr>
+              ))}
             </tbody>
-            {filtered.length > 0 && (
+            {rows.length > 0 && (
               <tfoot className="bg-[#1e3a5f] text-white font-bold text-sm">
                 <tr>
-                  <td colSpan={3} className="px-3 py-2.5">الإجمالي</td>
-                  <td className="px-3 py-2.5">{fmt(totalFixed + totalPiece)}</td>
-                  <td className="px-3 py-2.5">{fmt(totalBon)}</td>
+                  <td colSpan={6} className="px-3 py-2.5">الإجمالي</td>
+                  <td className="px-3 py-2.5">{fmt(totalOvertime)}</td>
                   <td className="px-3 py-2.5">{fmt(totalAdvances)}</td>
                   <td className="px-3 py-2.5">{fmt(totalDed)}</td>
-                  <td className="px-3 py-2.5">{fmt(totalCost)}</td>
-                  <td></td>
+                  <td className="px-3 py-2.5">{fmt(totalBonuses)}</td>
+                  <td className="px-3 py-2.5">{fmt(totalBase)}</td>
+                  <td className="px-3 py-2.5">{fmt(totalNet)}</td>
                 </tr>
               </tfoot>
             )}
@@ -935,172 +920,18 @@ function PayrollTab() {
 }
 
 // ==============================================
-// REPORTS TAB
-// ==============================================
-function ReportsTab() {
-  const toast = useToast();
-  const [month, setMonth]   = useState(new Date().getMonth() + 1);
-  const [year, setYear]     = useState(CY);
-  const [data, setData]     = useState<PayrollReportData | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  const load = async () => {
-    setLoading(true);
-    try { setData(await payrollApi.getReport(month, year)); }
-    catch { toast('error', 'خطأ في التقرير'); }
-    finally { setLoading(false); }
-  };
-
-  useEffect(() => { load(); }, [month, year]);
-
-  const exportExcel = () => {
-    if (!data) return;
-    const ws = XLSX.utils.json_to_sheet([
-      { 'البند': 'إجمالي الموظفين', 'القيمة': data.total_employees },
-      { 'البند': 'موظفو الراتب الثابت', 'القيمة': data.total_fixed_employees },
-      { 'البند': 'موظفو القطعة', 'القيمة': data.total_piecework_employees },
-      { 'البند': 'إجمالي الرواتب الثابتة', 'القيمة': data.total_fixed_salaries },
-      { 'البند': 'إجمالي رواتب القطعة', 'القيمة': data.total_piecework_salaries },
-      { 'البند': 'إجمالي السلف', 'القيمة': data.total_advances },
-      { 'البند': 'إجمالي الخصومات', 'القيمة': data.total_deductions },
-      { 'البند': 'إجمالي المكافآت', 'القيمة': data.total_bonuses },
-      { 'البند': 'إجمالي تكلفة الرواتب', 'القيمة': data.total_payroll_cost },
-    ]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'تقرير المرتبات');
-    if (data.rows.length) {
-      const ws2 = XLSX.utils.json_to_sheet(data.rows.map(r => ({
-        'الموظف': r.employee.employee_name, 'النوع': r.employee.employee_type === 'fixed' ? 'ثابت' : 'قطعة',
-        'الراتب/الإنتاج': r.employee.employee_type === 'fixed' ? r.employee.base_salary : r.production_value,
-        'مكافآت': r.total_bonuses, 'سلف': r.total_advances, 'خصومات': r.total_deductions,
-        'الصافي': r.net_salary,
-      })));
-      XLSX.utils.book_append_sheet(wb, ws2, 'التفاصيل');
-    }
-    XLSX.writeFile(wb, `تقرير_مرتبات_${MONTHS[month-1]}_${year}.xlsx`);
-  };
-
-  return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap gap-3 justify-between items-center">
-        <MonthYearBar month={month} year={year} setMonth={setMonth} setYear={setYear}/>
-        <div className="flex gap-2">
-          {data && <>
-            <button onClick={exportExcel} className="flex items-center gap-1.5 bg-emerald-600 text-white px-3 py-2 rounded-xl text-sm hover:bg-emerald-700"><Download size={14}/> Excel</button>
-            <button onClick={() => window.print()} className="flex items-center gap-1.5 bg-gray-600 text-white px-3 py-2 rounded-xl text-sm hover:bg-gray-700"><Printer size={14}/> طباعة</button>
-          </>}
-        </div>
-      </div>
-
-      {loading && <div className="py-12 text-center text-gray-400">جارٍ التحميل...</div>}
-
-      {data && !loading && (
-        <>
-          {/* Summary cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            <div className="bg-white border border-gray-200 rounded-2xl p-4 shadow-sm text-center">
-              <p className="text-xs text-gray-500">إجمالي الموظفين</p>
-              <p className="text-3xl font-bold text-gray-800 mt-1">{data.total_employees}</p>
-            </div>
-            <div className="bg-white border border-gray-200 rounded-2xl p-4 shadow-sm text-center">
-              <p className="text-xs text-blue-500">راتب ثابت</p>
-              <p className="text-3xl font-bold text-blue-700 mt-1">{data.total_fixed_employees}</p>
-            </div>
-            <div className="bg-white border border-gray-200 rounded-2xl p-4 shadow-sm text-center">
-              <p className="text-xs text-purple-500">موظفو القطعة</p>
-              <p className="text-3xl font-bold text-purple-700 mt-1">{data.total_piecework_employees}</p>
-            </div>
-            <div className="bg-gradient-to-br from-[#1e3a5f] to-[#2d5a8f] text-white rounded-2xl p-4 shadow text-center">
-              <p className="text-xs text-white/70">إجمالي تكلفة الرواتب</p>
-              <p className="text-2xl font-bold mt-1">{fmt(data.total_payroll_cost)}</p>
-              <p className="text-xs text-white/50">ج.م</p>
-            </div>
-          </div>
-
-          {/* Financial summary */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-            <SumCard label="رواتب ثابتة"   value={data.total_fixed_salaries}    color="blue"/>
-            <SumCard label="رواتب قطعة"    value={data.total_piecework_salaries} color="purple"/>
-            <SumCard label="إجمالي المكافآت" value={data.total_bonuses}          color="green"/>
-            <SumCard label="إجمالي السلف"   value={data.total_advances}          color="orange"/>
-            <SumCard label="إجمالي الخصومات" value={data.total_deductions}       color="red"/>
-          </div>
-
-          {/* Detail table */}
-          {data.rows.length > 0 && (
-            <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
-              <div className="px-5 py-3 border-b border-gray-100">
-                <h3 className="font-semibold text-gray-800">تفاصيل — {MONTHS[month-1]} {year}</h3>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 border-b border-gray-100">
-                    <tr>
-                      <th className="px-4 py-3 text-right font-semibold text-gray-600">الموظف</th>
-                      <th className="px-4 py-3 text-right font-semibold text-gray-600">النوع</th>
-                      <th className="px-4 py-3 text-right font-semibold text-gray-600">الراتب/الإنتاج</th>
-                      <th className="px-4 py-3 text-right font-semibold text-gray-600">مكافآت</th>
-                      <th className="px-4 py-3 text-right font-semibold text-gray-600">سلف</th>
-                      <th className="px-4 py-3 text-right font-semibold text-gray-600">خصومات</th>
-                      <th className="px-4 py-3 text-right font-semibold text-gray-600">صافي الراتب</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.rows.map((r, i) => {
-                      const isFixed = r.employee.employee_type === 'fixed';
-                      return (
-                        <tr key={r.employee.id} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                          <td className="px-4 py-2.5 font-medium">{r.employee.employee_name}</td>
-                          <td className="px-4 py-2.5">
-                            <span className={`px-1.5 py-0.5 rounded text-xs ${isFixed ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
-                              {isFixed ? 'ثابت' : 'قطعة'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-2.5">{fmt(isFixed ? r.employee.base_salary : r.production_value)}</td>
-                          <td className="px-4 py-2.5 text-green-700">{fmt(r.total_bonuses)}</td>
-                          <td className="px-4 py-2.5 text-orange-600">{fmt(r.total_advances)}</td>
-                          <td className="px-4 py-2.5 text-red-600">{fmt(r.total_deductions)}</td>
-                          <td className="px-4 py-2.5 font-bold text-blue-800">{fmt(r.net_salary)}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                  <tfoot className="bg-[#1e3a5f] text-white font-bold text-sm">
-                    <tr>
-                      <td colSpan={2} className="px-4 py-2.5">الإجمالي</td>
-                      <td className="px-4 py-2.5">{fmt(data.total_fixed_salaries + data.total_piecework_salaries)}</td>
-                      <td className="px-4 py-2.5">{fmt(data.total_bonuses)}</td>
-                      <td className="px-4 py-2.5">{fmt(data.total_advances)}</td>
-                      <td className="px-4 py-2.5">{fmt(data.total_deductions)}</td>
-                      <td className="px-4 py-2.5">{fmt(data.total_payroll_cost)}</td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-// ==============================================
 // MAIN PAGE
 // ==============================================
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
-  { id: 'employees',  label: 'الموظفون',        icon: <Users    size={15}/> },
-  { id: 'production', label: 'إنتاج الموظفين',  icon: <Factory  size={15}/> },
-  { id: 'advances',   label: 'السلف',            icon: <FileText size={15}/> },
-  { id: 'deductions', label: 'الخصومات',         icon: <TrendingDown size={15}/> },
-  { id: 'bonuses',    label: 'المكافآت',          icon: <Award    size={15}/> },
-  { id: 'payroll',    label: 'كشف المرتبات',     icon: <FileText size={15}/> },
-  { id: 'reports',    label: 'التقارير',          icon: <BarChart2 size={15}/> },
+  { id: 'employees',   label: 'الموظفون',           icon: <Users          size={15}/> },
+  { id: 'attendance',  label: 'الحضور والانصراف',    icon: <ClipboardCheck size={15}/> },
+  { id: 'adjustments', label: 'السلف والخصومات',     icon: <DollarSign     size={15}/> },
+  { id: 'payroll',     label: 'كشف المرتبات',        icon: <Wallet         size={15}/> },
 ];
 
 export default function Payroll() {
   const toast = useToast();
-  const [tab, setTab]           = useState<Tab>('employees');
+  const [tab, setTab]             = useState<Tab>('employees');
   const [employees, setEmployees] = useState<EmployeeRecord[]>([]);
   const [empLoading, setEmpLoading] = useState(false);
 
@@ -1113,12 +944,16 @@ export default function Payroll() {
 
   useEffect(() => { loadEmployees(); }, []);
 
+  const activeEmployeesCount = useMemo(() => employees.filter(e => e.status === 'active').length, [employees]);
+
   return (
     <div className="space-y-5" dir="rtl">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">نظام المرتبات</h1>
-        <p className="text-sm text-gray-500 mt-0.5">إدارة الموظفين والإنتاج والسلف والخصومات والمرتبات</p>
+        <h1 className="text-2xl font-bold text-gray-900">نظام الحضور والانصراف والمرتبات</h1>
+        <p className="text-sm text-gray-500 mt-0.5">
+          إدارة الموظفين والحضور والسلف والخصومات وتوليد المرتبات تلقائياً — {activeEmployeesCount} موظف نشط
+        </p>
       </div>
 
       {/* Tab bar */}
@@ -1136,13 +971,10 @@ export default function Payroll() {
       </div>
 
       {/* Tab content */}
-      {tab === 'employees'  && <EmployeesTab   employees={employees} loading={empLoading} reload={loadEmployees}/>}
-      {tab === 'production' && <ProductionTab  employees={employees}/>}
-      {tab === 'advances'   && <TransactionsTab type="advances"   employees={employees}/>}
-      {tab === 'deductions' && <TransactionsTab type="deductions" employees={employees}/>}
-      {tab === 'bonuses'    && <TransactionsTab type="bonuses"    employees={employees}/>}
-      {tab === 'payroll'    && <PayrollTab/>}
-      {tab === 'reports'    && <ReportsTab/>}
+      {tab === 'employees'   && <EmployeesTab   employees={employees} loading={empLoading} reload={loadEmployees}/>}
+      {tab === 'attendance'  && <AttendanceTab  employees={employees}/>}
+      {tab === 'adjustments' && <AdjustmentsTab employees={employees}/>}
+      {tab === 'payroll'     && <PayrollTab/>}
     </div>
   );
 }

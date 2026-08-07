@@ -12,6 +12,7 @@ import { Router, Request, Response } from 'express';
 import Groq from 'groq-sdk';
 import prisma from '../lib/prisma';
 import { authenticate } from '../middleware/auth';
+import { calcEmployeePayroll, round2 } from '../services/payrollCalc';
 
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
 
@@ -127,7 +128,7 @@ async function gatherSnapshot() {
     sales, expenses, debts, clientAccts, returns_,
     paymentLogs, fabric, readyStock, accessories,
     cuttingOrders, modelProds,
-    employees, productions, advances, deductions, bonuses,
+    employees, attendance, adjustments,
     fixedAssets, fabricPurchases,
   ] = await Promise.all([
     prisma.sale.findMany(),
@@ -142,10 +143,8 @@ async function gatherSnapshot() {
     prisma.cuttingOrder.findMany(),
     prisma.modelProduction.findMany(),
     prisma.employee.findMany(),
-    prisma.employeeProduction.findMany(),
-    prisma.employeeAdvance.findMany(),
-    prisma.employeeDeduction.findMany(),
-    prisma.employeeBonus.findMany(),
+    prisma.attendance.findMany(),
+    prisma.salaryAdjustment.findMany(),
     prisma.fixedAsset.findMany(),
     prisma.fabricPurchase.findMany(),
   ]);
@@ -316,20 +315,31 @@ async function gatherSnapshot() {
   // ── Total current assets ───────────────────────────────────────────────────
   const totalCurrentAssets = fabricValue + stockValue + accessoriesValue + netCash;
 
-  // ── Payroll (current month) ────────────────────────────────────────────────
-  const now        = new Date();
-  const curMM      = String(now.getMonth() + 1).padStart(2, '0');
-  const curYY      = now.getFullYear();
-  const monthStart = `${curYY}-${curMM}-01`;
-  const monthEnd   = `${curYY}-${curMM}-${String(new Date(curYY, now.getMonth() + 1, 0).getDate()).padStart(2, '0')}`;
+  // ── Payroll / Attendance (current month) ───────────────────────────────────
+  const now      = new Date();
+  const curMonth = now.getMonth() + 1;
+  const curYear  = now.getFullYear();
+  const monthStart = `${curYear}-${String(curMonth).padStart(2, '0')}-01`;
+  const monthEnd   = `${curYear}-${String(curMonth).padStart(2, '0')}-${String(new Date(curYear, curMonth, 0).getDate()).padStart(2, '0')}`;
   const inMonth    = (d: string) => d >= monthStart && d <= monthEnd;
 
-  const monthlyAdvances   = advances.filter(a => inMonth(a.date)).reduce((s, a) => s + a.amount, 0);
-  const monthlyDeductions = deductions.filter(d => inMonth(d.date)).reduce((s, d) => s + d.amount, 0);
-  const monthlyBonuses    = bonuses.filter(b => inMonth(b.date)).reduce((s, b) => s + b.amount, 0);
-  const monthlyProduction = productions.filter(p => inMonth(p.date)).reduce((s, p) => s + p.production_value, 0);
-  const fixedSalaries     = employees.filter(e => e.employee_type === 'fixed' && e.status === 'active').reduce((s, e) => s + e.base_salary, 0);
-  const estimatedPayroll  = fixedSalaries + monthlyProduction + monthlyBonuses - monthlyAdvances - monthlyDeductions;
+  const activeEmployees      = employees.filter(e => e.status === 'active');
+  const monthAttendance      = attendance.filter(a => inMonth(a.date));
+  const monthAdjustments     = adjustments.filter(a => inMonth(a.date));
+
+  let monthlyAdvances = 0, monthlyDeductions = 0, monthlyBonuses = 0, monthlyOvertime = 0, estimatedPayroll = 0;
+  activeEmployees.forEach(emp => {
+    const calc = calcEmployeePayroll(
+      emp, curMonth, curYear,
+      monthAttendance.filter(a => a.employee_id === emp.id),
+      monthAdjustments.filter(a => a.employee_id === emp.id),
+    );
+    monthlyAdvances   += calc.advances;
+    monthlyDeductions += calc.deductions;
+    monthlyBonuses    += calc.bonuses;
+    monthlyOvertime    += calc.overtime_amount;
+    estimatedPayroll  += calc.net_salary;
+  });
 
   return {
     date: now.toISOString().slice(0, 10),
@@ -382,15 +392,13 @@ async function gatherSnapshot() {
       items:       fixedAssetsList,
     },
     payroll: {
-      active_employees:         employees.filter(e => e.status === 'active').length,
-      fixed_employees:          employees.filter(e => e.employee_type === 'fixed'     && e.status === 'active').length,
-      piecework_employees:      employees.filter(e => e.employee_type === 'piecework' && e.status === 'active').length,
-      monthly_fixed_salaries:   fixedSalaries,
-      monthly_production_value: monthlyProduction,
-      monthly_advances:         monthlyAdvances,
-      monthly_deductions:       monthlyDeductions,
-      monthly_bonuses:          monthlyBonuses,
-      estimated_monthly_cost:   estimatedPayroll,
+      active_employees:        activeEmployees.length,
+      total_employees:         employees.length,
+      monthly_advances:        round2(monthlyAdvances),
+      monthly_deductions:      round2(monthlyDeductions),
+      monthly_bonuses:         round2(monthlyBonuses),
+      monthly_overtime_amount: round2(monthlyOvertime),
+      estimated_monthly_cost:  round2(estimatedPayroll),
     },
   };
 }
@@ -405,7 +413,7 @@ function classifyQuestion(q: string): string[] {
   if (/قماش|نسيج|خام/.test(q))                                topics.push('fabric');
   if (/استوك|منتج|مخزن|بضاعة|موديل/.test(q))                 topics.push('stock');
   if (/إكسسوار|اكسسوار/.test(q))                              topics.push('accessories');
-  if (/موظف|راتب|سلف|خصم|مكافأة|مرتب|بالقطعة/.test(q))       topics.push('payroll');
+  if (/موظف|راتب|سلف|خصم|مكافأة|مرتب|حضور|انصراف|غياب|أوفرتايم|اضافي/.test(q)) topics.push('payroll');
   if (topics.length === 0) topics.push('all');
   return topics;
 }

@@ -34,7 +34,7 @@ const menuItems: { page: SidebarPage; label: string; icon: React.ReactNode }[] =
   { page: 'fixedAssets', label: 'الأصول الثابتة', icon: <Landmark size={20} /> },
   { page: 'reports', label: 'التقارير', icon: <BarChart2 size={20} /> },
   { page: 'aiAssistant', label: 'المستشار الذكي', icon: <Sparkles size={20} /> },
-  { page: 'payroll', label: 'المرتبات', icon: <Wallet size={20} /> },
+  { page: 'payroll', label: 'الحضور والمرتبات', icon: <Wallet size={20} /> },
   { page: 'auditLog', label: 'سجل التعديلات', icon: <ClipboardCheck size={20} /> },
   { page: 'users', label: 'إدارة المستخدمين', icon: <User size={20} /> },
 ];

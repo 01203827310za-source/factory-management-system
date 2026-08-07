@@ -242,98 +242,68 @@ export interface AppUser {
 
 export type Page = 'dashboard' | 'sales' | 'expenses' | 'readyStock' | 'fabric' | 'accessories' | 'cutting' | 'modelProd' | 'clientAccts' | 'debts' | 'financialCenter' | 'fixedAssets' | 'reports' | 'payroll' | 'auditLog' | 'aiAssistant';
 
-// ===== PAYROLL =====
-export interface PieceRateItem {
-  id: number;
-  employee_id: number;
-  category_name: string;
-  piece_rate: number;
-  created_at: string;
-}
-
+// ===== ATTENDANCE & PAYROLL =====
 export interface Employee {
   id: number;
-  employee_code: string;
-  employee_name: string;
-  department: string;
+  name: string;
+  phone: string;
   job_title: string;
-  employee_type: 'fixed' | 'piecework';
-  base_salary: number;
-  piece_category: string;
-  piece_rate: number;
+  monthly_salary: number;
+  daily_hours: number;
   status: 'active' | 'inactive';
+  created_at: string;
+  updated_at: string;
+}
+
+export type AttendanceStatus = 'present' | 'absent' | 'half_day' | 'vacation' | 'business_trip';
+
+export interface AttendanceRecord {
+  id: number;
+  employee_id: number;
+  employee: Employee;
+  date: string;
+  check_in: string;
+  check_out: string;
+  worked_hours: number;
+  overtime_hours: number;
+  status: AttendanceStatus;
   notes: string;
   created_at: string;
   updated_at: string;
-  piece_rates: PieceRateItem[];
 }
 
-export interface ProductionRecord {
-  id: number;
-  employee_id: number;
-  employee: Employee;
-  category_name: string;
-  piece_rate: number;
-  quantity: number;
-  production_value: number;
-  date: string;
-  notes: string;
-  created_at: string;
-}
+export type AdjustmentType = 'advance' | 'deduction' | 'bonus';
 
-export interface AdvanceRecord {
+export interface SalaryAdjustmentRecord {
   id: number;
   employee_id: number;
   employee: Employee;
   date: string;
-  amount: number;
-  notes: string;
-  created_at: string;
-}
-
-export interface DeductionRecord {
-  id: number;
-  employee_id: number;
-  employee: Employee;
-  date: string;
+  type: AdjustmentType;
   amount: number;
   reason: string;
   created_at: string;
+  updated_at: string;
 }
 
-export interface BonusRecord {
+export interface PayrollRow {
   id: number;
   employee_id: number;
   employee: Employee;
-  date: string;
-  amount: number;
-  reason: string;
-  created_at: string;
-}
-
-export interface SalaryRow {
-  employee: Employee;
-  production_value: number;
-  total_advances: number;
-  total_deductions: number;
-  total_bonuses: number;
-  net_salary: number;
-  productions: ProductionRecord[];
-}
-
-export interface PayrollReportData {
   month: number;
   year: number;
-  total_employees: number;
-  total_fixed_employees: number;
-  total_piecework_employees: number;
-  total_fixed_salaries: number;
-  total_piecework_salaries: number;
-  total_advances: number;
-  total_deductions: number;
-  total_bonuses: number;
-  total_payroll_cost: number;
-  rows: SalaryRow[];
+  attendance_days: number;
+  absent_days: number;
+  half_days: number;
+  worked_hours: number;
+  overtime_hours: number;
+  overtime_amount: number;
+  advances: number;
+  deductions: number;
+  bonuses: number;
+  base_salary: number;
+  net_salary: number;
+  generated_at: string;
 }
 
 // ===== AUDIT LOG =====

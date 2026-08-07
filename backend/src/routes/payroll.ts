@@ -1,49 +1,30 @@
 // ============================================
-// Payroll Routes  /api/payroll/*
-// Resources: employees | production | advances
-//            deductions | bonuses | salary | report
+// Attendance & Payroll Routes  /api/payroll/*
+// Resources: employees | attendance | adjustments | payroll
 // ============================================
 
 import { Router } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate, requireManager } from '../middleware/auth';
 import { logAudit } from '../services/auditHelper';
+import { calcEmployeePayroll, computeWorkedOvertime, daysInMonth } from '../services/payrollCalc';
 
 const router = Router();
 router.use(authenticate);
 
-// ─── Shared include shapes ────────────────────
-const EMP_INCLUDE = {
-  piece_rates: { orderBy: { category_name: 'asc' as const } },
-} as const;
+const WITH_EMP = { employee: true } as const;
 
-const WITH_EMP = { employee: { include: EMP_INCLUDE } } as const;
+const ATTENDANCE_STATUSES = ['present', 'absent', 'half_day', 'vacation', 'business_trip'];
+const ADJUSTMENT_TYPES    = ['advance', 'deduction', 'bonus'];
 
 // ─── Date helpers ─────────────────────────────
 function monthRange(month: number, year: number) {
   const mm   = String(month).padStart(2, '0');
-  const last = new Date(year, month, 0).getDate();
+  const last = daysInMonth(year, month);
   return {
     from: `${year}-${mm}-01`,
     to:   `${year}-${mm}-${String(last).padStart(2, '0')}`,
   };
-}
-
-// ─── Sync piece rates helper ──────────────────
-async function syncPieceRates(
-  employeeId: number,
-  rates: { category_name: string; piece_rate: number }[],
-) {
-  await prisma.employeePieceRate.deleteMany({ where: { employee_id: employeeId } });
-  if (rates?.length) {
-    await prisma.employeePieceRate.createMany({
-      data: rates.map(r => ({
-        employee_id:   employeeId,
-        category_name: r.category_name,
-        piece_rate:    r.piece_rate,
-      })),
-    });
-  }
 }
 
 // ==============================================
@@ -52,44 +33,58 @@ async function syncPieceRates(
 
 router.get('/employees', async (_req, res) => {
   try {
-    return res.json(await prisma.employee.findMany({
-      include: EMP_INCLUDE,
-      orderBy: { employee_code: 'asc' },
-    }));
+    return res.json(await prisma.employee.findMany({ orderBy: { name: 'asc' } }));
   } catch {
     return res.status(500).json({ message: 'خطأ في جلب الموظفين' });
   }
 });
 
 router.post('/employees', requireManager, async (req, res) => {
-  const { piece_rates, ...empData } = req.body;
   try {
-    const emp = await prisma.employee.create({ data: empData });
-    if (emp.employee_type === 'piecework' && piece_rates?.length) {
-      await syncPieceRates(emp.id, piece_rates);
-    }
-    const fresh = await prisma.employee.findUnique({ where: { id: emp.id }, include: EMP_INCLUDE });
+    const { name, phone, job_title, monthly_salary, daily_hours, status } = req.body;
+    if (!name || !String(name).trim()) return res.status(400).json({ message: 'اسم الموظف مطلوب' });
+
+    const emp = await prisma.employee.create({
+      data: {
+        name: String(name).trim(),
+        phone: phone ?? '',
+        job_title: job_title ?? '',
+        monthly_salary: Number(monthly_salary) || 0,
+        daily_hours: daily_hours != null && daily_hours !== '' ? Number(daily_hours) : 8,
+        status: status === 'inactive' ? 'inactive' : 'active',
+      },
+    });
     logAudit({ user: req.user, module: 'Payroll-Employees', action: 'CREATE', record_id: emp.id,
-      after_data: fresh, description: `إضافة موظف: ${emp.employee_name}` });
-    return res.status(201).json(fresh);
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : '';
-    if (msg.includes('Unique constraint')) return res.status(400).json({ message: 'كود الموظف مستخدم بالفعل' });
+      after_data: emp, description: `إضافة موظف: ${emp.name}` });
+    return res.status(201).json(emp);
+  } catch {
     return res.status(500).json({ message: 'خطأ في إضافة الموظف' });
   }
 });
 
 router.put('/employees/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
-  const { piece_rates, ...empData } = req.body;
   try {
-    const before = await prisma.employee.findUnique({ where: { id }, include: EMP_INCLUDE });
-    const emp    = await prisma.employee.update({ where: { id }, data: empData });
-    await syncPieceRates(id, emp.employee_type === 'piecework' ? (piece_rates ?? []) : []);
-    const fresh = await prisma.employee.findUnique({ where: { id }, include: EMP_INCLUDE });
+    const before = await prisma.employee.findUnique({ where: { id } });
+    if (!before) return res.status(404).json({ message: 'الموظف غير موجود' });
+
+    const { name, phone, job_title, monthly_salary, daily_hours, status } = req.body;
+    if (!name || !String(name).trim()) return res.status(400).json({ message: 'اسم الموظف مطلوب' });
+
+    const emp = await prisma.employee.update({
+      where: { id },
+      data: {
+        name: String(name).trim(),
+        phone: phone ?? '',
+        job_title: job_title ?? '',
+        monthly_salary: Number(monthly_salary) || 0,
+        daily_hours: daily_hours != null && daily_hours !== '' ? Number(daily_hours) : 8,
+        status: status === 'inactive' ? 'inactive' : 'active',
+      },
+    });
     logAudit({ user: req.user, module: 'Payroll-Employees', action: 'UPDATE', record_id: id,
-      before_data: before, after_data: fresh, description: `تعديل موظف: ${emp.employee_name}` });
-    return res.json(fresh);
+      before_data: before, after_data: emp, description: `تعديل موظف: ${emp.name}` });
+    return res.json(emp);
   } catch {
     return res.status(500).json({ message: 'خطأ في تعديل الموظف' });
   }
@@ -98,10 +93,11 @@ router.put('/employees/:id', requireManager, async (req, res) => {
 router.delete('/employees/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
   try {
-    const before = await prisma.employee.findUnique({ where: { id }, include: EMP_INCLUDE });
+    const before = await prisma.employee.findUnique({ where: { id } });
+    if (!before) return res.status(404).json({ message: 'الموظف غير موجود' });
     await prisma.employee.delete({ where: { id } });
     logAudit({ user: req.user, module: 'Payroll-Employees', action: 'DELETE', record_id: id,
-      before_data: before, description: `حذف موظف: ${before?.employee_name}` });
+      before_data: before, description: `حذف موظف: ${before.name}` });
     return res.json({ message: 'تم حذف الموظف' });
   } catch {
     return res.status(500).json({ message: 'خطأ في حذف الموظف' });
@@ -109,68 +105,118 @@ router.delete('/employees/:id', requireManager, async (req, res) => {
 });
 
 // ==============================================
-// PRODUCTION
+// ATTENDANCE
 // ==============================================
 
-router.get('/production', async (req, res) => {
+router.get('/attendance', async (req, res) => {
   try {
-    const { month, year, employee_id } = req.query;
+    const { month, year, employee_id, date } = req.query;
     const where: Record<string, unknown> = {};
     if (month && year) {
       const { from, to } = monthRange(parseInt(month as string), parseInt(year as string));
       where.date = { gte: from, lte: to };
     }
+    if (date) where.date = date as string;
     if (employee_id) where.employee_id = parseInt(employee_id as string);
-    return res.json(await prisma.employeeProduction.findMany({
-      where, include: WITH_EMP, orderBy: { date: 'desc' },
+    return res.json(await prisma.attendance.findMany({
+      where, include: WITH_EMP, orderBy: [{ date: 'desc' }, { id: 'desc' }],
     }));
   } catch {
-    return res.status(500).json({ message: 'خطأ في جلب الإنتاج' });
+    return res.status(500).json({ message: 'خطأ في جلب الحضور والانصراف' });
   }
 });
 
-router.post('/production', requireManager, async (req, res) => {
+router.post('/attendance', requireManager, async (req, res) => {
   try {
-    const { employee_id, category_name, piece_rate, quantity, date, notes } = req.body;
-    const production_value = (quantity ?? 0) * (piece_rate ?? 0);
-    const rec = await prisma.employeeProduction.create({
-      data: { employee_id, category_name, piece_rate, quantity, production_value, date, notes: notes ?? '' },
+    const { employee_id, date, check_in, check_out, status, notes } = req.body;
+    if (!employee_id || !date) return res.status(400).json({ message: 'الموظف والتاريخ مطلوبان' });
+    const st = ATTENDANCE_STATUSES.includes(status) ? status : 'present';
+
+    const employee = await prisma.employee.findUnique({ where: { id: Number(employee_id) } });
+    if (!employee) return res.status(404).json({ message: 'الموظف غير موجود' });
+
+    if (st !== 'absent' && (!!check_in !== !!check_out)) {
+      return res.status(400).json({ message: 'يجب إدخال وقت الحضور والانصراف معاً' });
+    }
+
+    const isAbsent = st === 'absent';
+    const { worked_hours, overtime_hours } = computeWorkedOvertime(st, check_in, check_out, employee.daily_hours);
+
+    const rec = await prisma.attendance.create({
+      data: {
+        employee_id: Number(employee_id),
+        date,
+        check_in: isAbsent ? '' : (check_in ?? ''),
+        check_out: isAbsent ? '' : (check_out ?? ''),
+        worked_hours,
+        overtime_hours,
+        status: st,
+        notes: notes ?? '',
+      },
       include: WITH_EMP,
     });
-    logAudit({ user: req.user, module: 'Payroll-Production', action: 'CREATE', record_id: rec.id,
-      after_data: rec, description: `إضافة إنتاج: ${rec.employee.employee_name} - ${category_name}` });
+    logAudit({ user: req.user, module: 'Payroll-Attendance', action: 'CREATE', record_id: rec.id,
+      after_data: rec, description: `تسجيل حضور: ${rec.employee.name} - ${date}` });
     return res.status(201).json(rec);
-  } catch {
-    return res.status(500).json({ message: 'خطأ في إضافة الإنتاج' });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : '';
+    if (msg.includes('Unique constraint')) return res.status(400).json({ message: 'يوجد سجل حضور لهذا الموظف في نفس التاريخ' });
+    return res.status(500).json({ message: 'خطأ في إضافة سجل الحضور' });
   }
 });
 
-router.put('/production/:id', requireManager, async (req, res) => {
+router.put('/attendance/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
   try {
-    const before = await prisma.employeeProduction.findUnique({ where: { id }, include: WITH_EMP });
-    const { employee_id, category_name, piece_rate, quantity, date, notes } = req.body;
-    const production_value = (quantity ?? 0) * (piece_rate ?? 0);
-    const rec = await prisma.employeeProduction.update({
+    const before = await prisma.attendance.findUnique({ where: { id }, include: WITH_EMP });
+    if (!before) return res.status(404).json({ message: 'السجل غير موجود' });
+
+    const { employee_id, date, check_in, check_out, status, notes } = req.body;
+    const st = ATTENDANCE_STATUSES.includes(status) ? status : before.status;
+    const empId = employee_id ? Number(employee_id) : before.employee_id;
+
+    const employee = await prisma.employee.findUnique({ where: { id: empId } });
+    if (!employee) return res.status(404).json({ message: 'الموظف غير موجود' });
+
+    if (st !== 'absent' && (!!check_in !== !!check_out)) {
+      return res.status(400).json({ message: 'يجب إدخال وقت الحضور والانصراف معاً' });
+    }
+
+    const isAbsent = st === 'absent';
+    const { worked_hours, overtime_hours } = computeWorkedOvertime(st, check_in, check_out, employee.daily_hours);
+
+    const rec = await prisma.attendance.update({
       where: { id },
-      data: { employee_id, category_name, piece_rate, quantity, production_value, date, notes },
+      data: {
+        employee_id: empId,
+        date: date ?? before.date,
+        check_in: isAbsent ? '' : (check_in ?? ''),
+        check_out: isAbsent ? '' : (check_out ?? ''),
+        worked_hours,
+        overtime_hours,
+        status: st,
+        notes: notes ?? before.notes,
+      },
       include: WITH_EMP,
     });
-    logAudit({ user: req.user, module: 'Payroll-Production', action: 'UPDATE', record_id: id,
-      before_data: before, after_data: rec, description: `تعديل إنتاج: ${rec.employee.employee_name}` });
+    logAudit({ user: req.user, module: 'Payroll-Attendance', action: 'UPDATE', record_id: id,
+      before_data: before, after_data: rec, description: `تعديل حضور: ${rec.employee.name} - ${rec.date}` });
     return res.json(rec);
-  } catch {
-    return res.status(500).json({ message: 'خطأ في تعديل الإنتاج' });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : '';
+    if (msg.includes('Unique constraint')) return res.status(400).json({ message: 'يوجد سجل حضور لهذا الموظف في نفس التاريخ' });
+    return res.status(500).json({ message: 'خطأ في تعديل سجل الحضور' });
   }
 });
 
-router.delete('/production/:id', requireManager, async (req, res) => {
+router.delete('/attendance/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
   try {
-    const before = await prisma.employeeProduction.findUnique({ where: { id }, include: WITH_EMP });
-    await prisma.employeeProduction.delete({ where: { id } });
-    logAudit({ user: req.user, module: 'Payroll-Production', action: 'DELETE', record_id: id,
-      before_data: before, description: `حذف إنتاج: ${before?.employee?.employee_name}` });
+    const before = await prisma.attendance.findUnique({ where: { id }, include: WITH_EMP });
+    if (!before) return res.status(404).json({ message: 'السجل غير موجود' });
+    await prisma.attendance.delete({ where: { id } });
+    logAudit({ user: req.user, module: 'Payroll-Attendance', action: 'DELETE', record_id: id,
+      before_data: before, description: `حذف حضور: ${before.employee.name} - ${before.date}` });
     return res.json({ message: 'تم الحذف' });
   } catch {
     return res.status(500).json({ message: 'خطأ في الحذف' });
@@ -178,57 +224,83 @@ router.delete('/production/:id', requireManager, async (req, res) => {
 });
 
 // ==============================================
-// ADVANCES
+// SALARY ADJUSTMENTS (advances / deductions / bonuses)
 // ==============================================
 
-router.get('/advances', async (req, res) => {
+router.get('/adjustments', async (req, res) => {
   try {
-    const { month, year, employee_id } = req.query;
+    const { month, year, employee_id, type } = req.query;
     const where: Record<string, unknown> = {};
     if (month && year) {
       const { from, to } = monthRange(parseInt(month as string), parseInt(year as string));
       where.date = { gte: from, lte: to };
     }
     if (employee_id) where.employee_id = parseInt(employee_id as string);
-    return res.json(await prisma.employeeAdvance.findMany({
+    if (type && ADJUSTMENT_TYPES.includes(type as string)) where.type = type as string;
+    return res.json(await prisma.salaryAdjustment.findMany({
       where, include: WITH_EMP, orderBy: { date: 'desc' },
     }));
   } catch {
-    return res.status(500).json({ message: 'خطأ في جلب السلف' });
+    return res.status(500).json({ message: 'خطأ في جلب السلف والخصومات' });
   }
 });
 
-router.post('/advances', requireManager, async (req, res) => {
+router.post('/adjustments', requireManager, async (req, res) => {
   try {
-    const rec = await prisma.employeeAdvance.create({ data: req.body, include: WITH_EMP });
-    logAudit({ user: req.user, module: 'Payroll-Advances', action: 'CREATE', record_id: rec.id,
-      after_data: rec, description: `سلفة: ${rec.employee.employee_name} - ${rec.amount}` });
+    const { employee_id, date, type, amount, reason } = req.body;
+    if (!employee_id || !date) return res.status(400).json({ message: 'الموظف والتاريخ مطلوبان' });
+    if (!ADJUSTMENT_TYPES.includes(type)) return res.status(400).json({ message: 'نوع الحركة غير صحيح' });
+    if (!(Number(amount) > 0)) return res.status(400).json({ message: 'المبلغ يجب أن يكون أكبر من صفر' });
+
+    const rec = await prisma.salaryAdjustment.create({
+      data: { employee_id: Number(employee_id), date, type, amount: Number(amount), reason: reason ?? '' },
+      include: WITH_EMP,
+    });
+    logAudit({ user: req.user, module: 'Payroll-Adjustments', action: 'CREATE', record_id: rec.id,
+      after_data: rec, description: `${rec.type}: ${rec.employee.name} - ${rec.amount}` });
     return res.status(201).json(rec);
   } catch {
-    return res.status(500).json({ message: 'خطأ في إضافة السلفة' });
+    return res.status(500).json({ message: 'خطأ في إضافة الحركة' });
   }
 });
 
-router.put('/advances/:id', requireManager, async (req, res) => {
+router.put('/adjustments/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
   try {
-    const before = await prisma.employeeAdvance.findUnique({ where: { id }, include: WITH_EMP });
-    const rec    = await prisma.employeeAdvance.update({ where: { id }, data: req.body, include: WITH_EMP });
-    logAudit({ user: req.user, module: 'Payroll-Advances', action: 'UPDATE', record_id: id,
-      before_data: before, after_data: rec, description: `تعديل سلفة: ${rec.employee.employee_name}` });
+    const before = await prisma.salaryAdjustment.findUnique({ where: { id }, include: WITH_EMP });
+    if (!before) return res.status(404).json({ message: 'السجل غير موجود' });
+
+    const { employee_id, date, type, amount, reason } = req.body;
+    if (type && !ADJUSTMENT_TYPES.includes(type)) return res.status(400).json({ message: 'نوع الحركة غير صحيح' });
+    if (amount != null && !(Number(amount) > 0)) return res.status(400).json({ message: 'المبلغ يجب أن يكون أكبر من صفر' });
+
+    const rec = await prisma.salaryAdjustment.update({
+      where: { id },
+      data: {
+        employee_id: employee_id ? Number(employee_id) : before.employee_id,
+        date: date ?? before.date,
+        type: type ?? before.type,
+        amount: amount != null ? Number(amount) : before.amount,
+        reason: reason ?? before.reason,
+      },
+      include: WITH_EMP,
+    });
+    logAudit({ user: req.user, module: 'Payroll-Adjustments', action: 'UPDATE', record_id: id,
+      before_data: before, after_data: rec, description: `تعديل حركة: ${rec.employee.name}` });
     return res.json(rec);
   } catch {
-    return res.status(500).json({ message: 'خطأ في تعديل السلفة' });
+    return res.status(500).json({ message: 'خطأ في تعديل الحركة' });
   }
 });
 
-router.delete('/advances/:id', requireManager, async (req, res) => {
+router.delete('/adjustments/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
   try {
-    const before = await prisma.employeeAdvance.findUnique({ where: { id }, include: WITH_EMP });
-    await prisma.employeeAdvance.delete({ where: { id } });
-    logAudit({ user: req.user, module: 'Payroll-Advances', action: 'DELETE', record_id: id,
-      before_data: before, description: `حذف سلفة: ${before?.employee?.employee_name}` });
+    const before = await prisma.salaryAdjustment.findUnique({ where: { id }, include: WITH_EMP });
+    if (!before) return res.status(404).json({ message: 'السجل غير موجود' });
+    await prisma.salaryAdjustment.delete({ where: { id } });
+    logAudit({ user: req.user, module: 'Payroll-Adjustments', action: 'DELETE', record_id: id,
+      before_data: before, description: `حذف حركة: ${before.employee.name}` });
     return res.json({ message: 'تم الحذف' });
   } catch {
     return res.status(500).json({ message: 'خطأ في الحذف' });
@@ -236,235 +308,61 @@ router.delete('/advances/:id', requireManager, async (req, res) => {
 });
 
 // ==============================================
-// DEDUCTIONS
+// PAYROLL — automatic generation, no manual entry
 // ==============================================
 
-router.get('/deductions', async (req, res) => {
-  try {
-    const { month, year, employee_id } = req.query;
-    const where: Record<string, unknown> = {};
-    if (month && year) {
-      const { from, to } = monthRange(parseInt(month as string), parseInt(year as string));
-      where.date = { gte: from, lte: to };
-    }
-    if (employee_id) where.employee_id = parseInt(employee_id as string);
-    return res.json(await prisma.employeeDeduction.findMany({
-      where, include: WITH_EMP, orderBy: { date: 'desc' },
-    }));
-  } catch {
-    return res.status(500).json({ message: 'خطأ في جلب الخصومات' });
-  }
-});
-
-router.post('/deductions', requireManager, async (req, res) => {
-  try {
-    const rec = await prisma.employeeDeduction.create({ data: req.body, include: WITH_EMP });
-    logAudit({ user: req.user, module: 'Payroll-Deductions', action: 'CREATE', record_id: rec.id,
-      after_data: rec, description: `خصم: ${rec.employee.employee_name} - ${rec.amount}` });
-    return res.status(201).json(rec);
-  } catch {
-    return res.status(500).json({ message: 'خطأ في إضافة الخصم' });
-  }
-});
-
-router.put('/deductions/:id', requireManager, async (req, res) => {
-  const id = parseInt(req.params.id as string);
-  try {
-    const before = await prisma.employeeDeduction.findUnique({ where: { id }, include: WITH_EMP });
-    const rec    = await prisma.employeeDeduction.update({ where: { id }, data: req.body, include: WITH_EMP });
-    logAudit({ user: req.user, module: 'Payroll-Deductions', action: 'UPDATE', record_id: id,
-      before_data: before, after_data: rec, description: `تعديل خصم: ${rec.employee.employee_name}` });
-    return res.json(rec);
-  } catch {
-    return res.status(500).json({ message: 'خطأ في تعديل الخصم' });
-  }
-});
-
-router.delete('/deductions/:id', requireManager, async (req, res) => {
-  const id = parseInt(req.params.id as string);
-  try {
-    const before = await prisma.employeeDeduction.findUnique({ where: { id }, include: WITH_EMP });
-    await prisma.employeeDeduction.delete({ where: { id } });
-    logAudit({ user: req.user, module: 'Payroll-Deductions', action: 'DELETE', record_id: id,
-      before_data: before, description: `حذف خصم: ${before?.employee?.employee_name}` });
-    return res.json({ message: 'تم الحذف' });
-  } catch {
-    return res.status(500).json({ message: 'خطأ في الحذف' });
-  }
-});
-
-// ==============================================
-// BONUSES
-// ==============================================
-
-router.get('/bonuses', async (req, res) => {
-  try {
-    const { month, year, employee_id } = req.query;
-    const where: Record<string, unknown> = {};
-    if (month && year) {
-      const { from, to } = monthRange(parseInt(month as string), parseInt(year as string));
-      where.date = { gte: from, lte: to };
-    }
-    if (employee_id) where.employee_id = parseInt(employee_id as string);
-    return res.json(await prisma.employeeBonus.findMany({
-      where, include: WITH_EMP, orderBy: { date: 'desc' },
-    }));
-  } catch {
-    return res.status(500).json({ message: 'خطأ في جلب المكافآت' });
-  }
-});
-
-router.post('/bonuses', requireManager, async (req, res) => {
-  try {
-    const rec = await prisma.employeeBonus.create({ data: req.body, include: WITH_EMP });
-    logAudit({ user: req.user, module: 'Payroll-Bonuses', action: 'CREATE', record_id: rec.id,
-      after_data: rec, description: `مكافأة: ${rec.employee.employee_name} - ${rec.amount}` });
-    return res.status(201).json(rec);
-  } catch {
-    return res.status(500).json({ message: 'خطأ في إضافة المكافأة' });
-  }
-});
-
-router.put('/bonuses/:id', requireManager, async (req, res) => {
-  const id = parseInt(req.params.id as string);
-  try {
-    const before = await prisma.employeeBonus.findUnique({ where: { id }, include: WITH_EMP });
-    const rec    = await prisma.employeeBonus.update({ where: { id }, data: req.body, include: WITH_EMP });
-    logAudit({ user: req.user, module: 'Payroll-Bonuses', action: 'UPDATE', record_id: id,
-      before_data: before, after_data: rec, description: `تعديل مكافأة: ${rec.employee.employee_name}` });
-    return res.json(rec);
-  } catch {
-    return res.status(500).json({ message: 'خطأ في تعديل المكافأة' });
-  }
-});
-
-router.delete('/bonuses/:id', requireManager, async (req, res) => {
-  const id = parseInt(req.params.id as string);
-  try {
-    const before = await prisma.employeeBonus.findUnique({ where: { id }, include: WITH_EMP });
-    await prisma.employeeBonus.delete({ where: { id } });
-    logAudit({ user: req.user, module: 'Payroll-Bonuses', action: 'DELETE', record_id: id,
-      before_data: before, description: `حذف مكافأة: ${before?.employee?.employee_name}` });
-    return res.json({ message: 'تم الحذف' });
-  } catch {
-    return res.status(500).json({ message: 'خطأ في الحذف' });
-  }
-});
-
-// ==============================================
-// SALARY — dynamic calculation for month/year
-// ==============================================
-
-router.get('/salary', async (req, res) => {
+router.get('/records', async (req, res) => {
   try {
     const month = parseInt(req.query.month as string);
-    const year  = parseInt(req.query.year  as string);
+    const year  = parseInt(req.query.year as string);
     if (!month || !year) return res.status(400).json({ message: 'الشهر والسنة مطلوبان' });
 
-    const { from, to } = monthRange(month, year);
-
-    const [employees, productions, advances, deductions, bonuses] = await Promise.all([
-      prisma.employee.findMany({ include: EMP_INCLUDE, orderBy: { employee_code: 'asc' } }),
-      prisma.employeeProduction.findMany({ where: { date: { gte: from, lte: to } }, orderBy: { date: 'asc' } }),
-      prisma.employeeAdvance.findMany({ where: { date: { gte: from, lte: to } } }),
-      prisma.employeeDeduction.findMany({ where: { date: { gte: from, lte: to } } }),
-      prisma.employeeBonus.findMany({ where: { date: { gte: from, lte: to } } }),
-    ]);
-
-    const prodByEmp: Record<number, typeof productions> = {};
-    productions.forEach(p => { (prodByEmp[p.employee_id] ??= []).push(p); });
-
-    const sumByEmp = <T extends { employee_id: number; amount: number }>(arr: T[]) => {
-      const m: Record<number, number> = {};
-      arr.forEach(r => { m[r.employee_id] = (m[r.employee_id] ?? 0) + r.amount; });
-      return m;
-    };
-    const advMap = sumByEmp(advances);
-    const dedMap = sumByEmp(deductions);
-    const bonMap = sumByEmp(bonuses);
-
-    const rows = employees.map(emp => {
-      const empProds         = prodByEmp[emp.id] ?? [];
-      const production_value = empProds.reduce((s, p) => s + p.production_value, 0);
-      const total_advances   = advMap[emp.id] ?? 0;
-      const total_deductions = dedMap[emp.id] ?? 0;
-      const total_bonuses    = bonMap[emp.id] ?? 0;
-      const base             = emp.employee_type === 'fixed' ? emp.base_salary : production_value;
-      const net_salary       = base + total_bonuses - total_advances - total_deductions;
-      return { employee: emp, production_value, total_advances, total_deductions, total_bonuses, net_salary, productions: empProds };
-    });
-
-    return res.json(rows);
+    return res.json(await prisma.payroll.findMany({
+      where: { month, year },
+      include: WITH_EMP,
+      orderBy: { employee: { name: 'asc' } },
+    }));
   } catch {
-    return res.status(500).json({ message: 'خطأ في حساب المرتبات' });
+    return res.status(500).json({ message: 'خطأ في جلب كشف المرتبات' });
   }
 });
 
-// ==============================================
-// REPORT — summary for month/year
-// ==============================================
-
-router.get('/report', async (req, res) => {
+router.post('/generate', requireManager, async (req, res) => {
   try {
-    const month = parseInt(req.query.month as string);
-    const year  = parseInt(req.query.year  as string);
-    if (!month || !year) return res.status(400).json({ message: 'الشهر والسنة مطلوبان' });
+    const month = parseInt(req.body.month);
+    const year  = parseInt(req.body.year);
+    if (!month || !year || month < 1 || month > 12) {
+      return res.status(400).json({ message: 'الشهر والسنة مطلوبان' });
+    }
 
     const { from, to } = monthRange(month, year);
-
-    const [employees, productions, advances, deductions, bonuses] = await Promise.all([
-      prisma.employee.findMany({ include: EMP_INCLUDE, orderBy: { employee_code: 'asc' } }),
-      prisma.employeeProduction.findMany({ where: { date: { gte: from, lte: to } } }),
-      prisma.employeeAdvance.findMany({ where: { date: { gte: from, lte: to } } }),
-      prisma.employeeDeduction.findMany({ where: { date: { gte: from, lte: to } } }),
-      prisma.employeeBonus.findMany({ where: { date: { gte: from, lte: to } } }),
+    const [employees, attendance, adjustments] = await Promise.all([
+      prisma.employee.findMany({ where: { status: 'active' }, orderBy: { name: 'asc' } }),
+      prisma.attendance.findMany({ where: { date: { gte: from, lte: to } } }),
+      prisma.salaryAdjustment.findMany({ where: { date: { gte: from, lte: to } } }),
     ]);
 
-    const prodByEmp: Record<number, number> = {};
-    productions.forEach(p => { prodByEmp[p.employee_id] = (prodByEmp[p.employee_id] ?? 0) + p.production_value; });
+    const results = [];
+    for (const emp of employees) {
+      const empAttendance  = attendance.filter(a => a.employee_id === emp.id);
+      const empAdjustments = adjustments.filter(a => a.employee_id === emp.id);
+      const calc = calcEmployeePayroll(emp, month, year, empAttendance, empAdjustments);
 
-    const sumByEmp = <T extends { employee_id: number; amount: number }>(arr: T[]) => {
-      const m: Record<number, number> = {};
-      arr.forEach(r => { m[r.employee_id] = (m[r.employee_id] ?? 0) + r.amount; });
-      return m;
-    };
-    const advMap = sumByEmp(advances);
-    const dedMap = sumByEmp(deductions);
-    const bonMap = sumByEmp(bonuses);
+      const row = await prisma.payroll.upsert({
+        where: { employee_id_month_year: { employee_id: emp.id, month, year } },
+        update: calc,
+        create: { employee_id: emp.id, month, year, ...calc },
+        include: WITH_EMP,
+      });
+      results.push(row);
+    }
 
-    let total_fixed_salaries     = 0;
-    let total_piecework_salaries = 0;
-    const total_advances         = advances.reduce((s, a) => s + a.amount, 0);
-    const total_deductions       = deductions.reduce((s, d) => s + d.amount, 0);
-    const total_bonuses          = bonuses.reduce((s, b) => s + b.amount, 0);
+    logAudit({ user: req.user, module: 'Payroll-Generate', action: 'CREATE', record_id: `${month}-${year}`,
+      after_data: { month, year, count: results.length }, description: `توليد مرتبات ${month}/${year} لعدد ${results.length} موظف` });
 
-    const rows = employees.map(emp => {
-      const pv  = prodByEmp[emp.id] ?? 0;
-      const adv = advMap[emp.id] ?? 0;
-      const ded = dedMap[emp.id] ?? 0;
-      const bon = bonMap[emp.id] ?? 0;
-      const base = emp.employee_type === 'fixed' ? emp.base_salary : pv;
-      const net  = base + bon - adv - ded;
-      if (emp.employee_type === 'fixed') total_fixed_salaries    += net;
-      else                               total_piecework_salaries += net;
-      return { employee: emp, production_value: pv, total_advances: adv, total_deductions: ded, total_bonuses: bon, net_salary: net };
-    });
-
-    return res.json({
-      month, year,
-      total_employees:           employees.length,
-      total_fixed_employees:     employees.filter(e => e.employee_type === 'fixed').length,
-      total_piecework_employees: employees.filter(e => e.employee_type === 'piecework').length,
-      total_fixed_salaries,
-      total_piecework_salaries,
-      total_advances,
-      total_deductions,
-      total_bonuses,
-      total_payroll_cost: total_fixed_salaries + total_piecework_salaries,
-      rows,
-    });
+    return res.json(results);
   } catch {
-    return res.status(500).json({ message: 'خطأ في تقرير المرتبات' });
+    return res.status(500).json({ message: 'خطأ في توليد المرتبات' });
   }
 });
 
