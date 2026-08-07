@@ -364,6 +364,17 @@ export const debtPaymentsApi = {
 };
 
 // ===== CLIENT ACCOUNTS =====
+export type ClientAccountInvoiceRecord = {
+  id: number;
+  account_id: number;
+  date: string;
+  order_number: string;
+  amount: number;
+  notes: string;
+  created_by: string;
+  created_at: string;
+};
+
 export type ClientAccountRecord = {
   id: number;
   date: string;
@@ -376,11 +387,12 @@ export type ClientAccountRecord = {
   notes: string;
   created_at: string;
   payments?: PaymentHistoryRecord[];
+  invoices?: ClientAccountInvoiceRecord[];
 };
 
 export const clientAccountsApi = {
   getAll: () => get<ClientAccountRecord[]>('/client-accounts'),
-  add: (data: Omit<ClientAccountRecord, 'id' | 'created_at' | 'payments'>) => post<ClientAccountRecord>('/client-accounts', data),
+  add: (data: Omit<ClientAccountRecord, 'id' | 'created_at' | 'payments' | 'invoices'>) => post<ClientAccountRecord>('/client-accounts', data),
   update: (id: number, data: Partial<ClientAccountRecord>) => put<ClientAccountRecord>(`/client-accounts/${id}`, data),
   remove: (id: number) => del<{ message: string }>(`/client-accounts/${id}`),
 };
@@ -391,6 +403,11 @@ export const clientAccountPaymentsApi = {
   update: (accountId: number, pid: number, data: Partial<Omit<PaymentHistoryRecord, 'id' | 'created_at' | 'created_by'>>) =>
     put<PaymentHistoryRecord>(`/client-accounts/${accountId}/payments/${pid}`, data),
   remove: (accountId: number, pid: number) => del<{ message: string }>(`/client-accounts/${accountId}/payments/${pid}`),
+};
+
+export const clientAccountInvoicesApi = {
+  add: (accountId: number, data: Omit<ClientAccountInvoiceRecord, 'id' | 'account_id' | 'created_at' | 'created_by'>) =>
+    post<ClientAccountInvoiceRecord>(`/client-accounts/${accountId}/invoices`, data),
 };
 
 // ===== RETURNS =====

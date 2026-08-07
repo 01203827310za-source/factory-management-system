@@ -166,6 +166,17 @@ export interface ClientAccountPayment {
   created_at: string;
 }
 
+export interface ClientAccountInvoice {
+  id: number;
+  account_id: number;
+  date: string;
+  order_number: string;
+  amount: number;
+  notes: string;
+  created_by: string;
+  created_at: string;
+}
+
 export interface ClientAccount {
   id: number;
   date: string;
@@ -178,6 +189,7 @@ export interface ClientAccount {
   notes: string;
   created_at: string;
   payments?: ClientAccountPayment[];
+  invoices?: ClientAccountInvoice[];
 }
 
 export interface ReturnItem {

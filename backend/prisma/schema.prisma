@@ -296,6 +296,7 @@ model ClientAccount {
   notes        String                 @default("")
   created_at   DateTime               @default(now())
   payments     ClientAccountPayment[]
+  invoices     ClientAccountInvoice[]
 
   @@map("client_accounts")
 }
@@ -315,6 +316,21 @@ model ClientAccountPayment {
   created_at     DateTime      @default(now())
 
   @@map("client_account_payments")
+}
+
+// ===== CLIENT ACCOUNT INVOICES (manual invoices added directly to the account) =====
+model ClientAccountInvoice {
+  id           Int           @id @default(autoincrement())
+  account_id   Int
+  account      ClientAccount @relation(fields: [account_id], references: [id], onDelete: Cascade)
+  date         String        @default("")
+  order_number String        @default("")
+  amount       Float         @default(0)
+  notes        String        @default("")
+  created_by   String        @default("")
+  created_at   DateTime      @default(now())
+
+  @@map("client_account_invoices")
 }
 
 // ===== RETURNS =====

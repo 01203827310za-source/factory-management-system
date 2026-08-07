@@ -615,7 +615,10 @@ debtsRouter.delete('/:id/payments/:pid', requireManager, async (req: Request, re
 export const clientAccountsRouter = Router();
 clientAccountsRouter.use(authenticate);
 
-const ACCT_INCLUDE = { payments: { orderBy: { id: 'asc' as const } } } as const;
+const ACCT_INCLUDE = {
+  payments: { orderBy: { id: 'asc' as const } },
+  invoices: { orderBy: { id: 'asc' as const } },
+} as const;
 
 clientAccountsRouter.get('/', async (_req, res) => {
   try { return res.json(await prisma.clientAccount.findMany({ orderBy: { id: 'asc' }, include: ACCT_INCLUDE })); }
@@ -660,7 +663,7 @@ clientAccountsRouter.delete('/:id', requireManager, async (req, res) => {
       const logIds = (cur.payments || []).map(p => p.payment_log_id).filter((x): x is number => x != null);
       if (logIds.length) await prisma.paymentLog.deleteMany({ where: { id: { in: logIds } } });
     }
-    await prisma.clientAccount.delete({ where: { id } }); // client_account_payments cascade
+    await prisma.clientAccount.delete({ where: { id } }); // client_account_payments & client_account_invoices cascade
     logAudit({ user: req.user, module: 'ClientAccounts', action: 'DELETE', record_id: id,
       before_data: cur, description: `حذف حساب عميل: ${cur?.client_name}` });
     return res.json({ message: 'تم' });
@@ -742,6 +745,34 @@ clientAccountsRouter.delete('/:id/payments/:pid', requireManager, async (req: Re
       before_data: payment, description: `حذف دفعة عميل: ${account.client_name} - ${payment.amount}` });
     return res.json({ message: 'تم' });
   } catch { return res.status(500).json({ message: 'خطأ' }); }
+});
+
+// ----- Client account invoice sub-routes -----
+// Manually attaches an invoice to a client's account: increases the account's
+// outstanding balance and appears as a debit row in its account history.
+clientAccountsRouter.post('/:id/invoices', requireManager, async (req: Request, res: Response) => {
+  const id = parseInt(req.params.id as string);
+  try {
+    const { date, order_number, amount, notes } = req.body;
+    const amt = parseFloat(amount) || 0;
+    if (!order_number || !String(order_number).trim()) return res.status(400).json({ message: 'رقم الطلب مطلوب' });
+    if (amt <= 0) return res.status(400).json({ message: 'قيمة الفاتورة يجب أن تكون أكبر من صفر' });
+
+    const account = await prisma.clientAccount.findUnique({ where: { id } });
+    if (!account) return res.status(404).json({ message: 'الحساب غير موجود' });
+
+    const invDate = date || new Date().toISOString().split('T')[0];
+    const invoice = await prisma.clientAccountInvoice.create({
+      data: { account_id: id, date: invDate, order_number: String(order_number).trim(), amount: amt,
+        notes: notes || '', created_by: req.user?.username || '' },
+    });
+    const newTotal = account.total_amount + amt;
+    await prisma.clientAccount.update({ where: { id }, data: { total_amount: newTotal, remaining: newTotal - account.amount_paid } });
+    logAudit({ user: req.user, module: 'ClientAccounts', action: 'CREATE', record_id: invoice.id,
+      after_data: invoice,
+      description: `إضافة فاتورة: ${account.client_name} - طلب ${invoice.order_number} - ${amt}` });
+    return res.status(201).json(invoice);
+  } catch { return res.status(500).json({ message: 'خطأ في إضافة الفاتورة' }); }
 });
 
 // ===== RETURNS =====
