@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate } from '../middleware/auth';
+import { FuzzyKeyIndex } from '../utils/textMatch';
 
 const router = Router();
 router.use(authenticate);
@@ -53,15 +54,16 @@ router.get('/', async (_req: Request, res: Response) => {
     sales.forEach(s => { orderStatusCounts[s.order_status] = (orderStatusCounts[s.order_status] || 0) + 1; });
 
     const cuttingOrders = await prisma.cuttingOrder.findMany();
+    const fabricIndex = new FuzzyKeyIndex(['color', 'color']); // [material_type, color]
     const fabricConsumed: Record<string, number> = {};
     cuttingOrders.forEach(c => {
-      const key = `${c.material_type}|${c.color}`;
+      const key = fabricIndex.resolve([c.material_type, c.color]);
       fabricConsumed[key] = (fabricConsumed[key] || 0) + c.kg_consumed;
     });
     let fabricValue = 0;
     const fabricItems: Array<{ material_type: string; color: string; available_qty: number; unit_cost: number; total: number }> = [];
     fabric.forEach(f => {
-      const consumed = fabricConsumed[`${f.material_type}|${f.color}`] || 0;
+      const consumed = fabricConsumed[fabricIndex.resolve([f.material_type, f.color])] || 0;
       const available = Math.max(0, f.qty_in - consumed);
       const wac = f.avg_cost_per_kg > 0 ? f.avg_cost_per_kg : f.cost_per_kg;
       const total = available * wac;
@@ -75,15 +77,16 @@ router.get('/', async (_req: Request, res: Response) => {
     const allModelParts = await prisma.modelPart.findMany({
       include: { model: { select: { qty_from_cutting: true } } },
     });
+    const cutIndex = new FuzzyKeyIndex(['exact', 'color']); // [cut_number, color]
     const usedByKey = new Map<string, number>();
     allModelParts.forEach(p => {
-      const key = `${p.cut_number}|${p.color}`;
+      const key = cutIndex.resolve([p.cut_number, p.color]);
       usedByKey.set(key, (usedByKey.get(key) || 0) + p.model.qty_from_cutting);
     });
     let cuttingInventoryValue = 0;
     const cuttingItems: Array<{ cut_number: number; cut_description: string; material_type: string; color: string; total_pieces: number; used_pieces: number; remaining_pieces: number; cost_per_meter: number; total: number }> = [];
     cuttingOrders.forEach(c => {
-      const key = `${c.cut_number}|${c.color}`;
+      const key = cutIndex.resolve([c.cut_number, c.color]);
       const used = usedByKey.get(key) || 0;
       const remaining = Math.max(0, c.total_pieces - used);
       const total = remaining * (c.cost_per_meter || 0);
@@ -109,9 +112,10 @@ router.get('/', async (_req: Request, res: Response) => {
       }))
       .filter(item => item.total !== 0);
 
+    const modelIndex = new FuzzyKeyIndex(['model', 'color']); // [model_code, color]
     const newProd: Record<string, number> = {};
     modelProds.forEach(mp => {
-      const k = `${mp.model_code}|${mp.color || ''}`;
+      const k = modelIndex.resolve([mp.model_code, mp.color || '']);
       newProd[k] = (newProd[k] || 0) + mp.qty_received;
     });
     const totalSalesQty: Record<string, number> = {};
@@ -125,18 +129,18 @@ router.get('/', async (_req: Request, res: Response) => {
           { code: s.model4_code, qty: s.model4_qty, color: s.model4_color },
           { code: s.model5_code, qty: s.model5_qty, color: s.model5_color },
         ].forEach(({ code, qty, color }) => {
-          if (code && qty > 0) { const k = `${code}|${color || ''}`; totalSalesQty[k] = (totalSalesQty[k] || 0) + qty; }
+          if (code && qty > 0) { const k = modelIndex.resolve([code, color || '']); totalSalesQty[k] = (totalSalesQty[k] || 0) + qty; }
         });
       });
     const returnQty: Record<string, number> = {};
     returns_.forEach(r => {
-      if (r.model_code) { const k = `${r.model_code}|${r.model_color || ''}`; returnQty[k] = (returnQty[k] || 0) + r.model_qty; }
+      if (r.model_code) { const k = modelIndex.resolve([r.model_code, r.model_color || '']); returnQty[k] = (returnQty[k] || 0) + r.model_qty; }
     });
 
     let stockValue = 0;
     const stockItems: Array<{ model_code: string; product_name: string; color: string; actual_qty: number; reserved_qty: number; available_qty: number; unit_cost: number; total: number }> = [];
     readyStock.forEach(rs => {
-      const k = `${rs.model_code}|${rs.color || ''}`;
+      const k = modelIndex.resolve([rs.model_code, rs.color || '']);
       const prod = newProd[k] || 0;
       const sold = totalSalesQty[k] || 0;
       const returned = returnQty[k] || 0;

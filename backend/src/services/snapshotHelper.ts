@@ -1,4 +1,5 @@
 import prisma from '../lib/prisma';
+import { FuzzyKeyIndex } from '../utils/textMatch';
 
 export type SnapshotData = {
   total_current_assets: number;
@@ -50,22 +51,24 @@ export async function computeSnapshot(): Promise<SnapshotData> {
     sales.filter(s => s.order_status === 'لم يتم الصرف').reduce((s, sale) => s + sale.remaining, 0) +
     clientAccts.reduce((s, ca) => s + ca.remaining, 0);
 
+  const fabricIndex = new FuzzyKeyIndex(['color', 'color']); // [material_type, color]
   const fabricConsumed: Record<string, number> = {};
   cuttingOrders.forEach(c => {
-    const key = `${c.material_type}|${c.color}`;
+    const key = fabricIndex.resolve([c.material_type, c.color]);
     fabricConsumed[key] = (fabricConsumed[key] || 0) + c.kg_consumed;
   });
   let fabricValue = 0;
   fabric.forEach(f => {
-    const consumed  = fabricConsumed[`${f.material_type}|${f.color}`] || 0;
+    const consumed  = fabricConsumed[fabricIndex.resolve([f.material_type, f.color])] || 0;
     const available = Math.max(0, f.qty_in - consumed);
     const wac       = f.avg_cost_per_kg > 0 ? f.avg_cost_per_kg : f.cost_per_kg;
     fabricValue    += available * wac;
   });
 
+  const modelIndex = new FuzzyKeyIndex(['model', 'color']); // [model_code, color]
   const newProd: Record<string, number> = {};
   modelProds.forEach(mp => {
-    const k = `${mp.model_code}|${mp.color || ''}`;
+    const k = modelIndex.resolve([mp.model_code, mp.color || '']);
     newProd[k] = (newProd[k] || 0) + mp.qty_received;
   });
   const totalSalesQty: Record<string, number> = {};
@@ -80,7 +83,7 @@ export async function computeSnapshot(): Promise<SnapshotData> {
         { code: s.model5_code, qty: s.model5_qty, color: s.model5_color },
       ].forEach(({ code, qty, color }) => {
         if (code && qty > 0) {
-          const k = `${code}|${color || ''}`;
+          const k = modelIndex.resolve([code, color || '']);
           totalSalesQty[k] = (totalSalesQty[k] || 0) + qty;
         }
       });
@@ -88,13 +91,13 @@ export async function computeSnapshot(): Promise<SnapshotData> {
   const returnQty: Record<string, number> = {};
   returns_.forEach(r => {
     if (r.model_code) {
-      const k = `${r.model_code}|${r.model_color || ''}`;
+      const k = modelIndex.resolve([r.model_code, r.model_color || '']);
       returnQty[k] = (returnQty[k] || 0) + r.model_qty;
     }
   });
   let stockValue = 0;
   readyStock.forEach(rs => {
-    const k        = `${rs.model_code}|${rs.color || ''}`;
+    const k        = modelIndex.resolve([rs.model_code, rs.color || '']);
     const actual   = Math.max(0, rs.opening_balance + (newProd[k] || 0) - (totalSalesQty[k] || 0) + (returnQty[k] || 0));
     const available = Math.max(0, actual - rs.reserved_quantity);
     stockValue     += available * rs.cost_per_piece;

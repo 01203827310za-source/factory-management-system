@@ -8,6 +8,7 @@ import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate, requireManager } from '../middleware/auth';
 import { logAudit } from '../services/auditHelper';
+import { textsMatch, findBestMatch } from '../utils/textMatch';
 
 // Remove PaymentLog entries when a debt/client-account paid amount is reduced.
 // Deletes from newest first; if a single log exceeds the remaining delta, trims it.
@@ -188,21 +189,22 @@ cuttingRouter.get('/', async (_req, res) => {
   try {
     const cuts = await prisma.cuttingOrder.findMany({ orderBy: { id: 'asc' } });
 
-    // For each cut, compute reserved pieces from model_parts → model_production
-    const usedMap = new Map<string, number>();
-    const pairs = [...new Set(cuts.map(c => `${c.cut_number}|${c.color}`))];
-    await Promise.all(pairs.map(async (key) => {
-      const [cut_number, color] = key.split('|');
-      const parts = await prisma.modelPart.findMany({
-        where: { cut_number: parseInt(cut_number), color },
+    // For each cut, compute reserved pieces from model_parts → model_production.
+    // Colors are matched via textsMatch (not raw equality) so a part recorded
+    // with a slightly different spelling of the same color still counts
+    // against the right cutting order.
+    const cutNumbers = [...new Set(cuts.map(c => c.cut_number))];
+    const allParts = cutNumbers.length > 0
+      ? await prisma.modelPart.findMany({
+        where: { cut_number: { in: cutNumbers } },
         include: { model: { select: { qty_from_cutting: true } } },
-      });
-      usedMap.set(key, parts.reduce((s, p) => s + p.model.qty_from_cutting, 0));
-    }));
+      })
+      : [];
 
     const result = cuts.map(c => {
-      const key = `${c.cut_number}|${c.color}`;
-      const used = usedMap.get(key) ?? 0;
+      const used = allParts
+        .filter(p => p.cut_number === c.cut_number && textsMatch(p.color, c.color, 'color'))
+        .reduce((s, p) => s + p.model.qty_from_cutting, 0);
       return { ...c, remaining_pieces: c.total_pieces - used };
     });
     return res.json(result);
@@ -272,18 +274,24 @@ async function getAvailableForPart(
   color: string,
   excludeModelId?: number,
 ): Promise<{ total: number; used: number; available: number }> {
-  const cuts = await prisma.cuttingOrder.findMany({ where: { cut_number, color } });
-  const total = cuts.reduce((s, c) => s + c.total_pieces, 0);
+  // Match color via textsMatch rather than a raw DB equality filter, so
+  // small spelling/spacing differences between the cutting order and the
+  // model part don't cause a wrong (or zero) available count.
+  const cuts = await prisma.cuttingOrder.findMany({ where: { cut_number } });
+  const total = cuts
+    .filter(c => textsMatch(c.color, color, 'color'))
+    .reduce((s, c) => s + c.total_pieces, 0);
 
   const usedParts = await prisma.modelPart.findMany({
     where: {
       cut_number,
-      color,
       ...(excludeModelId !== undefined ? { model_id: { not: excludeModelId } } : {}),
     },
     include: { model: { select: { qty_from_cutting: true } } },
   });
-  const used = usedParts.reduce((s, p) => s + p.model.qty_from_cutting, 0);
+  const used = usedParts
+    .filter(p => textsMatch(p.color, color, 'color'))
+    .reduce((s, p) => s + p.model.qty_from_cutting, 0);
   return { total, used, available: total - used };
 }
 
@@ -322,11 +330,11 @@ async function validateProductionParts(
   const firstColor = cleanParts[0].color;
   for (const p of cleanParts) {
     if (!p.cut_number || !p.color) throw new Error('MISSING_PARTS');
-    if (p.color !== firstColor) throw new Error('MIXED_COLORS');
+    if (!textsMatch(p.color, firstColor, 'color')) throw new Error('MIXED_COLORS');
 
     const availableColors = await getColorsForCut(p.cut_number);
     if (availableColors.length === 0) throw new Error('NO_COLORS');
-    if (!availableColors.includes(p.color)) throw new Error('INVALID_COLOR');
+    if (!availableColors.some(c => textsMatch(c, p.color, 'color'))) throw new Error('INVALID_COLOR');
 
     const { available } = await getAvailableForPart(p.cut_number, p.color, excludeModelId);
     if (available < qty) {
@@ -349,9 +357,13 @@ async function validateProductionParts(
 
 async function ensureReadyStockRow(tx: any, data: any, color: string) {
   if (!data.model_code || !color) return;
-  const existing = await tx.readyStock.findFirst({
-    where: { model_code: data.model_code, color },
+  // Match the existing row by normalized/fuzzy color rather than a raw DB
+  // equality filter, so a slightly different spelling of the same color
+  // reuses the existing stock row instead of creating a duplicate one.
+  const candidates = await tx.readyStock.findMany({
+    where: { model_code: data.model_code },
   });
+  const existing = findBestMatch(candidates, color, (r: { color: string }) => r.color, 'color');
   if (existing) return;
 
   await tx.readyStock.create({
@@ -890,15 +902,17 @@ export async function rebuildFabricInventory(
   fabricType: string,
   color: string,
 ): Promise<void> {
-  const warehouse = await client.fabricWarehouse.findFirst({
-    where: { material_type: fabricType, color },
+  const warehouseCandidates = await client.fabricWarehouse.findMany({
+    where: { material_type: fabricType },
   });
+  const warehouse = findBestMatch(warehouseCandidates, color, r => r.color, 'color');
   if (!warehouse) return;
 
-  const purchases = await client.fabricPurchase.findMany({
-    where: { fabric_type: fabricType, color },
+  const purchaseCandidates = await client.fabricPurchase.findMany({
+    where: { fabric_type: fabricType },
     orderBy: { id: 'asc' },
   });
+  const purchases = purchaseCandidates.filter(p => textsMatch(p.color, color, 'color'));
 
   if (purchases.length === 0) {
     await client.fabricWarehouse.update({
@@ -947,9 +961,10 @@ fabricPurchasesRouter.post('/', requireManager, async (req: Request, res: Respon
         },
       });
 
-      const warehouse = await tx.fabricWarehouse.findFirst({
-        where: { material_type: fabric_type, color: cleanColor },
+      const warehouseCandidates = await tx.fabricWarehouse.findMany({
+        where: { material_type: fabric_type },
       });
+      const warehouse = findBestMatch(warehouseCandidates, cleanColor, r => r.color, 'color');
 
       if (!warehouse) {
         // First entry for this type+color — create the warehouse row
@@ -1017,18 +1032,20 @@ fabricPurchasesRouter.put('/:id', requireManager, async (req: Request, res: Resp
       const existing = await tx.fabricPurchase.findUnique({ where: { id } });
       if (!existing) throw new Error('NOT_FOUND');
 
-      const warehouse = await tx.fabricWarehouse.findFirst({
-        where: { material_type: existing.fabric_type, color: existing.color },
+      const warehouseCandidates = await tx.fabricWarehouse.findMany({
+        where: { material_type: existing.fabric_type },
       });
+      const warehouse = findBestMatch(warehouseCandidates, existing.color, r => r.color, 'color');
       if (!warehouse) throw new Error('WAREHOUSE_NOT_FOUND');
 
       const deltaQty = newQty - existing.quantity_kg;
 
       // Safety: if reducing qty, verify cutting consumption is not exceeded
       if (deltaQty < 0) {
-        const cutting = await tx.cuttingOrder.findMany({
-          where: { material_type: existing.fabric_type, color: existing.color },
+        const cuttingCandidates = await tx.cuttingOrder.findMany({
+          where: { material_type: existing.fabric_type },
         });
+        const cutting = cuttingCandidates.filter(c => textsMatch(c.color, existing.color, 'color'));
         const totalConsumed = cutting.reduce((s, c) => s + c.kg_consumed, 0);
         if (warehouse.qty_in + deltaQty < totalConsumed) throw new Error('CONSUMED');
       }
@@ -1092,17 +1109,19 @@ fabricPurchasesRouter.delete('/:id', requireManager, async (req: Request, res: R
       const existing = await tx.fabricPurchase.findUnique({ where: { id } });
       if (!existing) throw new Error('NOT_FOUND');
 
-      const warehouse = await tx.fabricWarehouse.findFirst({
-        where: { material_type: existing.fabric_type, color: existing.color },
+      const warehouseCandidates = await tx.fabricWarehouse.findMany({
+        where: { material_type: existing.fabric_type },
       });
+      const warehouse = findBestMatch(warehouseCandidates, existing.color, r => r.color, 'color');
       if (!warehouse) throw new Error('WAREHOUSE_NOT_FOUND');
 
       const newQty = warehouse.qty_in - existing.quantity_kg;
 
       // Safety: ensure remaining stock covers cutting consumption
-      const cutting = await tx.cuttingOrder.findMany({
-        where: { material_type: existing.fabric_type, color: existing.color },
+      const cuttingCandidates = await tx.cuttingOrder.findMany({
+        where: { material_type: existing.fabric_type },
       });
+      const cutting = cuttingCandidates.filter(c => textsMatch(c.color, existing.color, 'color'));
       if (newQty < cutting.reduce((s, c) => s + c.kg_consumed, 0)) throw new Error('CONSUMED');
 
       await tx.fabricPurchase.delete({ where: { id } });
@@ -1118,10 +1137,11 @@ fabricPurchasesRouter.delete('/:id', requireManager, async (req: Request, res: R
         const newWAC      = Math.round((newValue / newQty) * 100) / 100;
 
         // Find the most-recent remaining purchase for last_purchase_price
-        const lastRemaining = await tx.fabricPurchase.findFirst({
-          where: { fabric_type: existing.fabric_type, color: existing.color },
+        const remainingPurchases = await tx.fabricPurchase.findMany({
+          where: { fabric_type: existing.fabric_type },
           orderBy: { id: 'desc' },
         });
+        const lastRemaining = remainingPurchases.find(p => textsMatch(p.color, existing.color, 'color'));
 
         await tx.fabricWarehouse.update({
           where: { id: warehouse.id },
@@ -1215,7 +1235,7 @@ async function computeAvailable(stock: { id: number; model_code: string; color: 
   const col = stock.color || '';
 
   const newProd = modelProds
-    .filter(mp => mp.model_code === mc && (mp.color || '') === col)
+    .filter(mp => textsMatch(mp.model_code, mc, 'model') && textsMatch(mp.color || '', col, 'color'))
     .reduce((s, mp) => s + mp.qty_received, 0);
 
   const totalSales = sales
@@ -1227,10 +1247,10 @@ async function computeAvailable(stock: { id: number; model_code: string; color: 
       { code: sale.model4_code, qty: sale.model4_qty, color: sale.model4_color },
       { code: sale.model5_code, qty: sale.model5_qty, color: sale.model5_color },
     ].reduce((ss, { code, qty, color }) =>
-      code === mc && (color || '') === col ? ss + qty : ss, 0), 0);
+      textsMatch(code, mc, 'model') && textsMatch(color || '', col, 'color') ? ss + qty : ss, 0), 0);
 
   const returnQty = returns_
-    .filter(r => r.model_code === mc && (r.model_color || '') === col)
+    .filter(r => textsMatch(r.model_code, mc, 'model') && textsMatch(r.model_color || '', col, 'color'))
     .reduce((s, r) => s + r.model_qty, 0);
 
   const actual = stock.opening_balance + newProd - totalSales + returnQty;

@@ -14,6 +14,7 @@ import {
   type ReturnRecord, type PaymentLogRecord, type DashboardMetrics,
   type PaymentHistoryRecord, type ClientAccountInvoiceRecord,
 } from '../services/api';
+import { FuzzyKeyIndex } from '../utils/textMatch';
 
 import type {
   Sale, ExpenseRevenue, ReadyStock, ComputedReadyStock,
@@ -67,9 +68,10 @@ export const readyStockStore = {
       options?.includeReturns ? returnsApi.getAll() : Promise.resolve([]),
     ]);
 
+    const modelIndex = new FuzzyKeyIndex(['model', 'color']); // [model_code, color]
     const newProd: Record<string, number> = {};
     modelProds.forEach(mp => {
-      const k = `${mp.model_code}|${mp.color || ''}`;
+      const k = modelIndex.resolve([mp.model_code, mp.color || '']);
       newProd[k] = (newProd[k] || 0) + mp.qty_received;
     });
 
@@ -86,7 +88,7 @@ export const readyStockStore = {
           { code: s.model5_code, qty: s.model5_qty, color: s.model5_color },
         ].forEach(({ code, qty, color }) => {
           if (code && qty > 0) {
-            const k = `${code}|${color || ''}`;
+            const k = modelIndex.resolve([code, color || '']);
             totalSales[k] = (totalSales[k] || 0) + qty;
           }
         });
@@ -95,13 +97,13 @@ export const readyStockStore = {
     const returnQty: Record<string, number> = {};
     returns_.forEach(r => {
       if (r.model_code) {
-        const k = `${r.model_code}|${r.model_color || ''}`;
+        const k = modelIndex.resolve([r.model_code, r.model_color || '']);
         returnQty[k] = (returnQty[k] || 0) + r.model_qty;
       }
     });
 
     return stock.map(item => {
-      const k = `${item.model_code}|${item.color || ''}`;
+      const k = modelIndex.resolve([item.model_code, item.color || '']);
       const actualBalance =
         item.opening_balance +
         (newProd[k] || 0) -
@@ -133,16 +135,20 @@ export const fabricStore = {
 
   getComputed: async (): Promise<ComputedFabric[]> => {
     const [fabric, cutting] = await Promise.all([fabricApi.getAll(), cuttingApi.getAll()]);
+    const fabricIndex = new FuzzyKeyIndex(['color', 'color']); // [material_type, color]
     const consumed: Record<string, number> = {};
     cutting.forEach(c => {
-      const key = `${c.material_type}|${c.color}`;
+      const key = fabricIndex.resolve([c.material_type, c.color]);
       consumed[key] = (consumed[key] || 0) + c.kg_consumed;
     });
-    return fabric.map(f => ({
-      ...f,
-      qty_consumed: consumed[`${f.material_type}|${f.color}`] || 0,
-      available_balance: f.qty_in - (consumed[`${f.material_type}|${f.color}`] || 0),
-    })) as ComputedFabric[];
+    return fabric.map(f => {
+      const consumedQty = consumed[fabricIndex.resolve([f.material_type, f.color])] || 0;
+      return {
+        ...f,
+        qty_consumed: consumedQty,
+        available_balance: f.qty_in - consumedQty,
+      };
+    }) as ComputedFabric[];
   },
 };
 

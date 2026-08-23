@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate } from '../middleware/auth';
+import { FuzzyKeyIndex } from '../utils/textMatch';
 
 const router = Router();
 router.use(authenticate);
@@ -43,21 +44,23 @@ router.get('/', async (_req: Request, res: Response) => {
     const cashAvailable = totalIn - totalOut;
 
     const cuttingOrders = await prisma.cuttingOrder.findMany();
+    const fabricIndex = new FuzzyKeyIndex(['color', 'color']); // [material_type, color]
     const fabricConsumed: Record<string, number> = {};
     cuttingOrders.forEach(c => {
-      const key = `${c.material_type}|${c.color}`;
+      const key = fabricIndex.resolve([c.material_type, c.color]);
       fabricConsumed[key] = (fabricConsumed[key] || 0) + c.kg_consumed;
     });
     let fabricValue = 0;
     fabric.forEach(f => {
-      const consumed = fabricConsumed[`${f.material_type}|${f.color}`] || 0;
+      const consumed = fabricConsumed[fabricIndex.resolve([f.material_type, f.color])] || 0;
       fabricValue += Math.max(0, f.qty_in - consumed) * f.cost_per_kg;
     });
 
     const modelProds = await prisma.modelProduction.findMany();
+    const modelIndex = new FuzzyKeyIndex(['model', 'color']); // [model_code, color]
     const newProd: Record<string, number> = {};
     modelProds.forEach(mp => {
-      const key = `${mp.model_code}|${mp.color || ''}`;
+      const key = modelIndex.resolve([mp.model_code, mp.color || '']);
       newProd[key] = (newProd[key] || 0) + mp.qty_received;
     });
     const totalSalesQty: Record<string, number> = {};
@@ -68,7 +71,7 @@ router.get('/', async (_req: Request, res: Response) => {
        { code: s.model4_code, qty: s.model4_qty, color: s.model4_color },
        { code: s.model5_code, qty: s.model5_qty, color: s.model5_color }].forEach(({ code, qty, color }) => {
         if (code && qty > 0) {
-          const key = `${code}|${color || ''}`;
+          const key = modelIndex.resolve([code, color || '']);
           totalSalesQty[key] = (totalSalesQty[key] || 0) + qty;
         }
       });
@@ -76,14 +79,14 @@ router.get('/', async (_req: Request, res: Response) => {
     const returnQty: Record<string, number> = {};
     returns_.forEach(r => {
       if (r.model_code) {
-        const key = `${r.model_code}|${r.model_color || ''}`;
+        const key = modelIndex.resolve([r.model_code, r.model_color || '']);
         returnQty[key] = (returnQty[key] || 0) + r.model_qty;
       }
     });
 
     let stockValue = 0;
     readyStock.forEach(rs => {
-      const key = `${rs.model_code}|${rs.color || ''}`;
+      const key = modelIndex.resolve([rs.model_code, rs.color || '']);
       const actual = Math.max(0, rs.opening_balance + (newProd[key] || 0) - (totalSalesQty[key] || 0) + (returnQty[key] || 0));
       stockValue += actual * rs.cost_per_piece;
     });

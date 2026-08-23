@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const prisma_1 = __importDefault(require("../lib/prisma"));
 const auth_1 = require("../middleware/auth");
+const textMatch_1 = require("../utils/textMatch");
 const router = (0, express_1.Router)();
 router.use(auth_1.authenticate);
 router.get('/', async (_req, res) => {
@@ -48,43 +49,65 @@ router.get('/', async (_req, res) => {
         const orderStatusCounts = {};
         sales.forEach(s => { orderStatusCounts[s.order_status] = (orderStatusCounts[s.order_status] || 0) + 1; });
         const cuttingOrders = await prisma_1.default.cuttingOrder.findMany();
+        const fabricIndex = new textMatch_1.FuzzyKeyIndex(['color', 'color']); // [material_type, color]
         const fabricConsumed = {};
         cuttingOrders.forEach(c => {
-            const key = `${c.material_type}|${c.color}`;
+            const key = fabricIndex.resolve([c.material_type, c.color]);
             fabricConsumed[key] = (fabricConsumed[key] || 0) + c.kg_consumed;
         });
         let fabricValue = 0;
+        const fabricItems = [];
         fabric.forEach(f => {
-            const consumed = fabricConsumed[`${f.material_type}|${f.color}`] || 0;
+            const consumed = fabricConsumed[fabricIndex.resolve([f.material_type, f.color])] || 0;
             const available = Math.max(0, f.qty_in - consumed);
             const wac = f.avg_cost_per_kg > 0 ? f.avg_cost_per_kg : f.cost_per_kg;
-            fabricValue += available * wac;
+            const total = available * wac;
+            fabricValue += total;
+            if (total !== 0) {
+                fabricItems.push({ material_type: f.material_type, color: f.color, available_qty: available, unit_cost: wac, total });
+            }
         });
         // Cutting inventory value: SUM(remaining_pieces × cost_per_meter)
         const allModelParts = await prisma_1.default.modelPart.findMany({
             include: { model: { select: { qty_from_cutting: true } } },
         });
+        const cutIndex = new textMatch_1.FuzzyKeyIndex(['exact', 'color']); // [cut_number, color]
         const usedByKey = new Map();
         allModelParts.forEach(p => {
-            const key = `${p.cut_number}|${p.color}`;
+            const key = cutIndex.resolve([p.cut_number, p.color]);
             usedByKey.set(key, (usedByKey.get(key) || 0) + p.model.qty_from_cutting);
         });
         let cuttingInventoryValue = 0;
+        const cuttingItems = [];
         cuttingOrders.forEach(c => {
-            const key = `${c.cut_number}|${c.color}`;
+            const key = cutIndex.resolve([c.cut_number, c.color]);
             const used = usedByKey.get(key) || 0;
             const remaining = Math.max(0, c.total_pieces - used);
-            cuttingInventoryValue += remaining * (c.cost_per_meter || 0);
+            const total = remaining * (c.cost_per_meter || 0);
+            cuttingInventoryValue += total;
+            if (total !== 0) {
+                cuttingItems.push({
+                    cut_number: c.cut_number, cut_description: c.cut_description, material_type: c.material_type, color: c.color,
+                    total_pieces: c.total_pieces, used_pieces: used, remaining_pieces: remaining, cost_per_meter: c.cost_per_meter || 0, total,
+                });
+            }
         });
         // WIP value: SUM(qty_received × cost_per_piece) WHERE status = 'قيد التشغيل'
         // Models that move to 'تام' are automatically excluded — no double-counting with stockValue.
         const modelProds = await prisma_1.default.modelProduction.findMany();
-        const wipValue = modelProds
-            .filter(mp => mp.status === 'قيد التشغيل')
-            .reduce((s, mp) => s + mp.qty_received * (mp.cost_per_piece || 0), 0);
+        const wipRecords = modelProds.filter(mp => mp.status === 'قيد التشغيل');
+        const wipValue = wipRecords.reduce((s, mp) => s + mp.qty_received * (mp.cost_per_piece || 0), 0);
+        const wipItems = wipRecords
+            .map(mp => ({
+            model_code: mp.model_code, model_description: mp.model_description, color: mp.color,
+            qty_received: mp.qty_received, cost_per_piece: mp.cost_per_piece || 0,
+            total: mp.qty_received * (mp.cost_per_piece || 0), status: mp.status,
+        }))
+            .filter(item => item.total !== 0);
+        const modelIndex = new textMatch_1.FuzzyKeyIndex(['model', 'color']); // [model_code, color]
         const newProd = {};
         modelProds.forEach(mp => {
-            const k = `${mp.model_code}|${mp.color || ''}`;
+            const k = modelIndex.resolve([mp.model_code, mp.color || '']);
             newProd[k] = (newProd[k] || 0) + mp.qty_received;
         });
         const totalSalesQty = {};
@@ -99,7 +122,7 @@ router.get('/', async (_req, res) => {
                 { code: s.model5_code, qty: s.model5_qty, color: s.model5_color },
             ].forEach(({ code, qty, color }) => {
                 if (code && qty > 0) {
-                    const k = `${code}|${color || ''}`;
+                    const k = modelIndex.resolve([code, color || '']);
                     totalSalesQty[k] = (totalSalesQty[k] || 0) + qty;
                 }
             });
@@ -107,22 +130,57 @@ router.get('/', async (_req, res) => {
         const returnQty = {};
         returns_.forEach(r => {
             if (r.model_code) {
-                const k = `${r.model_code}|${r.model_color || ''}`;
+                const k = modelIndex.resolve([r.model_code, r.model_color || '']);
                 returnQty[k] = (returnQty[k] || 0) + r.model_qty;
             }
         });
         let stockValue = 0;
+        const stockItems = [];
         readyStock.forEach(rs => {
-            const k = `${rs.model_code}|${rs.color || ''}`;
+            const k = modelIndex.resolve([rs.model_code, rs.color || '']);
             const prod = newProd[k] || 0;
             const sold = totalSalesQty[k] || 0;
             const returned = returnQty[k] || 0;
             const actual = Math.max(0, rs.opening_balance + prod - sold + returned);
             const available = Math.max(0, actual - rs.reserved_quantity);
-            stockValue += available * rs.cost_per_piece;
+            const total = available * rs.cost_per_piece;
+            stockValue += total;
+            if (total !== 0) {
+                stockItems.push({
+                    model_code: rs.model_code, product_name: rs.product_name, color: rs.color,
+                    actual_qty: actual, reserved_qty: rs.reserved_quantity, available_qty: available,
+                    unit_cost: rs.cost_per_piece, total,
+                });
+            }
         });
-        const accessoriesValue = accessories.reduce((s, a) => s + Math.max(0, a.qty_in - a.qty_consumed) * a.cost, 0);
-        const totalCurrentAssets = fabricValue + stockValue + accessoriesValue + cuttingInventoryValue + wipValue + moneyOwedToUs + netProfit - remainingDebts;
+        const accessoriesItems = [];
+        const accessoriesValue = accessories.reduce((s, a) => {
+            const qty = Math.max(0, a.qty_in - a.qty_consumed);
+            const total = qty * a.cost;
+            if (total !== 0)
+                accessoriesItems.push({ item_name: a.item_name, qty, unit_cost: a.cost, total });
+            return s + total;
+        }, 0);
+        const receivableItems = [];
+        sales
+            .filter(s => s.order_status === 'لم يتم الصرف' && s.remaining !== 0)
+            .forEach(s => {
+            receivableItems.push({
+                source: 'sale', name: s.client, reference: s.order_number,
+                invoice_total: s.invoice_value, paid: s.deposit_paid, remaining: s.remaining,
+            });
+        });
+        clientAccts
+            .filter(ca => ca.remaining !== 0)
+            .forEach(ca => {
+            receivableItems.push({
+                source: 'client_account', name: ca.client_name, reference: ca.model_name,
+                invoice_total: ca.total_amount, paid: ca.amount_paid, remaining: ca.remaining,
+            });
+        });
+        // Total current assets = warehouses + remaining cutting pieces + WIP + receivables.
+        // Deliberately excludes cash/net-profit/debts and Fixed Assets — those live in the Financial Center, not here.
+        const totalCurrentAssets = fabricValue + stockValue + accessoriesValue + cuttingInventoryValue + wipValue + moneyOwedToUs;
         const _today = new Date().toISOString().slice(0, 10);
         setImmediate(() => {
             prisma_1.default.financialSnapshot.upsert({
@@ -151,6 +209,12 @@ router.get('/', async (_req, res) => {
             cutting_value: cuttingInventoryValue,
             wip_value: wipValue,
             total_reservations: totalReservations,
+            fabric_items: fabricItems,
+            stock_items: stockItems,
+            accessories_items: accessoriesItems,
+            cutting_items: cuttingItems,
+            wip_items: wipItems,
+            receivable_items: receivableItems,
         });
     }
     catch (err) {

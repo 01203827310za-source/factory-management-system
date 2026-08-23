@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate } from '../middleware/auth';
 import { computeFinancialSummary } from '../services/financialMetrics';
+import { FuzzyKeyIndex } from '../utils/textMatch';
 
 const router = Router();
 router.use(authenticate);
@@ -30,9 +31,10 @@ const sd = (s: AllData['sales'][0]) => s.created_at.toISOString().slice(0, 10);
 function computeCapitalSnapshot(db: AllData, upToDate: string) {
   const { sales, expenses, debts, clientAccts, returns_, paymentLogs, fabric, readyStock, accessories, modelProds, cuttingOrders } = db;
 
+  const modelIndex = new FuzzyKeyIndex(['model', 'color']); // [model_code, color]
   const newProd: Record<string, number> = {};
   modelProds.filter(mp => mp.date <= upToDate).forEach(mp => {
-    const k = `${mp.model_code}|${mp.color || ''}`;
+    const k = modelIndex.resolve([mp.model_code, mp.color || '']);
     newProd[k] = (newProd[k] || 0) + mp.qty_received;
   });
 
@@ -43,31 +45,32 @@ function computeCapitalSnapshot(db: AllData, upToDate: string) {
      { c: s.model3_code, q: s.model3_qty, col: s.model3_color },
      { c: s.model4_code, q: s.model4_qty, col: s.model4_color },
      { c: s.model5_code, q: s.model5_qty, col: s.model5_color }].forEach(({ c, q, col }) => {
-      if (c && q > 0) { const k = `${c}|${col || ''}`; soldQty[k] = (soldQty[k] || 0) + q; }
+      if (c && q > 0) { const k = modelIndex.resolve([c, col || '']); soldQty[k] = (soldQty[k] || 0) + q; }
     });
   });
 
   const retQty: Record<string, number> = {};
   returns_.filter(r => r.date <= upToDate).forEach(r => {
-    if (r.model_code) { const k = `${r.model_code}|${r.model_color || ''}`; retQty[k] = (retQty[k] || 0) + r.model_qty; }
+    if (r.model_code) { const k = modelIndex.resolve([r.model_code, r.model_color || '']); retQty[k] = (retQty[k] || 0) + r.model_qty; }
   });
 
   let stockValue = 0;
   readyStock.forEach(rs => {
-    const k = `${rs.model_code}|${rs.color || ''}`;
+    const k = modelIndex.resolve([rs.model_code, rs.color || '']);
     const actual = Math.max(0, rs.opening_balance + (newProd[k] || 0) - (soldQty[k] || 0) + (retQty[k] || 0));
     const available = Math.max(0, actual - rs.reserved_quantity);
     stockValue += available * rs.cost_per_piece;
   });
 
+  const fabricIndex = new FuzzyKeyIndex(['color', 'color']); // [material_type, color]
   const consumed: Record<string, number> = {};
   cuttingOrders.filter(c => c.date <= upToDate).forEach(c => {
-    const key = `${c.material_type}|${c.color}`;
+    const key = fabricIndex.resolve([c.material_type, c.color]);
     consumed[key] = (consumed[key] || 0) + c.kg_consumed;
   });
   let fabricValue = 0;
   fabric.filter(f => f.date <= upToDate).forEach(f => {
-    const avail = Math.max(0, f.qty_in - (consumed[`${f.material_type}|${f.color}`] || 0));
+    const avail = Math.max(0, f.qty_in - (consumed[fabricIndex.resolve([f.material_type, f.color])] || 0));
     const wac = f.avg_cost_per_kg > 0 ? f.avg_cost_per_kg : f.cost_per_kg;
     fabricValue += avail * wac;
   });
@@ -128,9 +131,10 @@ router.get('/', async (req: Request, res: Response) => {
     });
     const topModel = Object.entries(modelQtyMap).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
 
+    const modelIndexAll = new FuzzyKeyIndex(['model', 'color']); // [model_code, color]
     const newProdAll: Record<string, number> = {};
     modelProds.forEach(mp => {
-      const k = `${mp.model_code}|${mp.color || ''}`;
+      const k = modelIndexAll.resolve([mp.model_code, mp.color || '']);
       newProdAll[k] = (newProdAll[k] || 0) + mp.qty_received;
     });
 
@@ -141,17 +145,17 @@ router.get('/', async (req: Request, res: Response) => {
        { c: s.model3_code, q: s.model3_qty, col: s.model3_color },
        { c: s.model4_code, q: s.model4_qty, col: s.model4_color },
        { c: s.model5_code, q: s.model5_qty, col: s.model5_color }].forEach(({ c, q, col }) => {
-        if (c && q > 0) { const k = `${c}|${col || ''}`; soldQtyAll[k] = (soldQtyAll[k] || 0) + q; }
+        if (c && q > 0) { const k = modelIndexAll.resolve([c, col || '']); soldQtyAll[k] = (soldQtyAll[k] || 0) + q; }
       });
     });
 
     const retQtyAll: Record<string, number> = {};
     returns_.forEach(r => {
-      if (r.model_code) { const k = `${r.model_code}|${r.model_color || ''}`; retQtyAll[k] = (retQtyAll[k] || 0) + r.model_qty; }
+      if (r.model_code) { const k = modelIndexAll.resolve([r.model_code, r.model_color || '']); retQtyAll[k] = (retQtyAll[k] || 0) + r.model_qty; }
     });
 
     const stockDetails = readyStock.map(rs => {
-      const k        = `${rs.model_code}|${rs.color || ''}`;
+      const k        = modelIndexAll.resolve([rs.model_code, rs.color || '']);
       const actual   = rs.opening_balance + (newProdAll[k] || 0) - (soldQtyAll[k] || 0) + (retQtyAll[k] || 0);
       const reserved = rs.reserved_quantity;
       return { model_code: rs.model_code, product_name: rs.product_name, actual, reserved, available: actual - reserved };
@@ -161,14 +165,15 @@ router.get('/', async (req: Request, res: Response) => {
     const totalReservedQty = stockDetails.reduce((s, x) => s + x.reserved, 0);
     const lowStock         = stockDetails.filter(x => x.available >= 0 && x.available < 10);
 
+    const fabricIndexAll = new FuzzyKeyIndex(['color', 'color']); // [material_type, color]
     const fabricConsumedAll: Record<string, number> = {};
     cuttingOrders.forEach(c => {
-      const key = `${c.material_type}|${c.color}`;
+      const key = fabricIndexAll.resolve([c.material_type, c.color]);
       fabricConsumedAll[key] = (fabricConsumedAll[key] || 0) + c.kg_consumed;
     });
     let fabricValue = 0; let fabricBalanceKg = 0;
     fabric.forEach(f => {
-      const avail = Math.max(0, f.qty_in - (fabricConsumedAll[`${f.material_type}|${f.color}`] || 0));
+      const avail = Math.max(0, f.qty_in - (fabricConsumedAll[fabricIndexAll.resolve([f.material_type, f.color])] || 0));
       const wac   = f.avg_cost_per_kg > 0 ? f.avg_cost_per_kg : f.cost_per_kg;
       fabricValue    += avail * wac;
       fabricBalanceKg += avail;

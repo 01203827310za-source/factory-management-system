@@ -7,6 +7,7 @@ import { useToast } from '../components/Toast';
 import { Plus, Edit2, Trash2, Download, Search, RefreshCw, ShoppingCart, ChevronDown, ChevronUp } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useCrudPermissions } from '../hooks/usePermissions';
+import { findBestMatch, textsMatch } from '../utils/textMatch';
 
 const ic = "w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400";
 const lc = "block text-xs font-semibold text-gray-600 mb-1";
@@ -65,10 +66,8 @@ export default function FabricWarehouse() {
   // Current warehouse info for the selected purchase type+color (for reference display)
   const purchaseMatchRow = useMemo(() => {
     if (!purchaseForm.fabric_type) return null;
-    return items.find(i =>
-      i.material_type === purchaseForm.fabric_type &&
-      i.color === (purchaseForm.color || '')
-    ) || null;
+    const sameType = items.filter(i => textsMatch(i.material_type, purchaseForm.fabric_type, 'color'));
+    return findBestMatch(sameType, purchaseForm.color || '', i => i.color, 'color') || null;
   }, [items, purchaseForm.fabric_type, purchaseForm.color]);
 
   // Preview weighted average for the purchase form

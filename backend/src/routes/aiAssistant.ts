@@ -13,6 +13,7 @@ import Groq from 'groq-sdk';
 import prisma from '../lib/prisma';
 import { authenticate } from '../middleware/auth';
 import { calcEmployeePayroll, round2 } from '../services/payrollCalc';
+import { FuzzyKeyIndex } from '../utils/textMatch';
 
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
 
@@ -190,29 +191,32 @@ async function gatherSnapshot() {
     .sort((a, b) => b.remaining - a.remaining);
 
   // ── Returns ────────────────────────────────────────────────────────────────
+  const modelIndex = new FuzzyKeyIndex(['model', 'color']); // [model_code, color]
+
   const totalRefunds = returns_.reduce((s, r) => s + r.refund_amount, 0);
-  const returnsByItem: Record<string, { qty: number; refund: number }> = {};
+  const returnsByItem: Record<string, { label: string; qty: number; refund: number }> = {};
   returns_.forEach(r => {
     if (!r.model_code) return;
-    const k = `${r.model_code}|${r.model_color || ''}`;
-    if (!returnsByItem[k]) returnsByItem[k] = { qty: 0, refund: 0 };
+    const k = modelIndex.resolve([r.model_code, r.model_color || '']);
+    if (!returnsByItem[k]) returnsByItem[k] = { label: `${r.model_code}|${r.model_color || ''}`, qty: 0, refund: 0 };
     returnsByItem[k].qty    += r.model_qty;
     returnsByItem[k].refund += r.refund_amount;
   });
-  const returnsList = Object.entries(returnsByItem)
-    .map(([item, v]) => ({ item, qty: v.qty, refund: v.refund }))
+  const returnsList = Object.values(returnsByItem)
+    .map(v => ({ item: v.label, qty: v.qty, refund: v.refund }))
     .sort((a, b) => b.qty - a.qty);
 
   // ── Fabric warehouse (WAC cost) ────────────────────────────────────────────
+  const fabricIndex = new FuzzyKeyIndex(['color', 'color']); // [material_type, color]
   const fabricConsumed: Record<string, number> = {};
   cuttingOrders.forEach(c => {
-    const key = `${c.material_type}|${c.color}`;
+    const key = fabricIndex.resolve([c.material_type, c.color]);
     fabricConsumed[key] = (fabricConsumed[key] || 0) + c.kg_consumed;
   });
   let fabricValue = 0;
   const fabricSummary: { type: string; color: string; qty_in: number; consumed: number; available_kg: number; avg_cost: number; value: number }[] = [];
   fabric.forEach(f => {
-    const consumed  = fabricConsumed[`${f.material_type}|${f.color}`] || 0;
+    const consumed  = fabricConsumed[fabricIndex.resolve([f.material_type, f.color])] || 0;
     const available = Math.max(0, f.qty_in - consumed);
     const wac       = f.avg_cost_per_kg > 0 ? f.avg_cost_per_kg : f.cost_per_kg;  // WAC, fallback to entry cost
     const value     = available * wac;
@@ -222,15 +226,15 @@ async function gatherSnapshot() {
 
   // ── Fabric purchases ───────────────────────────────────────────────────────
   const totalFabricPurchasesCost = fabricPurchases.reduce((s, p) => s + p.total_cost, 0);
-  const purchasesByType: Record<string, { total_kg: number; total_cost: number }> = {};
+  const purchasesByType: Record<string, { label: string; total_kg: number; total_cost: number }> = {};
   fabricPurchases.forEach(p => {
-    const k = `${p.fabric_type}|${p.color || ''}`;
-    if (!purchasesByType[k]) purchasesByType[k] = { total_kg: 0, total_cost: 0 };
+    const k = fabricIndex.resolve([p.fabric_type, p.color || '']);
+    if (!purchasesByType[k]) purchasesByType[k] = { label: `${p.fabric_type}|${p.color || ''}`, total_kg: 0, total_cost: 0 };
     purchasesByType[k].total_kg   += p.quantity_kg;
     purchasesByType[k].total_cost += p.total_cost;
   });
-  const fabricPurchasesList = Object.entries(purchasesByType).map(([item, v]) => ({
-    item,
+  const fabricPurchasesList = Object.values(purchasesByType).map(v => ({
+    item:             v.label,
     total_kg:         Math.round(v.total_kg   * 100) / 100,
     total_cost:       Math.round(v.total_cost * 100) / 100,
     avg_price_per_kg: v.total_kg > 0 ? Math.round(v.total_cost / v.total_kg * 100) / 100 : 0,
@@ -239,7 +243,7 @@ async function gatherSnapshot() {
   // ── Ready stock (color-isolated, all items including zero-stock) ───────────
   const newProd: Record<string, number> = {};
   modelProds.forEach(m => {
-    const k = `${m.model_code}|${m.color || ''}`;
+    const k = modelIndex.resolve([m.model_code, m.color || '']);
     newProd[k] = (newProd[k] || 0) + m.qty_received;
   });
 
@@ -252,7 +256,7 @@ async function gatherSnapshot() {
         const qty   = s[`model${i}_qty`   as keyof typeof s] as number;
         const color = s[`model${i}_color` as keyof typeof s] as string;
         if (code && qty > 0) {
-          const k = `${code}|${color || ''}`;
+          const k = modelIndex.resolve([code, color || '']);
           totalSalesQty[k] = (totalSalesQty[k] || 0) + qty;
         }
       });
@@ -261,7 +265,7 @@ async function gatherSnapshot() {
   const returnQty: Record<string, number> = {};
   returns_.forEach(r => {
     if (r.model_code) {
-      const k = `${r.model_code}|${r.model_color || ''}`;
+      const k = modelIndex.resolve([r.model_code, r.model_color || '']);
       returnQty[k] = (returnQty[k] || 0) + r.model_qty;
     }
   });
@@ -269,7 +273,7 @@ async function gatherSnapshot() {
   let stockValue = 0;
   const stockSummary: { code: string; color: string; name: string; opening: number; produced: number; sold: number; returned: number; reserved: number; available: number; cost: number; value: number }[] = [];
   readyStock.forEach(rs => {
-    const k        = `${rs.model_code}|${rs.color || ''}`;
+    const k        = modelIndex.resolve([rs.model_code, rs.color || '']);
     const produced = newProd[k] || 0;
     const sold     = totalSalesQty[k] || 0;
     const returned = returnQty[k] || 0;
