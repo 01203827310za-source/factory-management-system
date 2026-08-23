@@ -482,6 +482,12 @@ export interface DashboardMetrics {
   cutting_value: number;
   wip_value: number;
   total_reservations: number;
+  fabric_items: { material_type: string; color: string; available_qty: number; unit_cost: number; total: number }[];
+  stock_items: { model_code: string; product_name: string; color: string; actual_qty: number; reserved_qty: number; available_qty: number; unit_cost: number; total: number }[];
+  accessories_items: { item_name: string; qty: number; unit_cost: number; total: number }[];
+  cutting_items: { cut_number: number; cut_description: string; material_type: string; color: string; total_pieces: number; used_pieces: number; remaining_pieces: number; cost_per_meter: number; total: number }[];
+  wip_items: { model_code: string; model_description: string; color: string; qty_received: number; cost_per_piece: number; total: number; status: string }[];
+  receivable_items: { source: 'sale' | 'client_account'; name: string; reference: string; invoice_total: number; paid: number; remaining: number }[];
 }
 // ===== FIXED ASSETS =====
 export const fixedAssetsApi = {

@@ -59,11 +59,16 @@ router.get('/', async (_req: Request, res: Response) => {
       fabricConsumed[key] = (fabricConsumed[key] || 0) + c.kg_consumed;
     });
     let fabricValue = 0;
+    const fabricItems: Array<{ material_type: string; color: string; available_qty: number; unit_cost: number; total: number }> = [];
     fabric.forEach(f => {
       const consumed = fabricConsumed[`${f.material_type}|${f.color}`] || 0;
       const available = Math.max(0, f.qty_in - consumed);
       const wac = f.avg_cost_per_kg > 0 ? f.avg_cost_per_kg : f.cost_per_kg;
-      fabricValue += available * wac;
+      const total = available * wac;
+      fabricValue += total;
+      if (total !== 0) {
+        fabricItems.push({ material_type: f.material_type, color: f.color, available_qty: available, unit_cost: wac, total });
+      }
     });
 
     // Cutting inventory value: SUM(remaining_pieces × cost_per_meter)
@@ -76,19 +81,33 @@ router.get('/', async (_req: Request, res: Response) => {
       usedByKey.set(key, (usedByKey.get(key) || 0) + p.model.qty_from_cutting);
     });
     let cuttingInventoryValue = 0;
+    const cuttingItems: Array<{ cut_number: number; cut_description: string; material_type: string; color: string; total_pieces: number; used_pieces: number; remaining_pieces: number; cost_per_meter: number; total: number }> = [];
     cuttingOrders.forEach(c => {
       const key = `${c.cut_number}|${c.color}`;
       const used = usedByKey.get(key) || 0;
       const remaining = Math.max(0, c.total_pieces - used);
-      cuttingInventoryValue += remaining * (c.cost_per_meter || 0);
+      const total = remaining * (c.cost_per_meter || 0);
+      cuttingInventoryValue += total;
+      if (total !== 0) {
+        cuttingItems.push({
+          cut_number: c.cut_number, cut_description: c.cut_description, material_type: c.material_type, color: c.color,
+          total_pieces: c.total_pieces, used_pieces: used, remaining_pieces: remaining, cost_per_meter: c.cost_per_meter || 0, total,
+        });
+      }
     });
 
     // WIP value: SUM(qty_received × cost_per_piece) WHERE status = 'قيد التشغيل'
     // Models that move to 'تام' are automatically excluded — no double-counting with stockValue.
     const modelProds = await prisma.modelProduction.findMany();
-    const wipValue = modelProds
-      .filter(mp => mp.status === 'قيد التشغيل')
-      .reduce((s, mp) => s + mp.qty_received * ((mp as any).cost_per_piece || 0), 0);
+    const wipRecords = modelProds.filter(mp => mp.status === 'قيد التشغيل');
+    const wipValue = wipRecords.reduce((s, mp) => s + mp.qty_received * ((mp as any).cost_per_piece || 0), 0);
+    const wipItems = wipRecords
+      .map(mp => ({
+        model_code: mp.model_code, model_description: mp.model_description, color: mp.color,
+        qty_received: mp.qty_received, cost_per_piece: (mp as any).cost_per_piece || 0,
+        total: mp.qty_received * ((mp as any).cost_per_piece || 0), status: mp.status,
+      }))
+      .filter(item => item.total !== 0);
 
     const newProd: Record<string, number> = {};
     modelProds.forEach(mp => {
@@ -115,6 +134,7 @@ router.get('/', async (_req: Request, res: Response) => {
     });
 
     let stockValue = 0;
+    const stockItems: Array<{ model_code: string; product_name: string; color: string; actual_qty: number; reserved_qty: number; available_qty: number; unit_cost: number; total: number }> = [];
     readyStock.forEach(rs => {
       const k = `${rs.model_code}|${rs.color || ''}`;
       const prod = newProd[k] || 0;
@@ -122,10 +142,42 @@ router.get('/', async (_req: Request, res: Response) => {
       const returned = returnQty[k] || 0;
       const actual = Math.max(0, rs.opening_balance + prod - sold + returned);
       const available = Math.max(0, actual - rs.reserved_quantity);
-      stockValue += available * rs.cost_per_piece;
+      const total = available * rs.cost_per_piece;
+      stockValue += total;
+      if (total !== 0) {
+        stockItems.push({
+          model_code: rs.model_code, product_name: rs.product_name, color: rs.color,
+          actual_qty: actual, reserved_qty: rs.reserved_quantity, available_qty: available,
+          unit_cost: rs.cost_per_piece, total,
+        });
+      }
     });
 
-    const accessoriesValue = accessories.reduce((s, a) => s + Math.max(0, a.qty_in - a.qty_consumed) * a.cost, 0);
+    const accessoriesItems: Array<{ item_name: string; qty: number; unit_cost: number; total: number }> = [];
+    const accessoriesValue = accessories.reduce((s, a) => {
+      const qty = Math.max(0, a.qty_in - a.qty_consumed);
+      const total = qty * a.cost;
+      if (total !== 0) accessoriesItems.push({ item_name: a.item_name, qty, unit_cost: a.cost, total });
+      return s + total;
+    }, 0);
+
+    const receivableItems: Array<{ source: 'sale' | 'client_account'; name: string; reference: string; invoice_total: number; paid: number; remaining: number }> = [];
+    sales
+      .filter(s => s.order_status === 'لم يتم الصرف' && s.remaining !== 0)
+      .forEach(s => {
+        receivableItems.push({
+          source: 'sale', name: s.client, reference: s.order_number,
+          invoice_total: s.invoice_value, paid: s.deposit_paid, remaining: s.remaining,
+        });
+      });
+    clientAccts
+      .filter(ca => ca.remaining !== 0)
+      .forEach(ca => {
+        receivableItems.push({
+          source: 'client_account', name: ca.client_name, reference: ca.model_name,
+          invoice_total: ca.total_amount, paid: ca.amount_paid, remaining: ca.remaining,
+        });
+      });
     // Total current assets = warehouses + remaining cutting pieces + WIP + receivables.
     // Deliberately excludes cash/net-profit/debts and Fixed Assets — those live in the Financial Center, not here.
     const totalCurrentAssets = fabricValue + stockValue + accessoriesValue + cuttingInventoryValue + wipValue + moneyOwedToUs;
@@ -159,6 +211,12 @@ router.get('/', async (_req: Request, res: Response) => {
       cutting_value: cuttingInventoryValue,
       wip_value: wipValue,
       total_reservations: totalReservations,
+      fabric_items: fabricItems,
+      stock_items: stockItems,
+      accessories_items: accessoriesItems,
+      cutting_items: cuttingItems,
+      wip_items: wipItems,
+      receivable_items: receivableItems,
     });
   } catch (err) {
     console.error(err);
