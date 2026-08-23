@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import StatCard from '../components/StatCard';
+import Modal from '../components/Modal';
 import { getDashboardMetrics } from '../data/store';
 import type { DashboardMetrics } from '../types';
 import {
   TrendingUp, TrendingDown, Wallet, AlertTriangle,
-  DollarSign, ShoppingCart, ArrowLeftRight, RefreshCw
+  DollarSign, ShoppingCart, ArrowLeftRight, RefreshCw, ChevronLeft
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
@@ -24,6 +25,7 @@ const EMPTY: DashboardMetrics = {
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<DashboardMetrics>(EMPTY);
   const [loading, setLoading] = useState(true);
+  const [breakdownOpen, setBreakdownOpen] = useState(false);
 
   const loadData = async () => {
     try {
@@ -39,6 +41,15 @@ export default function Dashboard() {
 
   const pieData = Object.entries(metrics.sales_by_marketer).map(([name, value]) => ({ name, value }));
   const barData = Object.entries(metrics.order_status_counts).map(([name, value]) => ({ name, value }));
+
+  const assetBreakdown = [
+    { label: 'القماش المتاح × التكلفة', val: metrics.fabric_value },
+    { label: 'الاستوك المتاح × التكلفة', val: metrics.stock_value },
+    { label: 'الإكسسوارات × التكلفة', val: metrics.accessories_value },
+    { label: 'قطع متبقية × تكلفة المتر', val: metrics.cutting_value },
+    { label: 'قيمة التشغيل (قيد التشغيل)', val: metrics.wip_value },
+    { label: 'الفلوس اللي لنا برا (حسابات العملاء)', val: metrics.money_owed_to_us },
+  ];
 
   return (
     <div className="space-y-6">
@@ -129,24 +140,20 @@ export default function Dashboard() {
         <div className="bg-gradient-to-l from-[#1e3a5f] to-[#2d5a8e] rounded-xl p-6 text-white shadow-lg">
           <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><Wallet size={22} /> إجمالي الأصول الحالية</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
-            {[
-              { label: 'القماش المتاح × التكلفة', val: metrics.fabric_value },
-              { label: 'الاستوك المتاح × التكلفة', val: metrics.stock_value },
-              { label: 'الإكسسوارات × التكلفة', val: metrics.accessories_value },
-              { label: 'قطع متبقية × تكلفة المتر', val: metrics.cutting_value },
-              { label: 'قيمة التشغيل (قيد التشغيل)', val: metrics.wip_value },
-              { label: 'الفلوس اللي لنا برا', val: metrics.money_owed_to_us },
-            ].map(item => (
+            {assetBreakdown.map(item => (
               <div key={item.label} className="bg-white/10 rounded-lg p-3">
                 <p className="text-xs text-white/70">{item.label}</p>
                 <p className="text-lg font-bold">{item.val.toLocaleString('ar-EG', { maximumFractionDigits: 2 })} ج.م</p>
               </div>
             ))}
           </div>
-          <div className="bg-white/10 rounded-lg p-4 flex items-center justify-between">
-            <div>
-              <p className="text-sm text-white/70">صافي الوضع المالي بعد الديون</p>
-              <p className="text-sm text-white/70">(صافي النقد الكلي − الديون)</p>
+          <button
+            onClick={() => setBreakdownOpen(true)}
+            className="w-full bg-white/10 hover:bg-white/20 transition rounded-lg p-4 flex items-center justify-between text-right"
+          >
+            <div className="flex items-center gap-2 text-white/70">
+              <ChevronLeft size={16} />
+              <span className="text-sm">عرض تفاصيل الحساب</span>
             </div>
             <div className="text-left">
               <p className="text-xs text-white/50">المجموع الكلي</p>
@@ -154,8 +161,26 @@ export default function Dashboard() {
                 {metrics.total_current_assets.toLocaleString('ar-EG')}
               </p>
             </div>
-          </div>
+          </button>
         </div>
+
+        <Modal isOpen={breakdownOpen} onClose={() => setBreakdownOpen(false)} title="تفاصيل إجمالي الأصول الحالية" size="md">
+          <div className="space-y-2">
+            {assetBreakdown.map(item => (
+              <div key={item.label} className="flex items-center justify-between px-4 py-3 bg-gray-50 rounded-lg">
+                <span className="text-sm text-gray-600">{item.label}</span>
+                <span className="text-sm font-bold text-gray-800">{item.val.toLocaleString('ar-EG', { maximumFractionDigits: 2 })} ج.م</span>
+              </div>
+            ))}
+            <div className="flex items-center justify-between px-4 py-3 bg-blue-50 border border-blue-100 rounded-lg mt-3">
+              <span className="text-sm font-semibold text-blue-800">المجموع الكلي</span>
+              <span className="text-lg font-bold text-blue-800">{metrics.total_current_assets.toLocaleString('ar-EG', { maximumFractionDigits: 2 })} ج.م</span>
+            </div>
+            <p className="text-xs text-gray-400 pt-2">
+              الأصول الثابتة غير مشمولة في هذا الإجمالي — راجع صفحة المركز المالي لعرضها بشكل منفصل.
+            </p>
+          </div>
+        </Modal>
 
         {/* Profit by Period */}
         <ProfitByPeriod />

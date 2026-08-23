@@ -126,7 +126,9 @@ router.get('/', async (_req: Request, res: Response) => {
     });
 
     const accessoriesValue = accessories.reduce((s, a) => s + Math.max(0, a.qty_in - a.qty_consumed) * a.cost, 0);
-    const totalCurrentAssets = fabricValue + stockValue + accessoriesValue + cuttingInventoryValue + wipValue + moneyOwedToUs + netProfit - remainingDebts;
+    // Total current assets = warehouses + remaining cutting pieces + WIP + receivables.
+    // Deliberately excludes cash/net-profit/debts and Fixed Assets — those live in the Financial Center, not here.
+    const totalCurrentAssets = fabricValue + stockValue + accessoriesValue + cuttingInventoryValue + wipValue + moneyOwedToUs;
 
     const _today = new Date().toISOString().slice(0, 10);
     setImmediate(() => {
