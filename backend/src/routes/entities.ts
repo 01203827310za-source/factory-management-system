@@ -13,10 +13,10 @@ import { getSeasonId, seasonWhere, withSeason } from '../services/seasonContext'
 
 // Remove PaymentLog entries when a debt/client-account paid amount is reduced.
 // Deletes from newest first; if a single log exceeds the remaining delta, trims it.
-async function purgePaymentLogs(type: string, descPrefix: string, amountToRemove: number) {
+async function purgePaymentLogs(type: string, descPrefix: string, amountToRemove: number, seasonId: number) {
   if (amountToRemove <= 0) return;
   const logs = await prisma.paymentLog.findMany({
-    where: { type, description: { startsWith: descPrefix } },
+    where: { type, season_id: seasonId, description: { startsWith: descPrefix } },
     orderBy: { id: 'desc' },
   });
   let toRemove = amountToRemove;
@@ -55,8 +55,10 @@ expensesRouter.post('/', requireManager, async (req, res) => {
 expensesRouter.put('/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
   try {
-    const before = await prisma.expenseRevenue.findUnique({ where: { id } });
-    const rec = await prisma.expenseRevenue.update({ where: { id }, data: req.body });
+    const seasonId = await getSeasonId(req);
+    const before = await prisma.expenseRevenue.findFirst({ where: { id, season_id: seasonId } });
+    if (!before) return res.status(404).json({ message: 'السجل غير موجود' });
+    const rec = await prisma.expenseRevenue.update({ where: { id }, data: { ...req.body, season_id: seasonId } });
     logAudit({ user: req.user, module: 'Expenses', action: 'UPDATE', record_id: id,
       before_data: before, after_data: rec, description: `تعديل ${rec.operation_type}: ${rec.statement}` });
     return res.json(rec);
@@ -65,7 +67,9 @@ expensesRouter.put('/:id', requireManager, async (req, res) => {
 expensesRouter.delete('/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
   try {
-    const before = await prisma.expenseRevenue.findUnique({ where: { id } });
+    const seasonId = await getSeasonId(req);
+    const before = await prisma.expenseRevenue.findFirst({ where: { id, season_id: seasonId } });
+    if (!before) return res.status(404).json({ message: 'السجل غير موجود' });
     await prisma.expenseRevenue.delete({ where: { id } });
     logAudit({ user: req.user, module: 'Expenses', action: 'DELETE', record_id: id,
       before_data: before, description: `حذف ${before?.operation_type}: ${before?.statement}` });
@@ -96,10 +100,12 @@ readyStockRouter.post('/', requireManager, async (req, res) => {
 readyStockRouter.put('/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
   try {
-    const before = await prisma.readyStock.findUnique({ where: { id } });
+    const seasonId = await getSeasonId(req);
+    const before = await prisma.readyStock.findFirst({ where: { id, season_id: seasonId } });
+    if (!before) return res.status(404).json({ message: 'الصنف غير موجود' });
     // Strip reserved_quantity — it is managed exclusively by the reservation workflow
     const { reserved_quantity: _ignored, ...safeData } = req.body;
-    const rec = await prisma.readyStock.update({ where: { id }, data: safeData });
+    const rec = await prisma.readyStock.update({ where: { id }, data: { ...safeData, season_id: seasonId } });
     logAudit({ user: req.user, module: 'ReadyStock', action: 'UPDATE', record_id: id,
       before_data: before, after_data: rec, description: `تعديل منتج جاهز: ${rec.model_code} - ${rec.product_name}` });
     return res.json(rec);
@@ -108,7 +114,9 @@ readyStockRouter.put('/:id', requireManager, async (req, res) => {
 readyStockRouter.delete('/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
   try {
-    const before = await prisma.readyStock.findUnique({ where: { id } });
+    const seasonId = await getSeasonId(req);
+    const before = await prisma.readyStock.findFirst({ where: { id, season_id: seasonId } });
+    if (!before) return res.status(404).json({ message: 'الصنف غير موجود' });
     await prisma.readyStock.delete({ where: { id } });
     logAudit({ user: req.user, module: 'ReadyStock', action: 'DELETE', record_id: id,
       before_data: before, description: `حذف منتج جاهز: ${before?.model_code} - ${before?.product_name}` });
@@ -139,8 +147,10 @@ fabricRouter.post('/', requireManager, async (req, res) => {
 fabricRouter.put('/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
   try {
-    const before = await prisma.fabricWarehouse.findUnique({ where: { id } });
-    const rec = await prisma.fabricWarehouse.update({ where: { id }, data: req.body });
+    const seasonId = await getSeasonId(req);
+    const before = await prisma.fabricWarehouse.findFirst({ where: { id, season_id: seasonId } });
+    if (!before) return res.status(404).json({ message: 'السجل غير موجود' });
+    const rec = await prisma.fabricWarehouse.update({ where: { id }, data: { ...req.body, season_id: seasonId } });
     logAudit({ user: req.user, module: 'FabricWarehouse', action: 'UPDATE', record_id: id,
       before_data: before, after_data: rec, description: `تعديل قماش: ${rec.material_type} - ${rec.color}` });
     return res.json(rec);
@@ -149,7 +159,9 @@ fabricRouter.put('/:id', requireManager, async (req, res) => {
 fabricRouter.delete('/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
   try {
-    const before = await prisma.fabricWarehouse.findUnique({ where: { id } });
+    const seasonId = await getSeasonId(req);
+    const before = await prisma.fabricWarehouse.findFirst({ where: { id, season_id: seasonId } });
+    if (!before) return res.status(404).json({ message: 'السجل غير موجود' });
     await prisma.fabricWarehouse.delete({ where: { id } });
     logAudit({ user: req.user, module: 'FabricWarehouse', action: 'DELETE', record_id: id,
       before_data: before, description: `حذف قماش: ${before?.material_type} - ${before?.color}` });
@@ -180,8 +192,10 @@ accessoriesRouter.post('/', requireManager, async (req, res) => {
 accessoriesRouter.put('/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
   try {
-    const before = await prisma.accessoriesWarehouse.findUnique({ where: { id } });
-    const rec = await prisma.accessoriesWarehouse.update({ where: { id }, data: req.body });
+    const seasonId = await getSeasonId(req);
+    const before = await prisma.accessoriesWarehouse.findFirst({ where: { id, season_id: seasonId } });
+    if (!before) return res.status(404).json({ message: 'السجل غير موجود' });
+    const rec = await prisma.accessoriesWarehouse.update({ where: { id }, data: { ...req.body, season_id: seasonId } });
     logAudit({ user: req.user, module: 'Accessories', action: 'UPDATE', record_id: id,
       before_data: before, after_data: rec, description: `تعديل إكسسوار: ${rec.item_name}` });
     return res.json(rec);
@@ -190,7 +204,9 @@ accessoriesRouter.put('/:id', requireManager, async (req, res) => {
 accessoriesRouter.delete('/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
   try {
-    const before = await prisma.accessoriesWarehouse.findUnique({ where: { id } });
+    const seasonId = await getSeasonId(req);
+    const before = await prisma.accessoriesWarehouse.findFirst({ where: { id, season_id: seasonId } });
+    if (!before) return res.status(404).json({ message: 'السجل غير موجود' });
     await prisma.accessoriesWarehouse.delete({ where: { id } });
     logAudit({ user: req.user, module: 'Accessories', action: 'DELETE', record_id: id,
       before_data: before, description: `حذف إكسسوار: ${before?.item_name}` });
@@ -260,8 +276,10 @@ cuttingRouter.post('/', requireManager, async (req, res) => {
 cuttingRouter.put('/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
   try {
-    const before = await prisma.cuttingOrder.findUnique({ where: { id } });
-    const rec = await prisma.cuttingOrder.update({ where: { id }, data: req.body });
+    const seasonId = await getSeasonId(req);
+    const before = await prisma.cuttingOrder.findFirst({ where: { id, season_id: seasonId } });
+    if (!before) return res.status(404).json({ message: 'السجل غير موجود' });
+    const rec = await prisma.cuttingOrder.update({ where: { id }, data: { ...req.body, season_id: seasonId } });
     logAudit({ user: req.user, module: 'Cutting', action: 'UPDATE', record_id: id,
       before_data: before, after_data: rec, description: `تعديل أمر قطع: ${rec.cut_description || rec.cut_number}` });
     return res.json(rec);
@@ -270,7 +288,9 @@ cuttingRouter.put('/:id', requireManager, async (req, res) => {
 cuttingRouter.delete('/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
   try {
-    const before = await prisma.cuttingOrder.findUnique({ where: { id } });
+    const seasonId = await getSeasonId(req);
+    const before = await prisma.cuttingOrder.findFirst({ where: { id, season_id: seasonId } });
+    if (!before) return res.status(404).json({ message: 'السجل غير موجود' });
     await prisma.cuttingOrder.delete({ where: { id } });
     logAudit({ user: req.user, module: 'Cutting', action: 'DELETE', record_id: id,
       before_data: before, description: `حذف أمر قطع: ${before?.cut_description || before?.cut_number}` });
@@ -561,7 +581,7 @@ debtsRouter.put('/:id', requireManager, async (req: Request, res: Response) => {
     const result = await prisma.debt.update({ where: { id }, data, include: DEBT_INCLUDE });
     const delta = newPaid - cur.amount_paid;
     if (delta < 0) {
-      await purgePaymentLogs('debt_payment', `سداد دين: ${cur.name}`, -delta);
+      await purgePaymentLogs('debt_payment', `سداد دين: ${cur.name}`, -delta, seasonId);
     }
     logAudit({ user: req.user, module: 'Debts', action: 'UPDATE', record_id: id,
       before_data: cur, after_data: result, description: `تعديل دين: ${result.name}` });
@@ -708,7 +728,7 @@ clientAccountsRouter.put('/:id', requireManager, async (req: Request, res: Respo
     const result = await prisma.clientAccount.update({ where: { id }, data, include: ACCT_INCLUDE });
     const delta = newPaid - cur.amount_paid;
     if (delta < 0) {
-      await purgePaymentLogs('client_payment', `دفعة عميل: ${cur.client_name}`, -delta);
+      await purgePaymentLogs('client_payment', `دفعة عميل: ${cur.client_name}`, -delta, seasonId);
     }
     logAudit({ user: req.user, module: 'ClientAccounts', action: 'UPDATE', record_id: id,
       before_data: cur, after_data: result, description: `تعديل حساب عميل: ${result.client_name}` });
@@ -864,8 +884,10 @@ returnsRouter.post('/', requireManager, async (req, res) => {
 returnsRouter.put('/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
   try {
-    const before = await prisma.returnItem.findUnique({ where: { id } });
-    const rec = await prisma.returnItem.update({ where: { id }, data: req.body });
+    const seasonId = await getSeasonId(req);
+    const before = await prisma.returnItem.findFirst({ where: { id, season_id: seasonId } });
+    if (!before) return res.status(404).json({ message: 'السجل غير موجود' });
+    const rec = await prisma.returnItem.update({ where: { id }, data: { ...req.body, season_id: seasonId } });
     logAudit({ user: req.user, module: 'Returns', action: 'UPDATE', record_id: id,
       before_data: before, after_data: rec, description: `تعديل مرتجع: ${rec.client_name} - ${rec.model_code}` });
     return res.json(rec);
@@ -874,7 +896,9 @@ returnsRouter.put('/:id', requireManager, async (req, res) => {
 returnsRouter.delete('/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
   try {
-    const before = await prisma.returnItem.findUnique({ where: { id } });
+    const seasonId = await getSeasonId(req);
+    const before = await prisma.returnItem.findFirst({ where: { id, season_id: seasonId } });
+    if (!before) return res.status(404).json({ message: 'السجل غير موجود' });
     await prisma.returnItem.delete({ where: { id } });
     logAudit({ user: req.user, module: 'Returns', action: 'DELETE', record_id: id,
       before_data: before, description: `حذف مرتجع: ${before?.client_name} - ${before?.model_code}` });
@@ -905,7 +929,9 @@ paymentLogRouter.post('/', requireManager, async (req, res) => {
 paymentLogRouter.delete('/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
   try {
-    const before = await prisma.paymentLog.findUnique({ where: { id } });
+    const seasonId = await getSeasonId(req);
+    const before = await prisma.paymentLog.findFirst({ where: { id, season_id: seasonId } });
+    if (!before) return res.status(404).json({ message: 'السجل غير موجود' });
     await prisma.paymentLog.delete({ where: { id } });
     logAudit({ user: req.user, module: 'PaymentLogs', action: 'DELETE', record_id: id,
       before_data: before, description: `حذف سجل دفع: ${before?.description} - ${before?.amount}` });

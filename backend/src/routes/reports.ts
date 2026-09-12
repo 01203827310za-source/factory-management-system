@@ -3,25 +3,26 @@ import prisma from '../lib/prisma';
 import { authenticate } from '../middleware/auth';
 import { computeFinancialSummary } from '../services/financialMetrics';
 import { FuzzyKeyIndex } from '../utils/textMatch';
+import { getSeasonId, seasonWhere } from '../services/seasonContext';
 
 const router = Router();
 router.use(authenticate);
 
 type AllData = Awaited<ReturnType<typeof fetchAll>>;
 
-async function fetchAll() {
+async function fetchAll(seasonId: number) {
   const [sales, expenses, debts, clientAccts, returns_, paymentLogs, fabric, readyStock, accessories, modelProds, cuttingOrders] = await Promise.all([
-    prisma.sale.findMany({ orderBy: { created_at: 'asc' } }),
-    prisma.expenseRevenue.findMany({ orderBy: { date: 'asc' } }),
-    prisma.debt.findMany({ orderBy: { date: 'asc' } }),
-    prisma.clientAccount.findMany({ orderBy: { date: 'asc' } }),
-    prisma.returnItem.findMany({ orderBy: { date: 'asc' } }),
-    prisma.paymentLog.findMany({ orderBy: { date: 'asc' } }),
-    prisma.fabricWarehouse.findMany(),
-    prisma.readyStock.findMany(),
-    prisma.accessoriesWarehouse.findMany(),
-    prisma.modelProduction.findMany({ orderBy: { date: 'asc' } }),
-    prisma.cuttingOrder.findMany({ orderBy: { date: 'asc' } }),
+    prisma.sale.findMany({ where: seasonWhere(seasonId), orderBy: { created_at: 'asc' } }),
+    prisma.expenseRevenue.findMany({ where: seasonWhere(seasonId), orderBy: { date: 'asc' } }),
+    prisma.debt.findMany({ where: seasonWhere(seasonId), orderBy: { date: 'asc' } }),
+    prisma.clientAccount.findMany({ where: seasonWhere(seasonId), orderBy: { date: 'asc' } }),
+    prisma.returnItem.findMany({ where: seasonWhere(seasonId), orderBy: { date: 'asc' } }),
+    prisma.paymentLog.findMany({ where: seasonWhere(seasonId), orderBy: { date: 'asc' } }),
+    prisma.fabricWarehouse.findMany({ where: seasonWhere(seasonId) }),
+    prisma.readyStock.findMany({ where: seasonWhere(seasonId) }),
+    prisma.accessoriesWarehouse.findMany({ where: seasonWhere(seasonId) }),
+    prisma.modelProduction.findMany({ where: seasonWhere(seasonId), orderBy: { date: 'asc' } }),
+    prisma.cuttingOrder.findMany({ where: seasonWhere(seasonId), orderBy: { date: 'asc' } }),
   ]);
   return { sales, expenses, debts, clientAccts, returns_, paymentLogs, fabric, readyStock, accessories, modelProds, cuttingOrders };
 }
@@ -102,7 +103,8 @@ router.get('/', async (req: Request, res: Response) => {
     const fromDate = (req.query.from_date as string) || today;
     const toDate   = (req.query.to_date   as string) || today;
 
-    const db = await fetchAll();
+    const seasonId = await getSeasonId(req);
+    const db = await fetchAll(seasonId);
     const { sales, expenses, debts, clientAccts, returns_, paymentLogs, fabric, readyStock, accessories, modelProds, cuttingOrders } = db;
 
     const inRange     = (d: string) => d >= fromDate && d <= toDate;
@@ -279,15 +281,16 @@ type CashTx = {
 
 router.get('/employee-movements', async (req: Request, res: Response) => {
   try {
+    const seasonId = await getSeasonId(req);
     const today    = new Date().toISOString().slice(0, 10);
     const fromDate = (req.query.from_date as string) || today;
     const toDate   = (req.query.to_date   as string) || today;
 
     const [sales, expenses, paymentLogs, returns_] = await Promise.all([
-      prisma.sale.findMany({ orderBy: { created_at: 'asc' } }),
-      prisma.expenseRevenue.findMany({ orderBy: { date: 'asc' } }),
-      prisma.paymentLog.findMany({ orderBy: { date: 'asc' } }),
-      prisma.returnItem.findMany({ orderBy: { date: 'asc' } }),
+      prisma.sale.findMany({ where: seasonWhere(seasonId), orderBy: { created_at: 'asc' } }),
+      prisma.expenseRevenue.findMany({ where: seasonWhere(seasonId), orderBy: { date: 'asc' } }),
+      prisma.paymentLog.findMany({ where: seasonWhere(seasonId), orderBy: { date: 'asc' } }),
+      prisma.returnItem.findMany({ where: seasonWhere(seasonId), orderBy: { date: 'asc' } }),
     ]);
 
     const inRange = (d: string) => d >= fromDate && d <= toDate;

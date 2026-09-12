@@ -41,6 +41,12 @@ async function main() {
   await syncDefaultRbac();
   console.log('✅ Roles and permissions synced');
 
+  const initialSeason = await prisma.season.upsert({
+    where: { name_year: { name: 'Summer 2026', year: 2026 } },
+    update: { status: 'active', is_active: true },
+    create: { name: 'Summer 2026', year: 2026, type: 'Summer', status: 'active', is_active: true },
+  });
+
   // ===== MARKETERS =====
   const marketers = ['أحمد', 'محمد', 'خالد', 'عمر', 'يوسف'];
   for (const name of marketers) {
@@ -58,7 +64,7 @@ async function main() {
         { model_code: 'M002', product_name: 'قميص كاجوال', color: 'أزرق', opening_balance: 25, cost_per_piece: 85,  location: 'المخزن الرئيسي' },
         { model_code: 'M003', product_name: 'بلكشت صوف',   color: 'رمادي',opening_balance: 40, cost_per_piece: 120, location: 'المخزن الرئيسي' },
         { model_code: 'M004', product_name: 'جاكيت جينز',  color: 'أزرق', opening_balance: 15, cost_per_piece: 200, location: 'المخزن الرئيسي' },
-      ],
+      ].map((item) => ({ ...item, season_id: initialSeason.id })),
     });
     console.log('✅ Ready stock seeded');
   }
@@ -72,7 +78,7 @@ async function main() {
         { date: '2025-01-20', material_type: 'قطن',  color: 'أسود', qty_in: 300, cost_per_kg: 25 },
         { date: '2025-02-01', material_type: 'صوف',  color: 'رمادي',qty_in: 200, cost_per_kg: 60 },
         { date: '2025-02-10', material_type: 'جينز', color: 'أزرق', qty_in: 350, cost_per_kg: 35 },
-      ],
+      ].map((item) => ({ ...item, season_id: initialSeason.id })),
     });
     console.log('✅ Fabric warehouse seeded');
   }
@@ -85,7 +91,7 @@ async function main() {
         { date: '2025-01-10', item_name: 'أزرار معدنية', qty_in: 1000, qty_consumed: 200, cost: 2 },
         { date: '2025-01-10', item_name: 'خيوط',         qty_in: 500,  qty_consumed: 100, cost: 15 },
         { date: '2025-02-01', item_name: 'سوستة',        qty_in: 300,  qty_consumed: 50,  cost: 8 },
-      ],
+      ].map((item) => ({ ...item, season_id: initialSeason.id })),
     });
     console.log('✅ Accessories warehouse seeded');
   }
@@ -99,7 +105,7 @@ async function main() {
         { date: '2025-01-15', operation_type: 'مصروف تشغيل',   statement: 'إيجار المصنع',        amount_in: 0,      amount_out: 6000 },
         { date: '2025-02-01', operation_type: 'مصروف تشغيل',   statement: 'رواتب العمالة',       amount_in: 0,      amount_out: 10000 },
         { date: '2025-02-15', operation_type: 'ايراد مبيعات',  statement: 'مبيعات فبراير',       amount_in: 16000,  amount_out: 0 },
-      ],
+      ].map((item) => ({ ...item, season_id: initialSeason.id })),
     });
     console.log('✅ Expenses seeded');
   }
@@ -132,7 +138,7 @@ async function main() {
           order_status: 'حساب عميل', delivery_method: 'البريد',
           mobile: '01234567890', warehouse: 'المخزن الرئيسي', shipping_collected: 0,
         },
-      ],
+      ].map((item) => ({ ...item, season_id: initialSeason.id })),
     });
     console.log('✅ Sales seeded');
   }
@@ -144,7 +150,7 @@ async function main() {
       data: [
         { date: '2025-01-20', cut_number: 1001, cut_description: 'قص تيشيرت قطن', material_type: 'قطن', layers_count: 20, spread_length_m: 100, total_pieces: 400, color: 'أبيض', kg_consumed: 150, notes: 'جودة عالية' },
         { date: '2025-02-05', cut_number: 1002, cut_description: 'قص بلكشت صوف',  material_type: 'صوف', layers_count: 15, spread_length_m: 80,  total_pieces: 240, color: 'رمادي',kg_consumed: 80,  notes: '' },
-      ],
+      ].map((item) => ({ ...item, season_id: initialSeason.id })),
     });
     console.log('✅ Cutting orders seeded');
   }
@@ -156,7 +162,7 @@ async function main() {
       data: [
         { date: '2025-01-25', cut_number: 1001, model_code: 'M001', qty_from_cutting: 400, model_description: 'تيشيرت قطن', color: 'أبيض', sizes: 'S,M,L,XL', status: 'تام', wastage: 10, qty_received: 390, warehouse_entry_date: '2025-01-28' },
         { date: '2025-02-10', cut_number: 1002, model_code: 'M003', qty_from_cutting: 240, model_description: 'بلكشت صوف',  color: 'رمادي',sizes: 'M,L,XL',   status: 'تام', wastage: 5,  qty_received: 235, warehouse_entry_date: '2025-02-15' },
-      ],
+      ].map((item) => ({ ...item, season_id: initialSeason.id })),
     });
     console.log('✅ Model production seeded');
   }
@@ -168,7 +174,7 @@ async function main() {
       data: [
         { date: '2025-01-10', name: 'مورد القماش', total_amount: 10000, amount_paid: 4000, remaining: 6000 },
         { date: '2025-02-01', name: 'كهرباء',       total_amount: 2500,  amount_paid: 2500, remaining: 0 },
-      ],
+      ].map((item) => ({ ...item, season_id: initialSeason.id })),
     });
     console.log('✅ Debts seeded');
   }
@@ -177,7 +183,7 @@ async function main() {
   const clientCount = await prisma.clientAccount.count();
   if (clientCount === 0) {
     await prisma.clientAccount.create({
-      data: { date: '2025-02-05', client_name: 'عبد الرحمن', model_name: 'بلكشت صوف', quantity: 8, total_amount: 960, amount_paid: 500, remaining: 460, notes: 'دفعة أولى' },
+      data: { date: '2025-02-05', client_name: 'عبد الرحمن', model_name: 'بلكشت صوف', quantity: 8, total_amount: 960, amount_paid: 500, remaining: 460, notes: 'دفعة أولى', season_id: initialSeason.id },
     });
     console.log('✅ Client accounts seeded');
   }

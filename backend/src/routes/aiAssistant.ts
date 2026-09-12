@@ -14,6 +14,7 @@ import prisma from '../lib/prisma';
 import { authenticate } from '../middleware/auth';
 import { calcEmployeePayroll, round2 } from '../services/payrollCalc';
 import { FuzzyKeyIndex } from '../utils/textMatch';
+import { getSeasonId, seasonWhere } from '../services/seasonContext';
 
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
 
@@ -124,7 +125,7 @@ function toArabicError(err: unknown): { status: number; message: string } {
 
 // ─── Gather factory snapshot (READ-ONLY) ─────────────────────────────────────
 // All calls are findMany — no writes anywhere in this function
-async function gatherSnapshot() {
+async function gatherSnapshot(seasonId: number) {
   const [
     sales, expenses, debts, clientAccts, returns_,
     paymentLogs, fabric, readyStock, accessories,
@@ -132,22 +133,22 @@ async function gatherSnapshot() {
     employees, attendance, adjustments,
     fixedAssets, fabricPurchases,
   ] = await Promise.all([
-    prisma.sale.findMany(),
-    prisma.expenseRevenue.findMany(),
-    prisma.debt.findMany(),
-    prisma.clientAccount.findMany(),
-    prisma.returnItem.findMany(),
-    prisma.paymentLog.findMany(),
-    prisma.fabricWarehouse.findMany(),
-    prisma.readyStock.findMany(),
-    prisma.accessoriesWarehouse.findMany(),
-    prisma.cuttingOrder.findMany(),
-    prisma.modelProduction.findMany(),
+    prisma.sale.findMany({ where: seasonWhere(seasonId) }),
+    prisma.expenseRevenue.findMany({ where: seasonWhere(seasonId) }),
+    prisma.debt.findMany({ where: seasonWhere(seasonId) }),
+    prisma.clientAccount.findMany({ where: seasonWhere(seasonId) }),
+    prisma.returnItem.findMany({ where: seasonWhere(seasonId) }),
+    prisma.paymentLog.findMany({ where: seasonWhere(seasonId) }),
+    prisma.fabricWarehouse.findMany({ where: seasonWhere(seasonId) }),
+    prisma.readyStock.findMany({ where: seasonWhere(seasonId) }),
+    prisma.accessoriesWarehouse.findMany({ where: seasonWhere(seasonId) }),
+    prisma.cuttingOrder.findMany({ where: seasonWhere(seasonId) }),
+    prisma.modelProduction.findMany({ where: seasonWhere(seasonId) }),
     prisma.employee.findMany(),
     prisma.attendance.findMany(),
     prisma.salaryAdjustment.findMany(),
     prisma.fixedAsset.findMany(),
-    prisma.fabricPurchase.findMany(),
+    prisma.fabricPurchase.findMany({ where: seasonWhere(seasonId) }),
   ]);
 
   // ── Sales metrics ──────────────────────────────────────────────────────────
@@ -495,7 +496,8 @@ router.post('/', async (req: Request, res: Response) => {
     const groqClient = getGroq();
 
     // Step 2: gather read-only data snapshot
-    const snapshot = await withTimeout(gatherSnapshot(), TIMEOUT_MS);
+    const seasonId = await getSeasonId(req);
+    const snapshot = await withTimeout(gatherSnapshot(seasonId), TIMEOUT_MS);
 
     // Step 3: build minimal context
     const topics    = isAnalyze ? ['all'] : classifyQuestion(question);

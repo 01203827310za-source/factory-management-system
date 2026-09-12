@@ -1,7 +1,9 @@
 import { Router, Request, Response } from 'express';
+import { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma';
 import { authenticate, requireManager } from '../middleware/auth';
 import { logAudit } from '../services/auditHelper';
+import { getSeasonId, seasonWhere } from '../services/seasonContext';
 
 const router = Router();
 router.use(authenticate);
@@ -21,18 +23,18 @@ function extractModels(data: Record<string, unknown>): ModelSlot[] {
 }
 
 // Find the ReadyStock row that best matches (code+color), falling back to code-only
-async function findStockRow(code: string, color: string) {
+async function findStockRow(code: string, color: string, seasonId: number) {
   if (color) {
-    const exact = await prisma.readyStock.findFirst({ where: { model_code: code, color } });
+    const exact = await prisma.readyStock.findFirst({ where: { ...seasonWhere(seasonId), model_code: code, color } });
     if (exact) return exact;
   }
-  return prisma.readyStock.findFirst({ where: { model_code: code } });
+  return prisma.readyStock.findFirst({ where: { ...seasonWhere(seasonId), model_code: code } });
 }
 
 // Adjust reserved_quantity on all model slots of a sale by `delta` (+qty or -qty)
-async function adjustReserved(models: ModelSlot[], delta: 1 | -1) {
+async function adjustReserved(models: ModelSlot[], delta: 1 | -1, seasonId: number) {
   for (const m of models) {
-    const row = await findStockRow(m.code, m.color);
+    const row = await findStockRow(m.code, m.color, seasonId);
     if (!row) continue;
     const next = Math.max(0, row.reserved_quantity + delta * m.qty);
     await prisma.readyStock.update({
@@ -45,9 +47,10 @@ async function adjustReserved(models: ModelSlot[], delta: 1 | -1) {
 // ─── routes ─────────────────────────────────────────────────────────────────
 
 // GET /api/sales
-router.get('/', async (_req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
-    return res.json(await prisma.sale.findMany({ orderBy: { id: 'asc' } }));
+    const seasonId = await getSeasonId(req);
+    return res.json(await prisma.sale.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'asc' } }));
   } catch {
     return res.status(500).json({ message: 'خطأ في جلب المبيعات' });
   }
@@ -56,18 +59,21 @@ router.get('/', async (_req: Request, res: Response) => {
 // POST /api/sales
 router.post('/', requireManager, async (req: Request, res: Response) => {
   try {
+    const seasonId = await getSeasonId(req);
     const data = req.body as Record<string, unknown>;
     const isReservation = data.order_status === 'تم الحجز';
+    const { season: _season, id: _id, season_id: _seasonId, ...saleData } = data as Omit<Prisma.SaleUncheckedCreateInput, 'season_id' | 'remaining'> & Record<string, unknown>;
 
     const sale = await prisma.sale.create({
       data: {
-        ...(data as Parameters<typeof prisma.sale.create>[0]['data']),
+        ...saleData,
+        season_id: seasonId,
         remaining: (Number(data.invoice_value) || 0) - (Number(data.deposit_paid) || 0),
       },
     });
 
     if (isReservation) {
-      await adjustReserved(extractModels(data), +1);
+      await adjustReserved(extractModels(data), +1, seasonId);
     }
 
     logAudit({ user: req.user, module: 'Sales', action: 'CREATE', record_id: sale.id,
@@ -82,10 +88,11 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
 // PUT /api/sales/:id
 router.put('/:id', requireManager, async (req: Request, res: Response) => {
   try {
+    const seasonId = await getSeasonId(req);
     const id = parseInt(req.params.id as string);
     const data = req.body as Record<string, unknown>;
 
-    const oldSale = await prisma.sale.findUnique({ where: { id } });
+    const oldSale = await prisma.sale.findFirst({ where: { id, season_id: seasonId } });
     if (!oldSale) return res.status(404).json({ message: 'الطلب غير موجود' });
 
     const wasReservation = oldSale.order_status === 'تم الحجز';
@@ -100,14 +107,14 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
 
     // Reverse old reservation quantities before saving
     if (wasReservation) {
-      await adjustReserved(extractModels(oldSale as unknown as Record<string, unknown>), -1);
+      await adjustReserved(extractModels(oldSale as unknown as Record<string, unknown>), -1, seasonId);
     }
 
-    const sale = await prisma.sale.update({ where: { id }, data });
+    const sale = await prisma.sale.update({ where: { id }, data: { ...data, season_id: seasonId } });
 
     // Apply new reservation quantities after saving
     if (willBeReservation) {
-      await adjustReserved(extractModels(data), +1);
+      await adjustReserved(extractModels(data), +1, seasonId);
     }
 
     logAudit({ user: req.user, module: 'Sales', action: 'UPDATE', record_id: id,
@@ -121,11 +128,12 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
 // DELETE /api/sales/:id
 router.delete('/:id', requireManager, async (req: Request, res: Response) => {
   try {
+    const seasonId = await getSeasonId(req);
     const id = parseInt(req.params.id as string);
     // If deleting a reservation, release reserved stock first
-    const sale = await prisma.sale.findUnique({ where: { id } });
+    const sale = await prisma.sale.findFirst({ where: { id, season_id: seasonId } });
     if (sale?.order_status === 'تم الحجز') {
-      await adjustReserved(extractModels(sale as unknown as Record<string, unknown>), -1);
+      await adjustReserved(extractModels(sale as unknown as Record<string, unknown>), -1, seasonId);
     }
     await prisma.sale.delete({ where: { id } });
     logAudit({ user: req.user, module: 'Sales', action: 'DELETE', record_id: id,
@@ -139,15 +147,16 @@ router.delete('/:id', requireManager, async (req: Request, res: Response) => {
 // POST /api/sales/:id/convert-reservation — تم الحجز → تم الصرف
 router.post('/:id/convert-reservation', requireManager, async (req: Request, res: Response) => {
   try {
+    const seasonId = await getSeasonId(req);
     const id = parseInt(req.params.id as string);
-    const sale = await prisma.sale.findUnique({ where: { id } });
+    const sale = await prisma.sale.findFirst({ where: { id, season_id: seasonId } });
     if (!sale) return res.status(404).json({ message: 'الطلب غير موجود' });
     if (sale.order_status !== 'تم الحجز') {
       return res.status(400).json({ message: 'هذا الطلب ليس حجزاً' });
     }
 
     // Release reserved qty; actual_balance automatically drops once status → 'تم الصرف'
-    await adjustReserved(extractModels(sale as unknown as Record<string, unknown>), -1);
+    await adjustReserved(extractModels(sale as unknown as Record<string, unknown>), -1, seasonId);
 
     const updated = await prisma.sale.update({
       where: { id },
@@ -165,15 +174,16 @@ router.post('/:id/convert-reservation', requireManager, async (req: Request, res
 // POST /api/sales/:id/cancel-reservation — تم الحجز → تم الإلغاء
 router.post('/:id/cancel-reservation', requireManager, async (req: Request, res: Response) => {
   try {
+    const seasonId = await getSeasonId(req);
     const id = parseInt(req.params.id as string);
-    const sale = await prisma.sale.findUnique({ where: { id } });
+    const sale = await prisma.sale.findFirst({ where: { id, season_id: seasonId } });
     if (!sale) return res.status(404).json({ message: 'الطلب غير موجود' });
     if (sale.order_status !== 'تم الحجز') {
       return res.status(400).json({ message: 'هذا الطلب ليس حجزاً' });
     }
 
     // Release reserved qty; actual_balance is unchanged (cancelled sales excluded from totalSales)
-    await adjustReserved(extractModels(sale as unknown as Record<string, unknown>), -1);
+    await adjustReserved(extractModels(sale as unknown as Record<string, unknown>), -1, seasonId);
 
     const updated = await prisma.sale.update({
       where: { id },

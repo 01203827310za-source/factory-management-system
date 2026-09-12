@@ -7,20 +7,22 @@ const express_1 = require("express");
 const prisma_1 = __importDefault(require("../lib/prisma"));
 const auth_1 = require("../middleware/auth");
 const textMatch_1 = require("../utils/textMatch");
+const seasonContext_1 = require("../services/seasonContext");
 const router = (0, express_1.Router)();
 router.use(auth_1.authenticate);
-router.get('/', async (_req, res) => {
+router.get('/', async (req, res) => {
     try {
+        const seasonId = await (0, seasonContext_1.getSeasonId)(req);
         const [sales, expenses, debts, clientAccts, returns_, paymentLogs, fabric, readyStock, accessories] = await Promise.all([
-            prisma_1.default.sale.findMany(),
-            prisma_1.default.expenseRevenue.findMany(),
-            prisma_1.default.debt.findMany(),
-            prisma_1.default.clientAccount.findMany(),
-            prisma_1.default.returnItem.findMany(),
-            prisma_1.default.paymentLog.findMany(),
-            prisma_1.default.fabricWarehouse.findMany(),
-            prisma_1.default.readyStock.findMany(),
-            prisma_1.default.accessoriesWarehouse.findMany(),
+            prisma_1.default.sale.findMany({ where: (0, seasonContext_1.seasonWhere)(seasonId) }),
+            prisma_1.default.expenseRevenue.findMany({ where: (0, seasonContext_1.seasonWhere)(seasonId) }),
+            prisma_1.default.debt.findMany({ where: (0, seasonContext_1.seasonWhere)(seasonId) }),
+            prisma_1.default.clientAccount.findMany({ where: (0, seasonContext_1.seasonWhere)(seasonId) }),
+            prisma_1.default.returnItem.findMany({ where: (0, seasonContext_1.seasonWhere)(seasonId) }),
+            prisma_1.default.paymentLog.findMany({ where: (0, seasonContext_1.seasonWhere)(seasonId) }),
+            prisma_1.default.fabricWarehouse.findMany({ where: (0, seasonContext_1.seasonWhere)(seasonId) }),
+            prisma_1.default.readyStock.findMany({ where: (0, seasonContext_1.seasonWhere)(seasonId) }),
+            prisma_1.default.accessoriesWarehouse.findMany({ where: (0, seasonContext_1.seasonWhere)(seasonId) }),
         ]);
         const totalSales = sales.reduce((s, sale) => s + sale.invoice_value, 0);
         const totalReservations = sales
@@ -48,7 +50,7 @@ router.get('/', async (_req, res) => {
         sales.forEach(s => { salesByMarketer[s.marketer] = (salesByMarketer[s.marketer] || 0) + s.invoice_value; });
         const orderStatusCounts = {};
         sales.forEach(s => { orderStatusCounts[s.order_status] = (orderStatusCounts[s.order_status] || 0) + 1; });
-        const cuttingOrders = await prisma_1.default.cuttingOrder.findMany();
+        const cuttingOrders = await prisma_1.default.cuttingOrder.findMany({ where: (0, seasonContext_1.seasonWhere)(seasonId) });
         const fabricIndex = new textMatch_1.FuzzyKeyIndex(['color', 'color']); // [material_type, color]
         const fabricConsumed = {};
         cuttingOrders.forEach(c => {
@@ -69,6 +71,7 @@ router.get('/', async (_req, res) => {
         });
         // Cutting inventory value: SUM(remaining_pieces × cost_per_meter)
         const allModelParts = await prisma_1.default.modelPart.findMany({
+            where: (0, seasonContext_1.seasonWhere)(seasonId),
             include: { model: { select: { qty_from_cutting: true } } },
         });
         const cutIndex = new textMatch_1.FuzzyKeyIndex(['exact', 'color']); // [cut_number, color]
@@ -94,7 +97,7 @@ router.get('/', async (_req, res) => {
         });
         // WIP value: SUM(qty_received × cost_per_piece) WHERE status = 'قيد التشغيل'
         // Models that move to 'تام' are automatically excluded — no double-counting with stockValue.
-        const modelProds = await prisma_1.default.modelProduction.findMany();
+        const modelProds = await prisma_1.default.modelProduction.findMany({ where: (0, seasonContext_1.seasonWhere)(seasonId) });
         const wipRecords = modelProds.filter(mp => mp.status === 'قيد التشغيل');
         const wipValue = wipRecords.reduce((s, mp) => s + mp.qty_received * (mp.cost_per_piece || 0), 0);
         const wipItems = wipRecords
@@ -184,9 +187,9 @@ router.get('/', async (_req, res) => {
         const _today = new Date().toISOString().slice(0, 10);
         setImmediate(() => {
             prisma_1.default.financialSnapshot.upsert({
-                where: { snapshot_date: _today },
+                where: { season_id_snapshot_date: { season_id: seasonId, snapshot_date: _today } },
                 update: { total_current_assets: totalCurrentAssets, cash: cashAvailable, fabric_assets: fabricValue, ready_stock_assets: stockValue, accessories_assets: accessoriesValue, receivables: moneyOwedToUs, debts: remainingDebts },
-                create: { snapshot_date: _today, total_current_assets: totalCurrentAssets, cash: cashAvailable, fabric_assets: fabricValue, ready_stock_assets: stockValue, accessories_assets: accessoriesValue, receivables: moneyOwedToUs, debts: remainingDebts },
+                create: { season_id: seasonId, snapshot_date: _today, total_current_assets: totalCurrentAssets, cash: cashAvailable, fabric_assets: fabricValue, ready_stock_assets: stockValue, accessories_assets: accessoriesValue, receivables: moneyOwedToUs, debts: remainingDebts },
             }).catch((e) => console.error('Auto-snapshot failed:', e.message));
         });
         return res.json({
