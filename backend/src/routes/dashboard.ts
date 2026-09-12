@@ -2,22 +2,24 @@ import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate } from '../middleware/auth';
 import { FuzzyKeyIndex } from '../utils/textMatch';
+import { getSeasonId, seasonWhere } from '../services/seasonContext';
 
 const router = Router();
 router.use(authenticate);
 
-router.get('/', async (_req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
+    const seasonId = await getSeasonId(req);
     const [sales, expenses, debts, clientAccts, returns_, paymentLogs, fabric, readyStock, accessories] = await Promise.all([
-      prisma.sale.findMany(),
-      prisma.expenseRevenue.findMany(),
-      prisma.debt.findMany(),
-      prisma.clientAccount.findMany(),
-      prisma.returnItem.findMany(),
-      prisma.paymentLog.findMany(),
-      prisma.fabricWarehouse.findMany(),
-      prisma.readyStock.findMany(),
-      prisma.accessoriesWarehouse.findMany(),
+      prisma.sale.findMany({ where: seasonWhere(seasonId) }),
+      prisma.expenseRevenue.findMany({ where: seasonWhere(seasonId) }),
+      prisma.debt.findMany({ where: seasonWhere(seasonId) }),
+      prisma.clientAccount.findMany({ where: seasonWhere(seasonId) }),
+      prisma.returnItem.findMany({ where: seasonWhere(seasonId) }),
+      prisma.paymentLog.findMany({ where: seasonWhere(seasonId) }),
+      prisma.fabricWarehouse.findMany({ where: seasonWhere(seasonId) }),
+      prisma.readyStock.findMany({ where: seasonWhere(seasonId) }),
+      prisma.accessoriesWarehouse.findMany({ where: seasonWhere(seasonId) }),
     ]);
 
     const totalSales = sales.reduce((s, sale) => s + sale.invoice_value, 0);
@@ -53,7 +55,7 @@ router.get('/', async (_req: Request, res: Response) => {
     const orderStatusCounts: Record<string, number> = {};
     sales.forEach(s => { orderStatusCounts[s.order_status] = (orderStatusCounts[s.order_status] || 0) + 1; });
 
-    const cuttingOrders = await prisma.cuttingOrder.findMany();
+    const cuttingOrders = await prisma.cuttingOrder.findMany({ where: seasonWhere(seasonId) });
     const fabricIndex = new FuzzyKeyIndex(['color', 'color']); // [material_type, color]
     const fabricConsumed: Record<string, number> = {};
     cuttingOrders.forEach(c => {
@@ -75,6 +77,7 @@ router.get('/', async (_req: Request, res: Response) => {
 
     // Cutting inventory value: SUM(remaining_pieces × cost_per_meter)
     const allModelParts = await prisma.modelPart.findMany({
+      where: seasonWhere(seasonId),
       include: { model: { select: { qty_from_cutting: true } } },
     });
     const cutIndex = new FuzzyKeyIndex(['exact', 'color']); // [cut_number, color]
@@ -101,7 +104,7 @@ router.get('/', async (_req: Request, res: Response) => {
 
     // WIP value: SUM(qty_received × cost_per_piece) WHERE status = 'قيد التشغيل'
     // Models that move to 'تام' are automatically excluded — no double-counting with stockValue.
-    const modelProds = await prisma.modelProduction.findMany();
+    const modelProds = await prisma.modelProduction.findMany({ where: seasonWhere(seasonId) });
     const wipRecords = modelProds.filter(mp => mp.status === 'قيد التشغيل');
     const wipValue = wipRecords.reduce((s, mp) => s + mp.qty_received * ((mp as any).cost_per_piece || 0), 0);
     const wipItems = wipRecords
@@ -189,9 +192,9 @@ router.get('/', async (_req: Request, res: Response) => {
     const _today = new Date().toISOString().slice(0, 10);
     setImmediate(() => {
       prisma.financialSnapshot.upsert({
-        where:  { snapshot_date: _today },
+        where:  { season_id_snapshot_date: { season_id: seasonId, snapshot_date: _today } },
         update: { total_current_assets: totalCurrentAssets, cash: cashAvailable, fabric_assets: fabricValue, ready_stock_assets: stockValue, accessories_assets: accessoriesValue, receivables: moneyOwedToUs, debts: remainingDebts },
-        create: { snapshot_date: _today, total_current_assets: totalCurrentAssets, cash: cashAvailable, fabric_assets: fabricValue, ready_stock_assets: stockValue, accessories_assets: accessoriesValue, receivables: moneyOwedToUs, debts: remainingDebts },
+        create: { season_id: seasonId, snapshot_date: _today, total_current_assets: totalCurrentAssets, cash: cashAvailable, fabric_assets: fabricValue, ready_stock_assets: stockValue, accessories_assets: accessoriesValue, receivables: moneyOwedToUs, debts: remainingDebts },
       }).catch((e: Error) => console.error('Auto-snapshot failed:', e.message));
     });
 

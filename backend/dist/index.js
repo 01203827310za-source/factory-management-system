@@ -18,6 +18,7 @@ const payroll_1 = __importDefault(require("./routes/payroll"));
 const auditLog_1 = __importDefault(require("./routes/auditLog"));
 const aiAssistant_1 = __importDefault(require("./routes/aiAssistant"));
 const snapshots_1 = __importDefault(require("./routes/snapshots"));
+const seasons_1 = __importDefault(require("./routes/seasons"));
 const auth_2 = require("./middleware/auth");
 const rbacService_1 = require("./services/rbacService");
 const entities_1 = require("./routes/entities");
@@ -45,6 +46,7 @@ app.use('/api', (req, res, next) => {
 });
 // ===== Routes =====
 app.use('/api/auth', auth_1.default);
+app.use('/api/seasons', seasons_1.default);
 app.use('/api/users', users_1.default);
 app.use('/api/sales', sales_1.default);
 app.use('/api/expenses', entities_1.expensesRouter);

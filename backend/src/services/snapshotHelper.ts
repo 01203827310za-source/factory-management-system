@@ -11,23 +11,23 @@ export type SnapshotData = {
   debts: number;
 };
 
-export async function computeSnapshot(): Promise<SnapshotData> {
+export async function computeSnapshot(seasonId: number): Promise<SnapshotData> {
   const [
     sales, expenses, debtsData, clientAccts, returns_,
     paymentLogs, fabric, readyStock, accessories,
     cuttingOrders, modelProds,
   ] = await Promise.all([
-    prisma.sale.findMany(),
-    prisma.expenseRevenue.findMany(),
-    prisma.debt.findMany(),
-    prisma.clientAccount.findMany(),
-    prisma.returnItem.findMany(),
-    prisma.paymentLog.findMany(),
-    prisma.fabricWarehouse.findMany(),
-    prisma.readyStock.findMany(),
-    prisma.accessoriesWarehouse.findMany(),
-    prisma.cuttingOrder.findMany(),
-    prisma.modelProduction.findMany(),
+    prisma.sale.findMany({ where: { season_id: seasonId } }),
+    prisma.expenseRevenue.findMany({ where: { season_id: seasonId } }),
+    prisma.debt.findMany({ where: { season_id: seasonId } }),
+    prisma.clientAccount.findMany({ where: { season_id: seasonId } }),
+    prisma.returnItem.findMany({ where: { season_id: seasonId } }),
+    prisma.paymentLog.findMany({ where: { season_id: seasonId } }),
+    prisma.fabricWarehouse.findMany({ where: { season_id: seasonId } }),
+    prisma.readyStock.findMany({ where: { season_id: seasonId } }),
+    prisma.accessoriesWarehouse.findMany({ where: { season_id: seasonId } }),
+    prisma.cuttingOrder.findMany({ where: { season_id: seasonId } }),
+    prisma.modelProduction.findMany({ where: { season_id: seasonId } }),
   ]);
 
   const depositIn   = sales.reduce((s, sale) => s + sale.deposit_paid, 0);

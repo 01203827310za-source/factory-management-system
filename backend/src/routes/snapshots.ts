@@ -2,20 +2,22 @@ import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate } from '../middleware/auth';
 import { computeSnapshot } from '../services/snapshotHelper';
+import { getSeasonId, seasonWhere } from '../services/seasonContext';
 
 const router = Router();
 router.use(authenticate);
 
 // POST /api/snapshots/take  — create or refresh today's snapshot
-router.post('/take', async (_req: Request, res: Response) => {
+router.post('/take', async (req: Request, res: Response) => {
   try {
+    const seasonId = await getSeasonId(req);
     const today = new Date().toISOString().slice(0, 10);
-    const data  = await computeSnapshot();
+    const data  = await computeSnapshot(seasonId);
 
     const snapshot = await prisma.financialSnapshot.upsert({
-      where:  { snapshot_date: today },
+      where:  { season_id_snapshot_date: { season_id: seasonId, snapshot_date: today } },
       update: data,
-      create: { snapshot_date: today, ...data },
+      create: { season_id: seasonId, snapshot_date: today, ...data },
     });
 
     return res.json(snapshot);
@@ -26,9 +28,11 @@ router.post('/take', async (_req: Request, res: Response) => {
 });
 
 // GET /api/snapshots  — all snapshots ordered by date (for the line chart)
-router.get('/', async (_req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
+    const seasonId = await getSeasonId(req);
     const snapshots = await prisma.financialSnapshot.findMany({
+      where: seasonWhere(seasonId),
       orderBy: { snapshot_date: 'asc' },
     });
     return res.json(snapshots);
@@ -41,6 +45,7 @@ router.get('/', async (_req: Request, res: Response) => {
 // GET /api/snapshots/profit?from_date=YYYY-MM-DD&to_date=YYYY-MM-DD
 router.get('/profit', async (req: Request, res: Response) => {
   try {
+    const seasonId = await getSeasonId(req);
     const { from_date, to_date } = req.query as { from_date?: string; to_date?: string };
 
     if (!from_date || !to_date) {
@@ -51,7 +56,7 @@ router.get('/profit', async (req: Request, res: Response) => {
 
     // Starting assets: nearest snapshot at or before from_date
     const startSnap = await prisma.financialSnapshot.findFirst({
-      where:   { snapshot_date: { lte: from_date } },
+      where:   { season_id: seasonId, snapshot_date: { lte: from_date } },
       orderBy: { snapshot_date: 'desc' },
     });
 
@@ -62,13 +67,13 @@ router.get('/profit', async (req: Request, res: Response) => {
 
     if (to_date >= today) {
       // Always compute live so the value is up-to-the-second
-      const live = await computeSnapshot();
+      const live = await computeSnapshot(seasonId);
       endAssets  = live.total_current_assets;
       endDate    = today;
       hasEndData = true;
     } else {
       const endSnap = await prisma.financialSnapshot.findFirst({
-        where:   { snapshot_date: { lte: to_date } },
+        where:   { season_id: seasonId, snapshot_date: { lte: to_date } },
         orderBy: { snapshot_date: 'desc' },
       });
       endAssets  = endSnap?.total_current_assets ?? 0;

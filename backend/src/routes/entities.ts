@@ -9,6 +9,7 @@ import prisma from '../lib/prisma';
 import { authenticate, requireManager } from '../middleware/auth';
 import { logAudit } from '../services/auditHelper';
 import { textsMatch, findBestMatch } from '../utils/textMatch';
+import { getSeasonId, seasonWhere, withSeason } from '../services/seasonContext';
 
 // Remove PaymentLog entries when a debt/client-account paid amount is reduced.
 // Deletes from newest first; if a single log exceeds the remaining delta, trims it.
@@ -35,13 +36,17 @@ async function purgePaymentLogs(type: string, descPrefix: string, amountToRemove
 export const expensesRouter = Router();
 expensesRouter.use(authenticate);
 
-expensesRouter.get('/', async (_req, res) => {
-  try { return res.json(await prisma.expenseRevenue.findMany({ orderBy: { id: 'asc' } })); }
+expensesRouter.get('/', async (req, res) => {
+  try {
+    const seasonId = await getSeasonId(req);
+    return res.json(await prisma.expenseRevenue.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'asc' } }));
+  }
   catch { return res.status(500).json({ message: 'خطأ في جلب البيانات' }); }
 });
 expensesRouter.post('/', requireManager, async (req, res) => {
   try {
-    const rec = await prisma.expenseRevenue.create({ data: req.body });
+    const seasonId = await getSeasonId(req);
+    const rec = await prisma.expenseRevenue.create({ data: withSeason(req.body, seasonId) });
     logAudit({ user: req.user, module: 'Expenses', action: 'CREATE', record_id: rec.id,
       after_data: rec, description: `إضافة ${rec.operation_type}: ${rec.statement}` });
     return res.status(201).json(rec);
@@ -72,13 +77,17 @@ expensesRouter.delete('/:id', requireManager, async (req, res) => {
 export const readyStockRouter = Router();
 readyStockRouter.use(authenticate);
 
-readyStockRouter.get('/', async (_req, res) => {
-  try { return res.json(await prisma.readyStock.findMany({ orderBy: { id: 'asc' } })); }
+readyStockRouter.get('/', async (req, res) => {
+  try {
+    const seasonId = await getSeasonId(req);
+    return res.json(await prisma.readyStock.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'asc' } }));
+  }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 readyStockRouter.post('/', requireManager, async (req, res) => {
   try {
-    const rec = await prisma.readyStock.create({ data: req.body });
+    const seasonId = await getSeasonId(req);
+    const rec = await prisma.readyStock.create({ data: withSeason(req.body, seasonId) });
     logAudit({ user: req.user, module: 'ReadyStock', action: 'CREATE', record_id: rec.id,
       after_data: rec, description: `إضافة منتج جاهز: ${rec.model_code} - ${rec.product_name}` });
     return res.status(201).json(rec);
@@ -111,13 +120,17 @@ readyStockRouter.delete('/:id', requireManager, async (req, res) => {
 export const fabricRouter = Router();
 fabricRouter.use(authenticate);
 
-fabricRouter.get('/', async (_req, res) => {
-  try { return res.json(await prisma.fabricWarehouse.findMany({ orderBy: { id: 'asc' } })); }
+fabricRouter.get('/', async (req, res) => {
+  try {
+    const seasonId = await getSeasonId(req);
+    return res.json(await prisma.fabricWarehouse.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'asc' } }));
+  }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 fabricRouter.post('/', requireManager, async (req, res) => {
   try {
-    const rec = await prisma.fabricWarehouse.create({ data: req.body });
+    const seasonId = await getSeasonId(req);
+    const rec = await prisma.fabricWarehouse.create({ data: withSeason(req.body, seasonId) });
     logAudit({ user: req.user, module: 'FabricWarehouse', action: 'CREATE', record_id: rec.id,
       after_data: rec, description: `إضافة قماش: ${rec.material_type} - ${rec.color}` });
     return res.status(201).json(rec);
@@ -148,13 +161,17 @@ fabricRouter.delete('/:id', requireManager, async (req, res) => {
 export const accessoriesRouter = Router();
 accessoriesRouter.use(authenticate);
 
-accessoriesRouter.get('/', async (_req, res) => {
-  try { return res.json(await prisma.accessoriesWarehouse.findMany({ orderBy: { id: 'asc' } })); }
+accessoriesRouter.get('/', async (req, res) => {
+  try {
+    const seasonId = await getSeasonId(req);
+    return res.json(await prisma.accessoriesWarehouse.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'asc' } }));
+  }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 accessoriesRouter.post('/', requireManager, async (req, res) => {
   try {
-    const rec = await prisma.accessoriesWarehouse.create({ data: req.body });
+    const seasonId = await getSeasonId(req);
+    const rec = await prisma.accessoriesWarehouse.create({ data: withSeason(req.body, seasonId) });
     logAudit({ user: req.user, module: 'Accessories', action: 'CREATE', record_id: rec.id,
       after_data: rec, description: `إضافة إكسسوار: ${rec.item_name}` });
     return res.status(201).json(rec);
@@ -185,9 +202,10 @@ accessoriesRouter.delete('/:id', requireManager, async (req, res) => {
 export const cuttingRouter = Router();
 cuttingRouter.use(authenticate);
 
-cuttingRouter.get('/', async (_req, res) => {
+cuttingRouter.get('/', async (req, res) => {
   try {
-    const cuts = await prisma.cuttingOrder.findMany({ orderBy: { id: 'asc' } });
+    const seasonId = await getSeasonId(req);
+    const cuts = await prisma.cuttingOrder.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'asc' } });
 
     // For each cut, compute reserved pieces from model_parts → model_production.
     // Colors are matched via textsMatch (not raw equality) so a part recorded
@@ -196,7 +214,7 @@ cuttingRouter.get('/', async (_req, res) => {
     const cutNumbers = [...new Set(cuts.map(c => c.cut_number))];
     const allParts = cutNumbers.length > 0
       ? await prisma.modelPart.findMany({
-        where: { cut_number: { in: cutNumbers } },
+        where: { season_id: seasonId, cut_number: { in: cutNumbers } },
         include: { model: { select: { qty_from_cutting: true } } },
       })
       : [];
@@ -217,8 +235,9 @@ cuttingRouter.get('/:cutNumber/colors', async (req, res) => {
   if (!cut_number) return res.status(400).json({ message: 'رقم القص مطلوب' });
 
   try {
+    const seasonId = await getSeasonId(req);
     const cuts = await prisma.cuttingOrder.findMany({
-      where: { cut_number },
+      where: { season_id: seasonId, cut_number },
       orderBy: { id: 'asc' },
       select: { color: true },
     });
@@ -231,7 +250,8 @@ cuttingRouter.get('/:cutNumber/colors', async (req, res) => {
 
 cuttingRouter.post('/', requireManager, async (req, res) => {
   try {
-    const rec = await prisma.cuttingOrder.create({ data: req.body });
+    const seasonId = await getSeasonId(req);
+    const rec = await prisma.cuttingOrder.create({ data: withSeason(req.body, seasonId) });
     logAudit({ user: req.user, module: 'Cutting', action: 'CREATE', record_id: rec.id,
       after_data: rec, description: `إضافة أمر قطع: ${rec.cut_description || rec.cut_number}` });
     return res.status(201).json(rec);
@@ -270,6 +290,7 @@ type CleanPartInput = { part_type: string; cut_number: number; color: string };
 // Returns how many pieces from (cut_number, color) are still available.
 // excludeModelId: omit that model's usage (for update validation).
 async function getAvailableForPart(
+  seasonId: number,
   cut_number: number,
   color: string,
   excludeModelId?: number,
@@ -277,7 +298,7 @@ async function getAvailableForPart(
   // Match color via textsMatch rather than a raw DB equality filter, so
   // small spelling/spacing differences between the cutting order and the
   // model part don't cause a wrong (or zero) available count.
-  const cuts = await prisma.cuttingOrder.findMany({ where: { cut_number } });
+  const cuts = await prisma.cuttingOrder.findMany({ where: { season_id: seasonId, cut_number } });
   const total = cuts
     .filter(c => textsMatch(c.color, color, 'color'))
     .reduce((s, c) => s + c.total_pieces, 0);
@@ -285,6 +306,7 @@ async function getAvailableForPart(
   const usedParts = await prisma.modelPart.findMany({
     where: {
       cut_number,
+      season_id: seasonId,
       ...(excludeModelId !== undefined ? { model_id: { not: excludeModelId } } : {}),
     },
     include: { model: { select: { qty_from_cutting: true } } },
@@ -295,9 +317,9 @@ async function getAvailableForPart(
   return { total, used, available: total - used };
 }
 
-async function getColorsForCut(cut_number: number): Promise<string[]> {
+async function getColorsForCut(seasonId: number, cut_number: number): Promise<string[]> {
   const cuts = await prisma.cuttingOrder.findMany({
-    where: { cut_number },
+    where: { season_id: seasonId, cut_number },
     orderBy: { id: 'asc' },
     select: { color: true },
   });
@@ -321,6 +343,7 @@ function normalizeParts(parts: unknown, fallbackCut: unknown, fallbackColor: unk
 }
 
 async function validateProductionParts(
+  seasonId: number,
   cleanParts: CleanPartInput[],
   qty: number,
   excludeModelId?: number,
@@ -332,11 +355,11 @@ async function validateProductionParts(
     if (!p.cut_number || !p.color) throw new Error('MISSING_PARTS');
     if (!textsMatch(p.color, firstColor, 'color')) throw new Error('MIXED_COLORS');
 
-    const availableColors = await getColorsForCut(p.cut_number);
+    const availableColors = await getColorsForCut(seasonId, p.cut_number);
     if (availableColors.length === 0) throw new Error('NO_COLORS');
     if (!availableColors.some(c => textsMatch(c, p.color, 'color'))) throw new Error('INVALID_COLOR');
 
-    const { available } = await getAvailableForPart(p.cut_number, p.color, excludeModelId);
+    const { available } = await getAvailableForPart(seasonId, p.cut_number, p.color, excludeModelId);
     if (available < qty) {
       const err = new Error('INSUFFICIENT_CUTTING') as Error & {
         partCut?: number;
@@ -355,13 +378,13 @@ async function validateProductionParts(
   return { primaryCut: cleanParts[0].cut_number, productionColor: firstColor };
 }
 
-async function ensureReadyStockRow(tx: any, data: any, color: string) {
+async function ensureReadyStockRow(tx: any, seasonId: number, data: any, color: string) {
   if (!data.model_code || !color) return;
   // Match the existing row by normalized/fuzzy color rather than a raw DB
   // equality filter, so a slightly different spelling of the same color
   // reuses the existing stock row instead of creating a duplicate one.
   const candidates = await tx.readyStock.findMany({
-    where: { model_code: data.model_code },
+    where: { season_id: seasonId, model_code: data.model_code },
   });
   const existing = findBestMatch(candidates, color, (r: { color: string }) => r.color, 'color');
   if (existing) return;
@@ -369,6 +392,7 @@ async function ensureReadyStockRow(tx: any, data: any, color: string) {
   await tx.readyStock.create({
     data: {
       model_code: data.model_code,
+      season_id: seasonId,
       product_name: data.model_description || data.model_code,
       color,
       opening_balance: 0,
@@ -404,9 +428,11 @@ function modelProductionError(res: Response, err: unknown) {
   return res.status(500).json({ message: 'خطأ' });
 }
 
-modelProdRouter.get('/', async (_req, res) => {
+modelProdRouter.get('/', async (req, res) => {
   try {
+    const seasonId = await getSeasonId(req);
     return res.json(await prisma.modelProduction.findMany({
+      where: seasonWhere(seasonId),
       orderBy: { id: 'asc' },
       include: PARTS_INCLUDE,
     }));
@@ -415,25 +441,27 @@ modelProdRouter.get('/', async (_req, res) => {
 
 modelProdRouter.post('/', requireManager, async (req, res) => {
   try {
+    const seasonId = await getSeasonId(req);
     const { parts, ...data } = req.body;
     const qty = parseInt(data.qty_from_cutting) || 0;
     const cleanParts = normalizeParts(parts, data.cut_number, data.color);
-    const validated = await validateProductionParts(cleanParts, qty);
+    const validated = await validateProductionParts(seasonId, cleanParts, qty);
     const safeData = { ...data, color: validated.productionColor };
 
     const createdFresh = await prisma.$transaction(async (tx) => {
       const rec = await tx.modelProduction.create({
-        data: { ...safeData, cut_number: validated.primaryCut },
+        data: { ...safeData, season_id: seasonId, cut_number: validated.primaryCut },
       });
       await tx.modelPart.createMany({
         data: cleanParts.map(p => ({
+          season_id: seasonId,
           model_id: rec.id,
           part_type: p.part_type,
           cut_number: p.cut_number,
           color: p.color,
         })),
       });
-      await ensureReadyStockRow(tx, safeData, validated.productionColor);
+      await ensureReadyStockRow(tx, seasonId, safeData, validated.productionColor);
       return tx.modelProduction.findUnique({ where: { id: rec.id }, include: PARTS_INCLUDE });
     });
 
@@ -446,12 +474,14 @@ modelProdRouter.post('/', requireManager, async (req, res) => {
 modelProdRouter.put('/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
   try {
+    const seasonId = await getSeasonId(req);
     const { parts, ...data } = req.body;
     const qty = parseInt(data.qty_from_cutting) || 0;
     const cleanParts = normalizeParts(parts, data.cut_number, data.color);
-    const validated = await validateProductionParts(cleanParts, qty, id);
+    const validated = await validateProductionParts(seasonId, cleanParts, qty, id);
     const safeData = { ...data, color: validated.productionColor };
-    const before = await prisma.modelProduction.findUnique({ where: { id }, include: PARTS_INCLUDE });
+    const before = await prisma.modelProduction.findFirst({ where: { id, season_id: seasonId }, include: PARTS_INCLUDE });
+    if (!before) return res.status(404).json({ message: 'ØºÙŠØ± Ù…ÙˆØ¬ÙˆØ¯' });
 
     const updatedFresh = await prisma.$transaction(async (tx) => {
       await tx.modelProduction.update({
@@ -461,13 +491,14 @@ modelProdRouter.put('/:id', requireManager, async (req, res) => {
       await tx.modelPart.deleteMany({ where: { model_id: id } });
       await tx.modelPart.createMany({
         data: cleanParts.map(p => ({
+          season_id: seasonId,
           model_id: id,
           part_type: p.part_type,
           cut_number: p.cut_number,
           color: p.color,
         })),
       });
-      await ensureReadyStockRow(tx, safeData, validated.productionColor);
+      await ensureReadyStockRow(tx, seasonId, safeData, validated.productionColor);
       return tx.modelProduction.findUnique({ where: { id }, include: PARTS_INCLUDE });
     });
 
@@ -481,7 +512,9 @@ modelProdRouter.put('/:id', requireManager, async (req, res) => {
 modelProdRouter.delete('/:id', requireManager, async (req, res) => {
   const id = parseInt(req.params.id as string);
   try {
-    const before = await prisma.modelProduction.findUnique({ where: { id }, include: PARTS_INCLUDE });
+    const seasonId = await getSeasonId(req);
+    const before = await prisma.modelProduction.findFirst({ where: { id, season_id: seasonId }, include: PARTS_INCLUDE });
+    if (!before) return res.status(404).json({ message: 'ØºÙŠØ± Ù…ÙˆØ¬ÙˆØ¯' });
     await prisma.modelProduction.delete({ where: { id } }); // parts cascade via FK
     logAudit({ user: req.user, module: 'ModelProduction', action: 'DELETE', record_id: id,
       before_data: before, description: `حذف إنتاج موديل: ${before?.model_code} - ${before?.model_description}` });
@@ -495,15 +528,19 @@ debtsRouter.use(authenticate);
 
 const DEBT_INCLUDE = { payments: { orderBy: { id: 'asc' as const } } } as const;
 
-debtsRouter.get('/', async (_req, res) => {
-  try { return res.json(await prisma.debt.findMany({ orderBy: { id: 'asc' }, include: DEBT_INCLUDE })); }
+debtsRouter.get('/', async (req, res) => {
+  try {
+    const seasonId = await getSeasonId(req);
+    return res.json(await prisma.debt.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'asc' }, include: DEBT_INCLUDE }));
+  }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 debtsRouter.post('/', requireManager, async (req: Request, res: Response) => {
   try {
+    const seasonId = await getSeasonId(req);
     const data = req.body;
     const debt = await prisma.debt.create({
-      data: { ...data, remaining: (data.total_amount || 0) - (data.amount_paid || 0) },
+      data: { ...data, season_id: seasonId, remaining: (data.total_amount || 0) - (data.amount_paid || 0) },
       include: DEBT_INCLUDE,
     });
     logAudit({ user: req.user, module: 'Debts', action: 'CREATE', record_id: debt.id,
@@ -515,7 +552,8 @@ debtsRouter.put('/:id', requireManager, async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id as string);
     const data = req.body;
-    const cur = await prisma.debt.findUnique({ where: { id } });
+    const seasonId = await getSeasonId(req);
+    const cur = await prisma.debt.findFirst({ where: { id, season_id: seasonId } });
     if (!cur) return res.status(404).json({ message: 'الدين غير موجود' });
     const newPaid = data.amount_paid !== undefined ? Number(data.amount_paid) : cur.amount_paid;
     const newTotal = data.total_amount !== undefined ? Number(data.total_amount) : cur.total_amount;
@@ -533,7 +571,9 @@ debtsRouter.put('/:id', requireManager, async (req: Request, res: Response) => {
 debtsRouter.delete('/:id', requireManager, async (req, res) => {
   try {
     const id = parseInt(req.params.id as string);
-    const cur = await prisma.debt.findUnique({ where: { id }, include: DEBT_INCLUDE });
+    const seasonId = await getSeasonId(req);
+    const cur = await prisma.debt.findFirst({ where: { id, season_id: seasonId }, include: DEBT_INCLUDE });
+    if (!cur) return res.status(404).json({ message: 'Ø§Ù„Ø¯ÙŠÙ† ØºÙŠØ± Ù…ÙˆØ¬ÙˆØ¯' });
     if (cur) {
       // Clean up PaymentLog entries linked to each payment
       const logIds = (cur.payments || []).map(p => p.payment_log_id).filter((x): x is number => x != null);
@@ -550,19 +590,20 @@ debtsRouter.delete('/:id', requireManager, async (req, res) => {
 debtsRouter.post('/:id/payments', requireManager, async (req: Request, res: Response) => {
   const id = parseInt(req.params.id as string);
   try {
+    const seasonId = await getSeasonId(req);
     const { date, amount, payment_method, description, receiver } = req.body;
     const amt = parseFloat(amount) || 0;
     if (amt <= 0) return res.status(400).json({ message: 'المبلغ يجب أن يكون أكبر من صفر' });
-    const debt = await prisma.debt.findUnique({ where: { id } });
+    const debt = await prisma.debt.findFirst({ where: { id, season_id: seasonId } });
     if (!debt) return res.status(404).json({ message: 'الدين غير موجود' });
 
     const payDate = date || new Date().toISOString().split('T')[0];
     const log = await prisma.paymentLog.create({
-      data: { date: payDate, type: 'debt_payment', amount: amt,
+      data: { date: payDate, type: 'debt_payment', amount: amt, season_id: seasonId,
         receiver: receiver || '', description: `سداد دين: ${debt.name}` },
     });
     const payment = await prisma.debtPayment.create({
-      data: { debt_id: id, payment_log_id: log.id, date: payDate, amount: amt,
+      data: { debt_id: id, payment_log_id: log.id, season_id: seasonId, date: payDate, amount: amt,
         payment_method: payment_method || '', description: description || '',
         receiver: receiver || '', created_by: req.user?.username || '' },
     });
@@ -578,11 +619,12 @@ debtsRouter.put('/:id/payments/:pid', requireManager, async (req: Request, res: 
   const id = parseInt(req.params.id as string);
   const pid = parseInt(req.params.pid as string);
   try {
+    const seasonId = await getSeasonId(req);
     const { date, amount, payment_method, description } = req.body;
     const newAmt = parseFloat(amount) || 0;
     const [debt, payment] = await Promise.all([
-      prisma.debt.findUnique({ where: { id } }),
-      prisma.debtPayment.findUnique({ where: { id: pid } }),
+      prisma.debt.findFirst({ where: { id, season_id: seasonId } }),
+      prisma.debtPayment.findFirst({ where: { id: pid, season_id: seasonId } }),
     ]);
     if (!debt || !payment) return res.status(404).json({ message: 'غير موجود' });
 
@@ -606,9 +648,10 @@ debtsRouter.delete('/:id/payments/:pid', requireManager, async (req: Request, re
   const id = parseInt(req.params.id as string);
   const pid = parseInt(req.params.pid as string);
   try {
+    const seasonId = await getSeasonId(req);
     const [debt, payment] = await Promise.all([
-      prisma.debt.findUnique({ where: { id } }),
-      prisma.debtPayment.findUnique({ where: { id: pid } }),
+      prisma.debt.findFirst({ where: { id, season_id: seasonId } }),
+      prisma.debtPayment.findFirst({ where: { id: pid, season_id: seasonId } }),
     ]);
     if (!debt || !payment) return res.status(404).json({ message: 'غير موجود' });
     await prisma.debtPayment.delete({ where: { id: pid } });
@@ -632,15 +675,19 @@ const ACCT_INCLUDE = {
   invoices: { orderBy: { id: 'asc' as const } },
 } as const;
 
-clientAccountsRouter.get('/', async (_req, res) => {
-  try { return res.json(await prisma.clientAccount.findMany({ orderBy: { id: 'asc' }, include: ACCT_INCLUDE })); }
+clientAccountsRouter.get('/', async (req, res) => {
+  try {
+    const seasonId = await getSeasonId(req);
+    return res.json(await prisma.clientAccount.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'asc' }, include: ACCT_INCLUDE }));
+  }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 clientAccountsRouter.post('/', requireManager, async (req: Request, res: Response) => {
   try {
+    const seasonId = await getSeasonId(req);
     const data = req.body;
     const rec = await prisma.clientAccount.create({
-      data: { ...data, remaining: (data.total_amount || 0) - (data.amount_paid || 0) },
+      data: { ...data, season_id: seasonId, remaining: (data.total_amount || 0) - (data.amount_paid || 0) },
       include: ACCT_INCLUDE,
     });
     logAudit({ user: req.user, module: 'ClientAccounts', action: 'CREATE', record_id: rec.id,
@@ -652,7 +699,8 @@ clientAccountsRouter.put('/:id', requireManager, async (req: Request, res: Respo
   try {
     const id = parseInt(req.params.id as string);
     const data = req.body;
-    const cur = await prisma.clientAccount.findUnique({ where: { id } });
+    const seasonId = await getSeasonId(req);
+    const cur = await prisma.clientAccount.findFirst({ where: { id, season_id: seasonId } });
     if (!cur) return res.status(404).json({ message: 'الحساب غير موجود' });
     const newPaid = data.amount_paid !== undefined ? Number(data.amount_paid) : cur.amount_paid;
     const newTotal = data.total_amount !== undefined ? Number(data.total_amount) : cur.total_amount;
@@ -670,7 +718,9 @@ clientAccountsRouter.put('/:id', requireManager, async (req: Request, res: Respo
 clientAccountsRouter.delete('/:id', requireManager, async (req, res) => {
   try {
     const id = parseInt(req.params.id as string);
-    const cur = await prisma.clientAccount.findUnique({ where: { id }, include: ACCT_INCLUDE });
+    const seasonId = await getSeasonId(req);
+    const cur = await prisma.clientAccount.findFirst({ where: { id, season_id: seasonId }, include: ACCT_INCLUDE });
+    if (!cur) return res.status(404).json({ message: 'Ø§Ù„Ø­Ø³Ø§Ø¨ ØºÙŠØ± Ù…ÙˆØ¬ÙˆØ¯' });
     if (cur) {
       const logIds = (cur.payments || []).map(p => p.payment_log_id).filter((x): x is number => x != null);
       if (logIds.length) await prisma.paymentLog.deleteMany({ where: { id: { in: logIds } } });
@@ -686,19 +736,20 @@ clientAccountsRouter.delete('/:id', requireManager, async (req, res) => {
 clientAccountsRouter.post('/:id/payments', requireManager, async (req: Request, res: Response) => {
   const id = parseInt(req.params.id as string);
   try {
+    const seasonId = await getSeasonId(req);
     const { date, amount, payment_method, description, receiver } = req.body;
     const amt = parseFloat(amount) || 0;
     if (amt <= 0) return res.status(400).json({ message: 'المبلغ يجب أن يكون أكبر من صفر' });
-    const account = await prisma.clientAccount.findUnique({ where: { id } });
+    const account = await prisma.clientAccount.findFirst({ where: { id, season_id: seasonId } });
     if (!account) return res.status(404).json({ message: 'الحساب غير موجود' });
 
     const payDate = date || new Date().toISOString().split('T')[0];
     const log = await prisma.paymentLog.create({
-      data: { date: payDate, type: 'client_payment', amount: amt,
+      data: { date: payDate, type: 'client_payment', amount: amt, season_id: seasonId,
         receiver: receiver || '', description: `دفعة عميل: ${account.client_name} - ${account.model_name}` },
     });
     const payment = await prisma.clientAccountPayment.create({
-      data: { account_id: id, payment_log_id: log.id, date: payDate, amount: amt,
+      data: { account_id: id, payment_log_id: log.id, season_id: seasonId, date: payDate, amount: amt,
         payment_method: payment_method || '', description: description || '',
         receiver: receiver || '', created_by: req.user?.username || '' },
     });
@@ -714,11 +765,12 @@ clientAccountsRouter.put('/:id/payments/:pid', requireManager, async (req: Reque
   const id = parseInt(req.params.id as string);
   const pid = parseInt(req.params.pid as string);
   try {
+    const seasonId = await getSeasonId(req);
     const { date, amount, payment_method, description } = req.body;
     const newAmt = parseFloat(amount) || 0;
     const [account, payment] = await Promise.all([
-      prisma.clientAccount.findUnique({ where: { id } }),
-      prisma.clientAccountPayment.findUnique({ where: { id: pid } }),
+      prisma.clientAccount.findFirst({ where: { id, season_id: seasonId } }),
+      prisma.clientAccountPayment.findFirst({ where: { id: pid, season_id: seasonId } }),
     ]);
     if (!account || !payment) return res.status(404).json({ message: 'غير موجود' });
 
@@ -742,9 +794,10 @@ clientAccountsRouter.delete('/:id/payments/:pid', requireManager, async (req: Re
   const id = parseInt(req.params.id as string);
   const pid = parseInt(req.params.pid as string);
   try {
+    const seasonId = await getSeasonId(req);
     const [account, payment] = await Promise.all([
-      prisma.clientAccount.findUnique({ where: { id } }),
-      prisma.clientAccountPayment.findUnique({ where: { id: pid } }),
+      prisma.clientAccount.findFirst({ where: { id, season_id: seasonId } }),
+      prisma.clientAccountPayment.findFirst({ where: { id: pid, season_id: seasonId } }),
     ]);
     if (!account || !payment) return res.status(404).json({ message: 'غير موجود' });
     await prisma.clientAccountPayment.delete({ where: { id: pid } });
@@ -765,17 +818,18 @@ clientAccountsRouter.delete('/:id/payments/:pid', requireManager, async (req: Re
 clientAccountsRouter.post('/:id/invoices', requireManager, async (req: Request, res: Response) => {
   const id = parseInt(req.params.id as string);
   try {
+    const seasonId = await getSeasonId(req);
     const { date, order_number, amount, notes } = req.body;
     const amt = parseFloat(amount) || 0;
     if (!order_number || !String(order_number).trim()) return res.status(400).json({ message: 'رقم الطلب مطلوب' });
     if (amt <= 0) return res.status(400).json({ message: 'قيمة الفاتورة يجب أن تكون أكبر من صفر' });
 
-    const account = await prisma.clientAccount.findUnique({ where: { id } });
+    const account = await prisma.clientAccount.findFirst({ where: { id, season_id: seasonId } });
     if (!account) return res.status(404).json({ message: 'الحساب غير موجود' });
 
     const invDate = date || new Date().toISOString().split('T')[0];
     const invoice = await prisma.clientAccountInvoice.create({
-      data: { account_id: id, date: invDate, order_number: String(order_number).trim(), amount: amt,
+      data: { account_id: id, season_id: seasonId, date: invDate, order_number: String(order_number).trim(), amount: amt,
         notes: notes || '', created_by: req.user?.username || '' },
     });
     const newTotal = account.total_amount + amt;
@@ -791,13 +845,17 @@ clientAccountsRouter.post('/:id/invoices', requireManager, async (req: Request, 
 export const returnsRouter = Router();
 returnsRouter.use(authenticate);
 
-returnsRouter.get('/', async (_req, res) => {
-  try { return res.json(await prisma.returnItem.findMany({ orderBy: { id: 'asc' } })); }
+returnsRouter.get('/', async (req, res) => {
+  try {
+    const seasonId = await getSeasonId(req);
+    return res.json(await prisma.returnItem.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'asc' } }));
+  }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 returnsRouter.post('/', requireManager, async (req, res) => {
   try {
-    const rec = await prisma.returnItem.create({ data: req.body });
+    const seasonId = await getSeasonId(req);
+    const rec = await prisma.returnItem.create({ data: withSeason(req.body, seasonId) });
     logAudit({ user: req.user, module: 'Returns', action: 'CREATE', record_id: rec.id,
       after_data: rec, description: `إضافة مرتجع: ${rec.client_name} - ${rec.model_code}` });
     return res.status(201).json(rec);
@@ -828,13 +886,17 @@ returnsRouter.delete('/:id', requireManager, async (req, res) => {
 export const paymentLogRouter = Router();
 paymentLogRouter.use(authenticate);
 
-paymentLogRouter.get('/', async (_req, res) => {
-  try { return res.json(await prisma.paymentLog.findMany({ orderBy: { id: 'asc' } })); }
+paymentLogRouter.get('/', async (req, res) => {
+  try {
+    const seasonId = await getSeasonId(req);
+    return res.json(await prisma.paymentLog.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'asc' } }));
+  }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 paymentLogRouter.post('/', requireManager, async (req, res) => {
   try {
-    const rec = await prisma.paymentLog.create({ data: req.body });
+    const seasonId = await getSeasonId(req);
+    const rec = await prisma.paymentLog.create({ data: withSeason(req.body, seasonId) });
     logAudit({ user: req.user, module: 'PaymentLogs', action: 'CREATE', record_id: rec.id,
       after_data: rec, description: `إضافة سجل دفع: ${rec.description} - ${rec.amount}` });
     return res.status(201).json(rec);
@@ -899,17 +961,18 @@ type TxClient = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 // Use for data-repair only; normal add/edit/delete use incremental WAC below.
 export async function rebuildFabricInventory(
   client: TxClient | typeof prisma,
+  seasonId: number,
   fabricType: string,
   color: string,
 ): Promise<void> {
   const warehouseCandidates = await client.fabricWarehouse.findMany({
-    where: { material_type: fabricType },
+    where: { season_id: seasonId, material_type: fabricType },
   });
   const warehouse = findBestMatch(warehouseCandidates, color, r => r.color, 'color');
   if (!warehouse) return;
 
   const purchaseCandidates = await client.fabricPurchase.findMany({
-    where: { fabric_type: fabricType },
+    where: { season_id: seasonId, fabric_type: fabricType },
     orderBy: { id: 'asc' },
   });
   const purchases = purchaseCandidates.filter(p => textsMatch(p.color, color, 'color'));
@@ -933,8 +996,11 @@ export async function rebuildFabricInventory(
   });
 }
 
-fabricPurchasesRouter.get('/', async (_req, res) => {
-  try { return res.json(await prisma.fabricPurchase.findMany({ orderBy: { id: 'desc' } })); }
+fabricPurchasesRouter.get('/', async (req, res) => {
+  try {
+    const seasonId = await getSeasonId(req);
+    return res.json(await prisma.fabricPurchase.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'desc' } }));
+  }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 
@@ -943,6 +1009,7 @@ fabricPurchasesRouter.get('/', async (_req, res) => {
 // This preserves any stock that was entered via "إضافة وارد" (direct entry).
 fabricPurchasesRouter.post('/', requireManager, async (req: Request, res: Response) => {
   try {
+    const seasonId = await getSeasonId(req);
     const { date, fabric_type, color, quantity_kg, price_per_kg, supplier, invoice_no, notes } = req.body;
     const qty   = parseFloat(quantity_kg)  || 0;
     const price = parseFloat(price_per_kg) || 0;
@@ -955,6 +1022,7 @@ fabricPurchasesRouter.post('/', requireManager, async (req: Request, res: Respon
       const created = await tx.fabricPurchase.create({
         data: {
           date, fabric_type, color: cleanColor,
+          season_id: seasonId,
           quantity_kg: qty, price_per_kg: price,
           total_cost: Math.round(qty * price * 100) / 100,
           supplier: supplier || '', invoice_no: invoice_no || '', notes: notes || '',
@@ -962,7 +1030,7 @@ fabricPurchasesRouter.post('/', requireManager, async (req: Request, res: Respon
       });
 
       const warehouseCandidates = await tx.fabricWarehouse.findMany({
-        where: { material_type: fabric_type },
+        where: { season_id: seasonId, material_type: fabric_type },
       });
       const warehouse = findBestMatch(warehouseCandidates, cleanColor, r => r.color, 'color');
 
@@ -971,6 +1039,7 @@ fabricPurchasesRouter.post('/', requireManager, async (req: Request, res: Respon
         await tx.fabricWarehouse.create({
           data: {
             date,
+            season_id: seasonId,
             material_type:       fabric_type,
             color:               cleanColor,
             qty_in:              qty,
@@ -1017,6 +1086,7 @@ fabricPurchasesRouter.post('/', requireManager, async (req: Request, res: Respon
 // newValue = warehouseQty × existingAvg - oldQty × oldPrice + newQty × newPrice
 fabricPurchasesRouter.put('/:id', requireManager, async (req: Request, res: Response) => {
   try {
+    const seasonId = await getSeasonId(req);
     const id = parseInt(req.params.id as string);
     const { date, fabric_type, color, quantity_kg, price_per_kg, supplier, invoice_no, notes } = req.body;
     const newQty   = parseFloat(quantity_kg)  || 0;
@@ -1026,14 +1096,14 @@ fabricPurchasesRouter.put('/:id', requireManager, async (req: Request, res: Resp
     }
     const cleanColor = (color || '').trim();
 
-    const before = await prisma.fabricPurchase.findUnique({ where: { id } });
+    const before = await prisma.fabricPurchase.findFirst({ where: { id, season_id: seasonId } });
 
     const result = await prisma.$transaction(async (tx) => {
-      const existing = await tx.fabricPurchase.findUnique({ where: { id } });
+      const existing = await tx.fabricPurchase.findFirst({ where: { id, season_id: seasonId } });
       if (!existing) throw new Error('NOT_FOUND');
 
       const warehouseCandidates = await tx.fabricWarehouse.findMany({
-        where: { material_type: existing.fabric_type },
+        where: { season_id: seasonId, material_type: existing.fabric_type },
       });
       const warehouse = findBestMatch(warehouseCandidates, existing.color, r => r.color, 'color');
       if (!warehouse) throw new Error('WAREHOUSE_NOT_FOUND');
@@ -1043,7 +1113,7 @@ fabricPurchasesRouter.put('/:id', requireManager, async (req: Request, res: Resp
       // Safety: if reducing qty, verify cutting consumption is not exceeded
       if (deltaQty < 0) {
         const cuttingCandidates = await tx.cuttingOrder.findMany({
-          where: { material_type: existing.fabric_type },
+          where: { season_id: seasonId, material_type: existing.fabric_type },
         });
         const cutting = cuttingCandidates.filter(c => textsMatch(c.color, existing.color, 'color'));
         const totalConsumed = cutting.reduce((s, c) => s + c.kg_consumed, 0);
@@ -1102,15 +1172,16 @@ fabricPurchasesRouter.put('/:id', requireManager, async (req: Request, res: Resp
 // Reverse formula: newValue = warehouseQty × existingAvg - deletedQty × deletedPrice
 fabricPurchasesRouter.delete('/:id', requireManager, async (req: Request, res: Response) => {
   try {
+    const seasonId = await getSeasonId(req);
     const id = parseInt(req.params.id as string);
-    const before = await prisma.fabricPurchase.findUnique({ where: { id } });
+    const before = await prisma.fabricPurchase.findFirst({ where: { id, season_id: seasonId } });
 
     await prisma.$transaction(async (tx) => {
-      const existing = await tx.fabricPurchase.findUnique({ where: { id } });
+      const existing = await tx.fabricPurchase.findFirst({ where: { id, season_id: seasonId } });
       if (!existing) throw new Error('NOT_FOUND');
 
       const warehouseCandidates = await tx.fabricWarehouse.findMany({
-        where: { material_type: existing.fabric_type },
+        where: { season_id: seasonId, material_type: existing.fabric_type },
       });
       const warehouse = findBestMatch(warehouseCandidates, existing.color, r => r.color, 'color');
       if (!warehouse) throw new Error('WAREHOUSE_NOT_FOUND');
@@ -1119,7 +1190,7 @@ fabricPurchasesRouter.delete('/:id', requireManager, async (req: Request, res: R
 
       // Safety: ensure remaining stock covers cutting consumption
       const cuttingCandidates = await tx.cuttingOrder.findMany({
-        where: { material_type: existing.fabric_type },
+        where: { season_id: seasonId, material_type: existing.fabric_type },
       });
       const cutting = cuttingCandidates.filter(c => textsMatch(c.color, existing.color, 'color'));
       if (newQty < cutting.reduce((s, c) => s + c.kg_consumed, 0)) throw new Error('CONSUMED');
@@ -1138,7 +1209,7 @@ fabricPurchasesRouter.delete('/:id', requireManager, async (req: Request, res: R
 
         // Find the most-recent remaining purchase for last_purchase_price
         const remainingPurchases = await tx.fabricPurchase.findMany({
-          where: { fabric_type: existing.fabric_type },
+          where: { season_id: seasonId, fabric_type: existing.fabric_type },
           orderBy: { id: 'desc' },
         });
         const lastRemaining = remainingPurchases.find(p => textsMatch(p.color, existing.color, 'color'));
@@ -1172,9 +1243,10 @@ fabricPurchasesRouter.delete('/:id', requireManager, async (req: Request, res: R
 // Overwrites any qty that came from direct "إضافة وارد" entries.
 fabricPurchasesRouter.post('/rebuild', requireManager, async (req: Request, res: Response) => {
   try {
+    const seasonId = await getSeasonId(req);
     const { fabric_type, color } = req.body;
     if (!fabric_type) return res.status(400).json({ message: 'fabric_type مطلوب' });
-    await rebuildFabricInventory(prisma, fabric_type, (color || '').trim());
+    await rebuildFabricInventory(prisma, seasonId, fabric_type, (color || '').trim());
     return res.json({ message: 'تم إعادة الحساب من سجل المشتريات' });
   } catch (err) {
     console.error(err);
@@ -1224,11 +1296,11 @@ export const printOrdersRouter = Router();
 printOrdersRouter.use(authenticate);
 
 // Helper: compute available quantity for a single ready-stock item
-async function computeAvailable(stock: { id: number; model_code: string; color: string; opening_balance: number; reserved_quantity: number }): Promise<number> {
+async function computeAvailable(seasonId: number, stock: { id: number; model_code: string; color: string; opening_balance: number; reserved_quantity: number }): Promise<number> {
   const [modelProds, sales, returns_] = await Promise.all([
-    prisma.modelProduction.findMany(),
-    prisma.sale.findMany(),
-    prisma.returnItem.findMany(),
+    prisma.modelProduction.findMany({ where: seasonWhere(seasonId) }),
+    prisma.sale.findMany({ where: seasonWhere(seasonId) }),
+    prisma.returnItem.findMany({ where: seasonWhere(seasonId) }),
   ]);
 
   const mc = stock.model_code;
@@ -1257,9 +1329,10 @@ async function computeAvailable(stock: { id: number; model_code: string; color: 
   return actual - stock.reserved_quantity;
 }
 
-printOrdersRouter.get('/', async (_req, res) => {
+printOrdersRouter.get('/', async (req, res) => {
   try {
-    return res.json(await prisma.printOrder.findMany({ orderBy: { id: 'desc' } }));
+    const seasonId = await getSeasonId(req);
+    return res.json(await prisma.printOrder.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'desc' } }));
   } catch { return res.status(500).json({ message: 'خطأ' }); }
 });
 
@@ -1275,10 +1348,11 @@ printOrdersRouter.post('/', requireManager, async (req: Request, res: Response) 
   }
 
   try {
-    const source = await prisma.readyStock.findUnique({ where: { id: parseInt(source_stock_id) } });
+    const seasonId = await getSeasonId(req);
+    const source = await prisma.readyStock.findFirst({ where: { id: parseInt(source_stock_id), season_id: seasonId } });
     if (!source) return res.status(404).json({ message: 'الصنف المصدر غير موجود' });
 
-    const available = await computeAvailable(source);
+    const available = await computeAvailable(seasonId, source);
     const qty = parseInt(quantity);
     if (qty <= 0) return res.status(400).json({ message: 'الكمية يجب أن تكون أكبر من صفر' });
     if (qty > available) {
@@ -1303,6 +1377,7 @@ printOrdersRouter.post('/', requireManager, async (req: Request, res: Response) 
       const dest = await tx.readyStock.create({
         data: {
           model_code: new_model_code,
+          season_id: seasonId,
           product_name: new_product_name,
           color: dest_color,
           opening_balance: qty,
@@ -1314,6 +1389,7 @@ printOrdersRouter.post('/', requireManager, async (req: Request, res: Response) 
       const po = await tx.printOrder.create({
         data: {
           order_number,
+          season_id: seasonId,
           date: orderDate,
           source_stock_id: source.id,
           source_model_code: source.model_code,
@@ -1329,7 +1405,7 @@ printOrdersRouter.post('/', requireManager, async (req: Request, res: Response) 
           dest_color,
           print_type: print_type || '',
           notes: notes || '',
-          created_by: (req.user as any)?.username || '',
+          created_by: req.user?.username || '',
         },
       });
       return { dest, po };
