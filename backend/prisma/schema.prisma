@@ -62,6 +62,40 @@ model Permission {
   @@map("permissions")
 }
 
+// ===== SEASONS =====
+model Season {
+  id          Int      @id @default(autoincrement())
+  name        String
+  year        Int
+  type        String   @default("")
+  status      String   @default("inactive")
+  is_active   Boolean  @default(false)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  sales                  Sale[]
+  expenses_revenues      ExpenseRevenue[]
+  ready_stock            ReadyStock[]
+  fabric_warehouse       FabricWarehouse[]
+  fabric_purchases       FabricPurchase[]
+  accessories_warehouse  AccessoriesWarehouse[]
+  cutting_orders         CuttingOrder[]
+  model_productions      ModelProduction[]
+  model_parts            ModelPart[]
+  debts                  Debt[]
+  debt_payments          DebtPayment[]
+  client_accounts        ClientAccount[]
+  client_account_payments ClientAccountPayment[]
+  client_account_invoices ClientAccountInvoice[]
+  return_items           ReturnItem[]
+  payment_logs           PaymentLog[]
+  financial_snapshots    FinancialSnapshot[]
+  print_orders           PrintOrder[]
+
+  @@unique([name, year])
+  @@map("seasons")
+}
+
 model RolePermission {
   id            Int        @id @default(autoincrement())
   role_id       Int
@@ -88,6 +122,8 @@ model UserPermission {
 // ===== SALES =====
 model Sale {
   id                 Int      @id @default(autoincrement())
+  season_id          Int
+  season             Season   @relation(fields: [season_id], references: [id])
   order_number       String
   row_number         Int      @default(0)
   marketer           String   @default("")
@@ -125,6 +161,8 @@ model Sale {
 // ===== EXPENSES & REVENUES =====
 model ExpenseRevenue {
   id             Int      @id @default(autoincrement())
+  season_id      Int
+  season         Season   @relation(fields: [season_id], references: [id])
   date           String
   operation_type String
   statement      String
@@ -143,6 +181,8 @@ model ExpenseRevenue {
 // ===== READY STOCK =====
 model ReadyStock {
   id                Int    @id @default(autoincrement())
+  season_id         Int
+  season            Season @relation(fields: [season_id], references: [id])
   model_code        String
   product_name      String
   color             String @default("")
@@ -157,6 +197,8 @@ model ReadyStock {
 // ===== FABRIC WAREHOUSE =====
 model FabricWarehouse {
   id                  Int      @id @default(autoincrement())
+  season_id           Int
+  season              Season   @relation(fields: [season_id], references: [id])
   date                String
   material_type       String
   color               String   @default("")
@@ -172,6 +214,8 @@ model FabricWarehouse {
 // ===== FABRIC PURCHASES =====
 model FabricPurchase {
   id           Int      @id @default(autoincrement())
+  season_id    Int
+  season       Season   @relation(fields: [season_id], references: [id])
   date         String
   fabric_type  String
   color        String   @default("")
@@ -189,6 +233,8 @@ model FabricPurchase {
 // ===== ACCESSORIES WAREHOUSE =====
 model AccessoriesWarehouse {
   id           Int      @id @default(autoincrement())
+  season_id    Int
+  season       Season   @relation(fields: [season_id], references: [id])
   date         String
   item_name    String
   qty_in       Float    @default(0)
@@ -202,6 +248,8 @@ model AccessoriesWarehouse {
 // ===== CUTTING ORDERS =====
 model CuttingOrder {
   id              Int      @id @default(autoincrement())
+  season_id       Int
+  season          Season   @relation(fields: [season_id], references: [id])
   date            String
   cut_number      Int
   cut_description String   @default("")
@@ -221,6 +269,8 @@ model CuttingOrder {
 // ===== MODEL PRODUCTION =====
 model ModelProduction {
   id                   Int         @id @default(autoincrement())
+  season_id            Int
+  season               Season      @relation(fields: [season_id], references: [id])
   date                 String
   cut_number           Int
   model_code           String
@@ -242,6 +292,8 @@ model ModelProduction {
 // ===== MODEL PARTS =====
 model ModelPart {
   id         Int             @id @default(autoincrement())
+  season_id  Int
+  season     Season          @relation(fields: [season_id], references: [id])
   model_id   Int
   model      ModelProduction @relation(fields: [model_id], references: [id], onDelete: Cascade)
   part_type  String          @default("")
@@ -255,6 +307,8 @@ model ModelPart {
 // ===== DEBTS =====
 model Debt {
   id           Int           @id @default(autoincrement())
+  season_id    Int
+  season       Season        @relation(fields: [season_id], references: [id])
   date         String
   name         String
   total_amount Float         @default(0)
@@ -269,6 +323,8 @@ model Debt {
 // ===== DEBT PAYMENT HISTORY =====
 model DebtPayment {
   id             Int      @id @default(autoincrement())
+  season_id      Int
+  season         Season   @relation(fields: [season_id], references: [id])
   debt_id        Int
   debt           Debt     @relation(fields: [debt_id], references: [id], onDelete: Cascade)
   payment_log_id Int?
@@ -286,6 +342,8 @@ model DebtPayment {
 // ===== CLIENT ACCOUNTS =====
 model ClientAccount {
   id           Int                    @id @default(autoincrement())
+  season_id    Int
+  season       Season                 @relation(fields: [season_id], references: [id])
   date         String
   client_name  String
   model_name   String                 @default("")
@@ -304,6 +362,8 @@ model ClientAccount {
 // ===== CLIENT ACCOUNT PAYMENT HISTORY =====
 model ClientAccountPayment {
   id             Int           @id @default(autoincrement())
+  season_id      Int
+  season         Season        @relation(fields: [season_id], references: [id])
   account_id     Int
   account        ClientAccount @relation(fields: [account_id], references: [id], onDelete: Cascade)
   payment_log_id Int?
@@ -321,6 +381,8 @@ model ClientAccountPayment {
 // ===== CLIENT ACCOUNT INVOICES (manual invoices added directly to the account) =====
 model ClientAccountInvoice {
   id           Int           @id @default(autoincrement())
+  season_id    Int
+  season       Season        @relation(fields: [season_id], references: [id])
   account_id   Int
   account      ClientAccount @relation(fields: [account_id], references: [id], onDelete: Cascade)
   date         String        @default("")
@@ -336,6 +398,8 @@ model ClientAccountInvoice {
 // ===== RETURNS =====
 model ReturnItem {
   id            Int      @id @default(autoincrement())
+  season_id     Int
+  season        Season   @relation(fields: [season_id], references: [id])
   date          String
   order_number  String   @default("")
   client_name   String
@@ -354,6 +418,8 @@ model ReturnItem {
 // ===== PAYMENT LOGS =====
 model PaymentLog {
   id          Int      @id @default(autoincrement())
+  season_id   Int
+  season      Season   @relation(fields: [season_id], references: [id])
   date        String
   type        String
   amount      Float    @default(0)
@@ -475,7 +541,9 @@ model Payroll {
 // ===== FINANCIAL SNAPSHOTS =====
 model FinancialSnapshot {
   id                   Int      @id @default(autoincrement())
-  snapshot_date        String   @unique
+  season_id            Int
+  season               Season   @relation(fields: [season_id], references: [id])
+  snapshot_date        String
   total_current_assets Float    @default(0)
   cash                 Float    @default(0)
   fabric_assets        Float    @default(0)
@@ -485,12 +553,15 @@ model FinancialSnapshot {
   debts                Float    @default(0)
   created_at           DateTime @default(now())
 
+  @@unique([season_id, snapshot_date])
   @@map("financial_snapshots")
 }
 
 // ===== PRINT ORDERS =====
 model PrintOrder {
   id                   Int      @id @default(autoincrement())
+  season_id            Int
+  season               Season   @relation(fields: [season_id], references: [id])
   order_number         String   @default("")
   date                 String
   source_stock_id      Int      @default(0)

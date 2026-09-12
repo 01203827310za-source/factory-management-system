@@ -15,11 +15,13 @@ export class ForbiddenError extends Error {
 // ===== HTTP Client =====
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const token = localStorage.getItem('auth_token');
+  const seasonId = localStorage.getItem('current_season_id');
   const res = await fetch(`${BASE_URL}${path}`, {
     method,
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(seasonId ? { 'X-Season-Id': seasonId } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -72,6 +74,28 @@ export interface AuthUser {
 
 export type UserRole = 'admin' | 'manager' | 'viewer' | 'warehouse' | 'sales' | 'accountant' | string;
 
+// ===== SEASONS =====
+export type SeasonRecord = {
+  id: number;
+  name: string;
+  year: number;
+  type: string;
+  status: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export const seasonsApi = {
+  getAll: () => get<SeasonRecord[]>('/seasons'),
+  getActive: () => get<SeasonRecord>('/seasons/active'),
+  create: (data: { name: string; year: number; type?: string; activate?: boolean }) =>
+    post<SeasonRecord>('/seasons', data),
+  update: (id: number, data: Partial<Pick<SeasonRecord, 'name' | 'year' | 'type' | 'status'>>) =>
+    put<SeasonRecord>(`/seasons/${id}`, data),
+  activate: (id: number) => post<SeasonRecord>(`/seasons/${id}/activate`, {}),
+};
+
 // ===== USERS =====
 export const usersApi = {
   getAll: () => get<User[]>('/users'),
@@ -115,7 +139,7 @@ export interface RbacPermission {
   id: number;
   key: string;
   module: string;
-  action: 'view' | 'create' | 'edit' | 'delete';
+  action: 'view' | 'create' | 'edit' | 'delete' | 'activate';
   label: string;
 }
 

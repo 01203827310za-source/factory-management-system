@@ -21,10 +21,11 @@ import Payroll from './pages/Payroll';
 import AuditLog from './pages/AuditLog';
 import AiAssistant from './pages/AiAssistant';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
-import { Menu, LogOut, User, ChevronDown, KeyRound, Lock, Home } from 'lucide-react';
+import { Menu, LogOut, User, ChevronDown, KeyRound, Lock, Home, CalendarDays, Plus, Check } from 'lucide-react';
 import { authApi } from './services/api';
 import { useToast } from './components/Toast';
 import Modal from './components/Modal';
+import { SeasonProvider, useSeason } from './contexts/SeasonContext';
 
 type ExtendedPage = Page | 'users' | 'accessDenied';
 
@@ -183,8 +184,122 @@ function AccessDeniedScreen({
   );
 }
 
+function SeasonSelector() {
+  const { seasons, currentSeason, currentSeasonId, switchSeason, createSeason, activateSeason, refreshSeasons } = useSeason();
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({ name: '', year: new Date().getFullYear(), type: '', activate: true });
+
+  useEffect(() => {
+    if (seasons.length === 0) refreshSeasons().catch(() => undefined);
+  }, [refreshSeasons, seasons.length]);
+
+  const handleCreate = async () => {
+    if (!form.name.trim() || !form.year) {
+      toast('error', 'اسم الموسم والسنة مطلوبان');
+      return;
+    }
+    setSaving(true);
+    try {
+      const season = await createSeason(form);
+      switchSeason(season.id);
+      toast('success', `${season.name} created successfully. The new season is empty.`);
+      setCreateOpen(false);
+      setOpen(false);
+      setForm({ name: '', year: new Date().getFullYear(), type: '', activate: true });
+    } catch (err) {
+      toast('error', err instanceof Error ? err.message : 'خطأ في إنشاء الموسم');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed top-4 left-4 z-30">
+      <div className="relative">
+        <button
+          onClick={() => setOpen(!open)}
+          className="flex min-w-44 items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 text-sm shadow-md transition hover:bg-gray-50"
+        >
+          <span className="flex items-center gap-2 text-gray-700">
+            <CalendarDays size={16} className="text-[#1e3a5f]" />
+            <span className="text-right">
+              <span className="block text-[10px] leading-3 text-gray-400">الموسم الحالي</span>
+              <span className="block font-semibold text-gray-800">{currentSeason?.name ?? '...'}</span>
+            </span>
+          </span>
+          <ChevronDown size={14} className="text-gray-400" />
+        </button>
+
+        {open && (
+          <div className="absolute left-0 top-full mt-1 w-56 rounded-xl border border-gray-100 bg-white py-1 shadow-lg">
+            {seasons.map(season => (
+              <button
+                key={season.id}
+                onClick={() => { switchSeason(season.id); setOpen(false); }}
+                className="flex w-full items-center gap-2 px-3 py-2 text-right text-sm text-gray-700 transition hover:bg-gray-50"
+              >
+                <Check size={15} className={season.id === currentSeasonId ? 'text-green-600' : 'text-transparent'} />
+                <span className="flex-1">{season.name}</span>
+                {season.is_active && <span className="rounded bg-green-50 px-1.5 py-0.5 text-[10px] text-green-700">Active</span>}
+              </button>
+            ))}
+            <div className="my-1 border-t border-gray-100" />
+            <button
+              onClick={() => { setCreateOpen(true); setOpen(false); }}
+              className="flex w-full items-center gap-2 px-3 py-2 text-sm font-semibold text-[#1e3a5f] transition hover:bg-gray-50"
+            >
+              <Plus size={15} /> إنشاء موسم جديد
+            </button>
+            {currentSeason && !currentSeason.is_active && (
+              <button
+                onClick={() => activateSeason(currentSeason.id).then(() => toast('success', 'تم تفعيل الموسم'))}
+                className="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-700 transition hover:bg-gray-50"
+              >
+                <Check size={15} /> تفعيل الموسم المحدد
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      <Modal isOpen={createOpen} onClose={() => setCreateOpen(false)} title="إنشاء موسم جديد">
+        <div className="space-y-4 p-1">
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Season Name</label>
+            <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} className="w-full rounded-xl border border-gray-200 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">Year</label>
+              <input type="number" value={form.year} onChange={e => setForm({ ...form, year: Number(e.target.value) })} className="w-full rounded-xl border border-gray-200 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">Type</label>
+              <input value={form.type} onChange={e => setForm({ ...form, type: e.target.value })} className="w-full rounded-xl border border-gray-200 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" />
+            </div>
+          </div>
+          <label className="flex items-center gap-2 text-sm text-gray-700">
+            <input type="checkbox" checked={form.activate} onChange={e => setForm({ ...form, activate: e.target.checked })} />
+            Activate after creation
+          </label>
+          <div className="flex gap-3 pt-2">
+            <button onClick={handleCreate} disabled={saving} className="flex-1 rounded-xl bg-[#1e3a5f] py-2.5 text-white transition hover:bg-[#16304d] disabled:opacity-60">
+              {saving ? 'Saving...' : 'Create Season'}
+            </button>
+            <button onClick={() => setCreateOpen(false)} className="flex-1 rounded-xl border border-gray-200 py-2.5 transition hover:bg-gray-50">Cancel</button>
+          </div>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
 function AppContent() {
   const { user, isLoading, isAuthenticated, logout, isAdmin, can } = useAuth();
+  const { currentSeasonId } = useSeason();
   const toast = useToast();
   const [currentPage, setCurrentPage] = useState<ExtendedPage>(() => getPageFromHash());
   const [previousPage, setPreviousPage] = useState<ExtendedPage>('dashboard');
@@ -397,6 +512,8 @@ function AppContent() {
         </div>
       </div>
 
+      <SeasonSelector />
+
       {/* Main Content */}
       <main className="lg:mr-64 min-h-screen transition-all">
         <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto pt-16 lg:pt-8">
@@ -404,7 +521,7 @@ function AppContent() {
             currentPage === 'accessDenied' ? (
               <AccessDeniedScreen onGoHome={handleGoHome} onGoBack={handleGoBack} message={accessDeniedMessage} />
             ) : (
-              <PageRenderer key={currentPage} page={currentPage} />
+              <PageRenderer key={`${currentPage}-${currentSeasonId ?? 'none'}`} page={currentPage} />
             )
           ) : (
             <AccessDeniedScreen onGoHome={handleGoHome} onGoBack={handleGoBack} message={accessDeniedMessage} />
@@ -447,7 +564,9 @@ export default function App() {
   return (
     <AuthProvider>
       <ToastProvider>
-        <AppContent />
+        <SeasonProvider>
+          <AppContent />
+        </SeasonProvider>
       </ToastProvider>
     </AuthProvider>
   );

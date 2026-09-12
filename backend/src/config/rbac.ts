@@ -1,4 +1,4 @@
-export const ACTIONS = ['view', 'create', 'edit', 'delete'] as const;
+export const ACTIONS = ['view', 'create', 'edit', 'delete', 'activate'] as const;
 
 export type PermissionAction = typeof ACTIONS[number];
 
@@ -10,6 +10,7 @@ export type PermissionModule = {
 
 export const PERMISSION_MODULES: PermissionModule[] = [
   { key: 'dashboard', label: 'Dashboard', actions: ['view'] },
+  { key: 'seasons', label: 'Seasons', actions: ['view', 'create', 'edit', 'delete', 'activate'] },
   { key: 'fabric', label: 'Fabric Warehouse' },
   { key: 'fabric_purchases', label: 'Fabric Purchases' },
   { key: 'cutting', label: 'Cutting' },

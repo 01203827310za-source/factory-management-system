@@ -145,6 +145,7 @@ const actionByMethod: Record<string, PermissionAction> = {
 
 const apiModuleBySegment: Record<string, string> = {
   dashboard: 'dashboard',
+  seasons: 'seasons',
   sales: 'sales',
   expenses: 'expenses',
   'ready-stock': 'ready_stock',
@@ -176,6 +177,7 @@ export function permissionForRequest(method: string, path: string): string | nul
   if (!module) return null;
 
   if (segment === 'sales' && rest[1]?.includes('reservation')) return 'sales.edit';
+  if (segment === 'seasons' && rest[0] && rest[1] === 'activate') return 'seasons.activate';
   if ((segment === 'debts' || segment === 'client-accounts') && rest.includes('payments')) {
     const action = actionByMethod[method] ?? 'view';
     return `${module}.${action}`;

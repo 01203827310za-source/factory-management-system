@@ -13,6 +13,7 @@ import payrollRouter from './routes/payroll';
 import auditLogRouter from './routes/auditLog';
 import aiAssistantRouter from './routes/aiAssistant';
 import snapshotsRouter from './routes/snapshots';
+import seasonsRouter from './routes/seasons';
 import { authenticate, requireRoutePermission } from './middleware/auth';
 import { syncDefaultRbac } from './services/rbacService';
 import {
@@ -49,6 +50,7 @@ app.use('/api', (req, res, next) => {
 
 // ===== Routes =====
 app.use('/api/auth', authRouter);
+app.use('/api/seasons', seasonsRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/sales', salesRouter);
 app.use('/api/expenses', expensesRouter);
