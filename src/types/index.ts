@@ -410,7 +410,7 @@ export interface AuditLog {
   user_id: number;
   user_name: string;
   module: string;
-  action: 'CREATE' | 'UPDATE' | 'DELETE' | 'SHIPPING_PAYOUT_CONFIRMED' | 'SHIPPING_PAYOUT_CORRECTED';
+  action: 'CREATE' | 'UPDATE' | 'DELETE' | 'SHIPPING_PAYOUT_CONFIRMED' | 'SHIPPING_PAYOUT_CORRECTED' | 'SHIPPING_PAYOUT_REVERSED';
   record_id: string;
   before_data: string | null;
   after_data: string | null;

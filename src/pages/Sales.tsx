@@ -8,7 +8,7 @@ import {
 import type { Sale, ReturnItem } from '../types';
 import Modal from '../components/Modal';
 import { useToast } from '../components/Toast';
-import { Plus, Edit2, Trash2, Filter, Download, Search, UserPlus, Printer, ArrowLeftRight, RefreshCw, CheckSquare, XCircle, BookmarkPlus, Banknote } from 'lucide-react';
+import { Plus, Edit2, Trash2, Filter, Download, Search, UserPlus, Printer, ArrowLeftRight, RefreshCw, CheckSquare, XCircle, BookmarkPlus } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 const ORDER_STATUSES: Sale['order_status'][] = ['تم الصرف', 'لم يتم الصرف', 'حساب عميل', 'تم الحجز', 'تم الإلغاء'];
@@ -26,10 +26,11 @@ export default function Sales() {
   const [isReservation, setIsReservation] = useState(false);
   const [cancelReservationConfirm, setCancelReservationConfirm] = useState<number | null>(null);
 
-  // Shipping payout confirmation ("تم الصرف" click flow)
-  const [payoutSale, setPayoutSale] = useState<Sale | null>(null);
-  const [payoutAmount, setPayoutAmount] = useState<string>('');
-  const [payoutSubmitting, setPayoutSubmitting] = useState(false);
+  // Whether the "المبلغ المستلم من شركة الشحن" field should keep auto-following
+  // the invoice's remaining amount (invoice_value - deposit_paid). Stays true until
+  // the user edits the field directly, or is false from the start when opening an
+  // already-"تم الصرف" order so its previously saved amount isn't overwritten.
+  const [shippingCollectedAuto, setShippingCollectedAuto] = useState(true);
 
   // Marketers
   const [marketers, setMarketers] = useState<string[]>([]);
@@ -117,10 +118,23 @@ readyStock.forEach((s: any) => {
     stockColors[s.model_code].push(s.color);
   }
 });
-  const openAdd = () => { setEditSale(null); setIsReservation(false); setForm({ ...emptyForm, marketer: marketers[0] || '', order_status: 'تم الصرف' }); setModalOpen(true); };
-  const openReservation = () => { setEditSale(null); setIsReservation(true); setForm({ ...emptyForm, marketer: marketers[0] || '', order_status: 'تم الحجز' }); setModalOpen(true); };
+  const openAdd = () => {
+    setEditSale(null); setIsReservation(false);
+    setShippingCollectedAuto(true); // status defaults to "تم الصرف" — track the remaining amount as it's typed
+    setForm({ ...emptyForm, marketer: marketers[0] || '', order_status: 'تم الصرف' });
+    setModalOpen(true);
+  };
+  const openReservation = () => {
+    setEditSale(null); setIsReservation(true);
+    setShippingCollectedAuto(true);
+    setForm({ ...emptyForm, marketer: marketers[0] || '', order_status: 'تم الحجز' });
+    setModalOpen(true);
+  };
   const openEdit = (sale: Sale) => {
     setEditSale(sale);
+    // Already "تم الصرف"? Show its previously saved amount as-is (don't overwrite it).
+    // Otherwise start in auto mode so switching the status to "تم الصرف" defaults it.
+    setShippingCollectedAuto(sale.order_status !== 'تم الصرف');
     setForm({
       order_number: sale.order_number, marketer: sale.marketer, client: sale.client, mobile: sale.mobile,
       model1_code: sale.model1_code, model1_qty: sale.model1_qty, model1_color: sale.model1_color,
@@ -136,9 +150,44 @@ readyStock.forEach((s: any) => {
     setModalOpen(true);
   };
 
+  // "صرف الحجز" — jump straight into the standard Edit modal with the status already
+  // set to "تم الصرف" so the received-amount field appears immediately, defaulted to
+  // the remaining amount. Saving goes through the same single حفظ button/flow as any
+  // other edit (release-reservation + payout math both happen in the PUT handler).
+  const openConvertReservation = (sale: Sale) => {
+    openEdit(sale);
+    setShippingCollectedAuto(true);
+    setForm(f => ({ ...f, order_status: 'تم الصرف', shipping_collected: Math.max(0, sale.invoice_value - sale.deposit_paid) }));
+  };
+
+  // Keep the received-amount field following the invoice's remaining balance while
+  // in "auto" mode — i.e. until the user edits it directly (see shippingCollectedAuto).
+  useEffect(() => {
+    if (shippingCollectedAuto && form.order_status === 'تم الصرف') {
+      const rem = Math.max(0, form.invoice_value - form.deposit_paid);
+      if (form.shipping_collected !== rem) {
+        setForm(f => ({ ...f, shipping_collected: rem }));
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.invoice_value, form.deposit_paid, form.order_status, shippingCollectedAuto]);
+
+  // Validated only while status = "تم الصرف" — hidden/irrelevant otherwise, since the
+  // backend always saves shipping_collected as 0 for any other status.
+  const remainingNow = Math.max(0, form.invoice_value - form.deposit_paid);
+  const shippingCollectedError = form.order_status !== 'تم الصرف' ? ''
+    : !Number.isFinite(form.shipping_collected) ? 'المبلغ المستلم غير صالح'
+    : form.shipping_collected < 0 ? 'المبلغ المستلم لا يمكن أن يكون أقل من صفر'
+    : form.shipping_collected > remainingNow ? 'المبلغ المستلم لا يمكن أن يكون أكبر من المبلغ المتبقي'
+    : '';
+
   const handleSave = async () => {
     if (!form.order_number || !form.client) {
       toast('error', 'يرجى ملء رقم الأوردر واسم العميل');
+      return;
+    }
+    if (form.order_status === 'تم الصرف' && shippingCollectedError) {
+      toast('error', shippingCollectedError);
       return;
     }
     const data = {
@@ -155,11 +204,12 @@ readyStock.forEach((s: any) => {
       row_number: sales.length + 1,
     };
     try {
-      if (editSale) {
-        await salesApi.update(editSale.id, data as any);
+      const result = editSale ? await salesApi.update(editSale.id, data as any) : await salesApi.add(data as any);
+      if (form.order_status === 'تم الصرف' && result.collection_difference > 0) {
+        toast('success', `تم الحفظ — المستلم فعليًا ${form.shipping_collected.toLocaleString('ar-EG')} ج، الفرق غير المحصل ${result.collection_difference.toLocaleString('ar-EG')} ج`);
+      } else if (editSale) {
         toast('success', 'تم تعديل الأوردر بنجاح');
       } else {
-        await salesApi.add(data as any);
         toast('success', form.order_status === 'تم الحجز' ? 'تم إضافة الحجز بنجاح' : 'تم إضافة الأوردر بنجاح');
       }
       await loadData();
@@ -172,36 +222,6 @@ readyStock.forEach((s: any) => {
   const handleDelete = async (id: number) => {
     await salesApi.remove(id);
 await loadData();; setDeleteConfirm(null); toast('success', 'تم حذف الأوردر');
-  };
-
-  // Open the "تأكيد مبلغ التحصيل" modal for a sale — used both to confirm a fresh
-  // "تم الصرف" payout and to correct one already confirmed.
-  const openPayoutModal = (sale: Sale) => {
-    setPayoutSale(sale);
-    setPayoutAmount(String(sale.order_status === 'تم الصرف' ? sale.shipping_collected : sale.remaining));
-  };
-
-  const payoutAmountNum = Number(payoutAmount);
-  const payoutMaxReceivable = payoutSale ? Math.max(payoutSale.remaining, 0) : 0;
-  const payoutIsValid = payoutAmount.trim() !== '' && Number.isFinite(payoutAmountNum) && payoutAmountNum >= 0
-    && !!payoutSale && payoutAmountNum <= payoutMaxReceivable;
-  const payoutDifference = payoutSale ? Math.max(0, payoutSale.remaining - (Number.isFinite(payoutAmountNum) ? payoutAmountNum : 0)) : 0;
-
-  const handleConfirmPayout = async () => {
-    if (!payoutSale || !payoutIsValid) return;
-    setPayoutSubmitting(true);
-    try {
-      const result = await salesApi.confirmPayout(payoutSale.id, payoutAmountNum);
-      await loadData();
-      setPayoutSale(null);
-      toast('success', result.collection_difference > 0
-        ? `تم تأكيد الصرف — المستلم فعليًا ${payoutAmountNum.toLocaleString('ar-EG')} ج، الفرق غير المحصل ${result.collection_difference.toLocaleString('ar-EG')} ج`
-        : 'تم تأكيد الصرف — تم تحصيل المبلغ بالكامل');
-    } catch (e: unknown) {
-      toast('error', e instanceof Error ? e.message : 'خطأ في تأكيد الصرف');
-    } finally {
-      setPayoutSubmitting(false);
-    }
   };
 
   const handleCancelReservation = async (id: number) => {
@@ -436,23 +456,13 @@ await loadData();(returnForm);
                     <div className="flex items-center justify-center gap-1 flex-wrap">
                       {sale.order_status === 'تم الحجز' && (
                         <>
-                          <button onClick={() => openPayoutModal(sale)} className="p-1.5 text-emerald-600 hover:bg-emerald-100 rounded-lg" title="صرف الحجز">
+                          <button onClick={() => openConvertReservation(sale)} className="p-1.5 text-emerald-600 hover:bg-emerald-100 rounded-lg" title="صرف الحجز">
                             <CheckSquare size={14} />
                           </button>
                           <button onClick={() => setCancelReservationConfirm(sale.id)} className="p-1.5 text-red-500 hover:bg-red-100 rounded-lg" title="إلغاء الحجز">
                             <XCircle size={14} />
                           </button>
                         </>
-                      )}
-                      {(sale.order_status === 'لم يتم الصرف' || sale.order_status === 'حساب عميل') && (
-                        <button onClick={() => openPayoutModal(sale)} className="p-1.5 text-emerald-600 hover:bg-emerald-100 rounded-lg" title="تم الصرف">
-                          <Banknote size={14} />
-                        </button>
-                      )}
-                      {sale.order_status === 'تم الصرف' && (
-                        <button onClick={() => openPayoutModal(sale)} className="p-1.5 text-amber-600 hover:bg-amber-100 rounded-lg" title="تعديل المبلغ المستلم فعليًا">
-                          <Banknote size={14} />
-                        </button>
                       )}
                       <button onClick={() => setInvoiceSale(sale)} className="p-1.5 text-indigo-600 hover:bg-indigo-100 rounded-lg" title="فاتورة">
                         <Printer size={14} />
@@ -574,9 +584,40 @@ await loadData();(returnForm);
           </div>
           <div>
             <label className={labelClass}>حالة الأوردر</label>
-            <select className={inputClass} value={form.order_status} onChange={e => setForm({...form, order_status: e.target.value as Sale['order_status']})}>
+            <select
+              className={inputClass}
+              value={form.order_status}
+              onChange={e => {
+                const nextStatus = e.target.value as Sale['order_status'];
+                if (nextStatus === 'تم الصرف' && form.order_status !== 'تم الصرف') {
+                  // Freshly switched into "تم الصرف" — default to the current remaining
+                  // amount and resume auto-tracking it until the user edits it directly.
+                  setShippingCollectedAuto(true);
+                  setForm({ ...form, order_status: nextStatus, shipping_collected: Math.max(0, form.invoice_value - form.deposit_paid) });
+                } else {
+                  setForm({ ...form, order_status: nextStatus });
+                }
+              }}
+            >
               {ORDER_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
+
+            {/* Shown only while حالة الأوردر = تم الصرف — the amount actually received
+                from the shipping company is what enters cash, never the full remaining
+                balance. Saved together with the rest of the order by the حفظ button below. */}
+            {form.order_status === 'تم الصرف' && (
+              <div className="mt-2">
+                <label className={labelClass}>المبلغ المستلم من شركة الشحن</label>
+                <input
+                  type="number"
+                  className={`${inputClass} ${shippingCollectedError ? 'border-red-400 focus:ring-red-400' : ''}`}
+                  value={form.shipping_collected}
+                  onChange={e => { setShippingCollectedAuto(false); setForm({ ...form, shipping_collected: parseFloat(e.target.value) || 0 }); }}
+                  min={0} max={remainingNow}
+                />
+                {shippingCollectedError && <p className="text-xs text-red-600 mt-1">{shippingCollectedError}</p>}
+              </div>
+            )}
           </div>
           <div>
             <label className={labelClass}>طريقة التسليم</label>
@@ -590,10 +631,6 @@ await loadData();(returnForm);
           <div>
             <label className={labelClass}>المخزن</label>
             <input className={inputClass} value={form.warehouse} onChange={e => setForm({...form, warehouse: e.target.value})} />
-          </div>
-          <div>
-            <label className={labelClass}>تم التحصيل من الشحن</label>
-            <input type="number" className={inputClass} value={form.shipping_collected} onChange={e => setForm({...form, shipping_collected: parseFloat(e.target.value) || 0})} min={0} />
           </div>
         </div>
 
@@ -775,51 +812,6 @@ await loadData();(returnForm);
         </div>
       </Modal>
 
-      {/* Shipping Payout Confirmation — "تأكيد مبلغ التحصيل" */}
-      <Modal isOpen={payoutSale !== null} onClose={() => !payoutSubmitting && setPayoutSale(null)} title="تأكيد مبلغ التحصيل" size="sm">
-        {payoutSale && (
-          <div className="space-y-4">
-            <div className="bg-gray-50 rounded-lg p-4 text-sm space-y-2">
-              <div className="flex justify-between"><span className="text-gray-500">رقم الفاتورة / الطلب:</span><strong>{payoutSale.order_number}</strong></div>
-              <div className="flex justify-between"><span className="text-gray-500">إجمالي الفاتورة:</span><strong>{payoutSale.invoice_value.toLocaleString('ar-EG')} ج</strong></div>
-              <div className="flex justify-between"><span className="text-gray-500">المبلغ المتبقي:</span><strong className="text-red-600">{payoutSale.remaining.toLocaleString('ar-EG')} ج</strong></div>
-              <div className="flex justify-between"><span className="text-gray-500">المبلغ المطلوب تأكيده:</span><strong>{payoutMaxReceivable.toLocaleString('ar-EG')} ج</strong></div>
-            </div>
-
-            <div>
-              <label className={labelClass}>المبلغ المستلم فعليًا من شركة الشحن</label>
-              <input
-                type="number" autoFocus
-                className={`${inputClass} ${!payoutIsValid ? 'border-red-400 focus:ring-red-400' : ''}`}
-                value={payoutAmount}
-                onChange={e => setPayoutAmount(e.target.value)}
-                min={0} max={payoutMaxReceivable}
-              />
-              {!payoutIsValid && (
-                <p className="text-xs text-red-600 mt-1">
-                  {payoutAmount.trim() === '' || !Number.isFinite(payoutAmountNum)
-                    ? 'يرجى إدخال مبلغ صحيح'
-                    : payoutAmountNum < 0
-                      ? 'المبلغ لا يمكن أن يكون أقل من صفر'
-                      : 'المبلغ لا يمكن أن يتجاوز المبلغ المتبقي'}
-                </p>
-              )}
-            </div>
-
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm space-y-1">
-              <div className="flex justify-between"><span>المتبقي قبل الصرف:</span><strong>{payoutSale.remaining.toLocaleString('ar-EG')} ج</strong></div>
-              <div className="flex justify-between"><span>المستلم فعليًا:</span><strong className="text-emerald-600">{payoutIsValid ? payoutAmountNum.toLocaleString('ar-EG') : 0} ج</strong></div>
-              <div className="flex justify-between"><span>الفرق غير المحصل:</span><strong className={payoutDifference > 0 ? 'text-red-600' : 'text-gray-400'}>{payoutDifference.toLocaleString('ar-EG')} ج</strong></div>
-            </div>
-          </div>
-        )}
-        <div className="flex justify-end gap-3 mt-6">
-          <button disabled={payoutSubmitting} onClick={() => setPayoutSale(null)} className="px-5 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50">إلغاء</button>
-          <button disabled={!payoutIsValid || payoutSubmitting} onClick={handleConfirmPayout} className="px-5 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed">
-            {payoutSubmitting ? '...جارٍ التأكيد' : 'تأكيد الصرف'}
-          </button>
-        </div>
-      </Modal>
 
       {/* Cancel Reservation Confirm */}
       <Modal isOpen={cancelReservationConfirm !== null} onClose={() => setCancelReservationConfirm(null)} title="تأكيد إلغاء الحجز" size="sm">

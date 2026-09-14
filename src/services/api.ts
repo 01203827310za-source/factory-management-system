@@ -157,17 +157,19 @@ export interface RbacMetadata {
 }
 
 // ===== SALES =====
+// add/update also return `collection_difference` whenever the saved order_status is
+// "تم الصرف" — the gap between the invoice's remaining balance and the actual amount
+// received from the shipping company (see the shipping_collected field below).
 export const salesApi = {
   getAll: () => get<SaleRecord[]>('/sales'),
-  add: (data: Omit<SaleRecord, 'id' | 'created_at'>) => post<SaleRecord>('/sales', data),
-  update: (id: number, data: Partial<SaleRecord>) => put<SaleRecord>(`/sales/${id}`, data),
+  add: (data: Omit<SaleRecord, 'id' | 'created_at'>) => post<SaleRecord & { collection_difference: number }>('/sales', data),
+  update: (id: number, data: Partial<SaleRecord>) => put<SaleRecord & { collection_difference: number }>(`/sales/${id}`, data),
   remove: (id: number) => del<{ message: string }>(`/sales/${id}`),
-  convertReservation: (id: number) => post<SaleRecord>(`/sales/${id}/convert-reservation`, {}),
+  // Kept for any non-UI caller; the Edit Order modal now drives "تم الحجز" → "تم الصرف"
+  // through update() (status + received amount saved together via حفظ).
+  convertReservation: (id: number, received_amount: number) =>
+    post<SaleRecord & { collection_difference: number }>(`/sales/${id}/convert-reservation`, { received_amount }),
   cancelReservation: (id: number) => post<SaleRecord>(`/sales/${id}/cancel-reservation`, {}),
-  // Confirms the ACTUAL amount received from the shipping company and marks the
-  // order "تم الصرف". Also used to correct an already-confirmed amount.
-  confirmPayout: (id: number, received_amount: number) =>
-    post<SaleRecord & { collection_difference: number }>(`/sales/${id}/confirm-payout`, { received_amount }),
 };
 
 export type SaleRecord = {

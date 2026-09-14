@@ -49,23 +49,48 @@ async function adjustReserved(models: ModelSlot[], delta: 1 | -1, seasonId: numb
 }
 
 // Validate a shipping-payout "received amount" against the real remaining balance.
-// Returns a parsed number, or null if invalid (caller responds 400 with `reason`).
 function parseReceivedAmount(raw: unknown, remaining: number): { value: number } | { error: string } {
   if (raw === undefined || raw === null || raw === '') {
-    return { error: 'المبلغ المستلم فعليًا مطلوب' };
+    return { error: 'المبلغ المستلم من شركة الشحن مطلوب' };
   }
   const value = Number(raw);
   if (!Number.isFinite(value)) {
-    return { error: 'المبلغ المستلم فعليًا غير صالح' };
+    return { error: 'المبلغ المستلم غير صالح' };
   }
   if (value < 0) {
-    return { error: 'المبلغ المستلم فعليًا لا يمكن أن يكون أقل من صفر' };
+    return { error: 'المبلغ المستلم لا يمكن أن يكون أقل من صفر' };
   }
   // Guard against floating point noise (e.g. remaining=5000, received=5000.0000000001)
   if (value > remaining + 0.005) {
-    return { error: 'المبلغ المستلم فعليًا لا يمكن أن يتجاوز المبلغ المتبقي' };
+    return { error: 'المبلغ المستلم لا يمكن أن يكون أكبر من المبلغ المتبقي' };
   }
   return { value: Math.min(value, remaining) };
+}
+
+// Resolves what "shipping_collected" must be saved as for a given (about-to-be-saved)
+// order_status, folding in the "تم الصرف" business rule everywhere a sale is written:
+//   - status !== 'تم الصرف'  → always 0. The order isn't dispatched (or was un-dispatched),
+//     so no shipping-company receipt can be an active cash transaction (point: "do not
+//     leave the previous received amount as an active cash transaction").
+//   - status === 'تم الصرف' → the caller-supplied amount, validated against the real
+//     remaining balance server-side (never trusted blindly). If the caller didn't resend
+//     it (e.g. an edit that only touches other fields on an already-dispatched order),
+//     the previously saved amount carries over — re-validated against the current
+//     remaining balance so it can never end up saved above it.
+function resolveShippingCollected(
+  status: string,
+  providedRaw: unknown,
+  remaining: number,
+  wasDispatched: boolean,
+  previouslyReceived: number,
+): { value: number; isCorrection: boolean } | { error: string } {
+  if (status !== 'تم الصرف') {
+    return { value: 0, isCorrection: false };
+  }
+  const candidate = providedRaw !== undefined ? providedRaw : (wasDispatched ? previouslyReceived : undefined);
+  const parsed = parseReceivedAmount(candidate, Math.max(remaining, 0));
+  if ('error' in parsed) return parsed;
+  return { value: parsed.value, isCorrection: wasDispatched };
 }
 
 // ─── routes ─────────────────────────────────────────────────────────────────
@@ -85,14 +110,27 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
   try {
     const seasonId = await getSeasonId(req);
     const data = req.body as Record<string, unknown>;
-    const isReservation = data.order_status === 'تم الحجز';
+    const status = (data.order_status as string) || '';
+    const isReservation = status === 'تم الحجز';
+    const remaining = (Number(data.invoice_value) || 0) - (Number(data.deposit_paid) || 0);
+
+    // A brand-new order can be entered directly as "تم الصرف" (e.g. a counter sale) —
+    // the same received-amount rule applies: only the amount actually confirmed as
+    // received from the shipping company is ever recorded, never the full remaining
+    // balance, and it's re-validated here regardless of what the frontend sent.
+    const resolved = resolveShippingCollected(status, data.shipping_collected, remaining, false, 0);
+    if ('error' in resolved) {
+      return res.status(400).json({ message: resolved.error });
+    }
+
     const { season: _season, id: _id, season_id: _seasonId, ...saleData } = data as Omit<Prisma.SaleUncheckedCreateInput, 'season_id' | 'remaining'> & Record<string, unknown>;
 
     const sale = await prisma.sale.create({
       data: {
         ...saleData,
         season_id: seasonId,
-        remaining: (Number(data.invoice_value) || 0) - (Number(data.deposit_paid) || 0),
+        remaining,
+        shipping_collected: resolved.value,
       },
     });
 
@@ -100,9 +138,16 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
       await adjustReserved(extractModels(data), +1, seasonId);
     }
 
-    logAudit({ user: req.user, module: 'Sales', action: 'CREATE', record_id: sale.id,
-      after_data: sale, description: `إضافة عملية بيع: ${sale.client} - ${sale.order_number}` });
-    return res.status(201).json(sale);
+    const isDispatched = status === 'تم الصرف';
+    const collection_difference = isDispatched ? Math.max(0, remaining - resolved.value) : 0;
+    logAudit({
+      user: req.user, module: 'Sales', action: isDispatched ? 'SHIPPING_PAYOUT_CONFIRMED' : 'CREATE', record_id: sale.id,
+      after_data: isDispatched ? { ...sale, collection_difference } : sale,
+      description: isDispatched
+        ? `إضافة عملية بيع (تم الصرف مباشرة): ${sale.client} - ${sale.order_number} — المتبقي: ${remaining} — المستلم فعليًا: ${resolved.value} — الفرق غير المحصل: ${collection_difference}`
+        : `إضافة عملية بيع: ${sale.client} - ${sale.order_number}`,
+    });
+    return res.status(201).json({ ...sale, collection_difference });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: 'خطأ في إضافة الطلب' });
@@ -123,28 +168,58 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     const newStatus = (data.order_status as string | undefined) ?? oldSale.order_status;
     const willBeReservation = newStatus === 'تم الحجز';
 
+    const inv = Number(data.invoice_value ?? oldSale.invoice_value ?? 0);
+    const dep = Number(data.deposit_paid ?? oldSale.deposit_paid ?? 0);
+    const remaining = inv - dep;
     if (data.invoice_value !== undefined || data.deposit_paid !== undefined) {
-      const inv = Number(data.invoice_value ?? oldSale.invoice_value ?? 0);
-      const dep = Number(data.deposit_paid ?? oldSale.deposit_paid ?? 0);
-      data.remaining = inv - dep;
+      data.remaining = remaining;
     }
 
-    // Reverse old reservation quantities before saving
-    if (wasReservation) {
-      await adjustReserved(extractModels(oldSale as unknown as Record<string, unknown>), -1, seasonId);
+    // The "تم الصرف" rule, enforced on every write, not just a dedicated endpoint:
+    // only the amount actually confirmed as received from the shipping company is ever
+    // saved as shipping_collected (re-validated against the real remaining balance —
+    // never trusted blindly), and it is reset to 0 the moment the order is anything
+    // other than "تم الصرف" (no stale received amount is left as an active cash
+    // transaction once an order is un-dispatched).
+    const wasDispatched = oldSale.order_status === 'تم الصرف';
+    const willBeDispatched = newStatus === 'تم الصرف';
+    const resolved = resolveShippingCollected(newStatus, data.shipping_collected, remaining, wasDispatched, oldSale.shipping_collected);
+    if ('error' in resolved) {
+      return res.status(400).json({ message: resolved.error });
     }
+    data.shipping_collected = resolved.value;
 
-    const sale = await prisma.sale.update({ where: { id }, data: { ...data, season_id: seasonId } });
+    const sale = await prisma.$transaction(async (tx) => {
+      // Reverse old reservation quantities before saving
+      if (wasReservation) {
+        await adjustReserved(extractModels(oldSale as unknown as Record<string, unknown>), -1, seasonId, tx);
+      }
 
-    // Apply new reservation quantities after saving
-    if (willBeReservation) {
-      await adjustReserved(extractModels(data), +1, seasonId);
-    }
+      const updated = await tx.sale.update({ where: { id }, data: { ...data, season_id: seasonId } });
 
-    logAudit({ user: req.user, module: 'Sales', action: 'UPDATE', record_id: id,
-      before_data: oldSale, after_data: sale, description: `تعديل عملية بيع: ${sale.client} - ${sale.order_number}` });
-    return res.json(sale);
-  } catch {
+      // Apply new reservation quantities after saving
+      if (willBeReservation) {
+        await adjustReserved(extractModels(data), +1, seasonId, tx);
+      }
+
+      return updated;
+    });
+
+    const collection_difference = willBeDispatched ? Math.max(0, remaining - resolved.value) : 0;
+    const action = willBeDispatched
+      ? (resolved.isCorrection ? 'SHIPPING_PAYOUT_CORRECTED' : 'SHIPPING_PAYOUT_CONFIRMED')
+      : (wasDispatched ? 'SHIPPING_PAYOUT_REVERSED' : 'UPDATE');
+    const description = willBeDispatched
+      ? `تعديل عملية بيع (تم الصرف): ${sale.client} - ${sale.order_number} — المتبقي: ${remaining} — المستلم فعليًا: ${resolved.value} — الفرق غير المحصل: ${collection_difference}`
+      : (wasDispatched
+        ? `تعديل عملية بيع — إلغاء حالة الصرف وعكس المبلغ المستلم سابقًا (${oldSale.shipping_collected}): ${sale.client} - ${sale.order_number}`
+        : `تعديل عملية بيع: ${sale.client} - ${sale.order_number}`);
+
+    logAudit({ user: req.user, module: 'Sales', action, record_id: id,
+      before_data: oldSale, after_data: { ...sale, collection_difference }, description });
+    return res.json({ ...sale, collection_difference });
+  } catch (err) {
+    console.error(err);
     return res.status(500).json({ message: 'خطأ في تحديث الطلب' });
   }
 });
@@ -168,70 +243,13 @@ router.delete('/:id', requireManager, async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/sales/:id/confirm-payout — confirms the ACTUAL amount received from the
-// shipping company and marks the order "تم الصرف". This is the "تم الصرف" click flow:
-// the shipping company may pay less than the invoice's remaining balance, so the
-// caller-supplied amount is validated against the real remaining balance server-side
-// and only that amount is ever recorded as collected — never the full remaining balance.
-//
-// Also doubles as the correction flow (point 11): calling it again on an already
-// "تم الصرف" order overwrites shipping_collected with the corrected amount — since every
-// financial total reads shipping_collected live, this reverses the old effect and
-// applies the new one without any duplicate entry.
-router.post('/:id/confirm-payout', requireManager, async (req: Request, res: Response) => {
-  try {
-    const seasonId = await getSeasonId(req);
-    const id = parseInt(req.params.id as string);
-    const sale = await prisma.sale.findFirst({ where: { id, season_id: seasonId } });
-    if (!sale) return res.status(404).json({ message: 'الطلب غير موجود' });
-    if (sale.order_status === 'تم الإلغاء') {
-      return res.status(400).json({ message: 'لا يمكن تأكيد صرف طلب ملغي' });
-    }
-
-    // Never trust the frontend's number — always validate against the sale's real
-    // remaining balance as stored server-side. (Clamped at 0: if the customer already
-    // overpaid, remaining is negative and there is nothing left to collect.)
-    const remaining = sale.remaining;
-    const parsed = parseReceivedAmount((req.body as Record<string, unknown>)?.received_amount, Math.max(remaining, 0));
-    if ('error' in parsed) {
-      return res.status(400).json({ message: parsed.error });
-    }
-    const received = parsed.value;
-
-    const wasReservation = sale.order_status === 'تم الحجز';
-    const isCorrection   = sale.order_status === 'تم الصرف';
-    const previousStatus = sale.order_status;
-    const previousReceived = sale.shipping_collected;
-
-    const updated = await prisma.$transaction(async (tx) => {
-      // Releasing a reservation's stock hold is part of the same transition to
-      // "تم الصرف" — keep it atomic with the status/amount update.
-      if (wasReservation) {
-        await adjustReserved(extractModels(sale as unknown as Record<string, unknown>), -1, seasonId, tx);
-      }
-      return tx.sale.update({
-        where: { id },
-        data: { order_status: 'تم الصرف', shipping_collected: received },
-      });
-    });
-
-    const collection_difference = Math.max(0, remaining - received);
-
-    logAudit({
-      user: req.user, module: 'Sales', action: isCorrection ? 'SHIPPING_PAYOUT_CORRECTED' : 'SHIPPING_PAYOUT_CONFIRMED', record_id: id,
-      before_data: { order_status: previousStatus, shipping_collected: previousReceived, remaining },
-      after_data: { order_status: 'تم الصرف', shipping_collected: received, remaining, collection_difference },
-      description: `${sale.client} - ${sale.order_number} — المتبقي: ${remaining} — المستلم فعليًا: ${received} — الفرق غير المحصل: ${collection_difference}`,
-    });
-
-    return res.json({ ...updated, collection_difference });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ message: 'خطأ في تأكيد الصرف' });
-  }
-});
-
 // POST /api/sales/:id/convert-reservation — تم الحجز → تم الصرف
+//
+// The frontend now drives this transition through the regular Edit Order modal (status
+// dropdown + PUT /api/sales/:id), which shows/validates the received-amount field inline.
+// This endpoint is kept for any other caller, but applies the exact same "تم الصرف" rule:
+// received_amount is required, validated against the real remaining balance, and only
+// that amount — never the full remaining balance — is recorded as collected.
 router.post('/:id/convert-reservation', requireManager, async (req: Request, res: Response) => {
   try {
     const seasonId = await getSeasonId(req);
@@ -242,16 +260,25 @@ router.post('/:id/convert-reservation', requireManager, async (req: Request, res
       return res.status(400).json({ message: 'هذا الطلب ليس حجزاً' });
     }
 
-    // Release reserved qty; actual_balance automatically drops once status → 'تم الصرف'
-    await adjustReserved(extractModels(sale as unknown as Record<string, unknown>), -1, seasonId);
+    const resolved = resolveShippingCollected('تم الصرف', (req.body as Record<string, unknown>)?.received_amount, sale.remaining, false, 0);
+    if ('error' in resolved) {
+      return res.status(400).json({ message: resolved.error });
+    }
 
-    const updated = await prisma.sale.update({
-      where: { id },
-      data: { order_status: 'تم الصرف' },
+    const updated = await prisma.$transaction(async (tx) => {
+      // Release reserved qty; actual_balance automatically drops once status → 'تم الصرف'
+      await adjustReserved(extractModels(sale as unknown as Record<string, unknown>), -1, seasonId, tx);
+      return tx.sale.update({
+        where: { id },
+        data: { order_status: 'تم الصرف', shipping_collected: resolved.value },
+      });
     });
-    logAudit({ user: req.user, module: 'Sales', action: 'UPDATE', record_id: id,
-      before_data: sale, after_data: updated, description: `تحويل حجز إلى صرف: ${sale.client} - ${sale.order_number}` });
-    return res.json(updated);
+
+    const collection_difference = Math.max(0, sale.remaining - resolved.value);
+    logAudit({ user: req.user, module: 'Sales', action: 'SHIPPING_PAYOUT_CONFIRMED', record_id: id,
+      before_data: sale, after_data: { ...updated, collection_difference },
+      description: `تحويل حجز إلى صرف: ${sale.client} - ${sale.order_number} — المتبقي: ${sale.remaining} — المستلم فعليًا: ${resolved.value} — الفرق غير المحصل: ${collection_difference}` });
+    return res.json({ ...updated, collection_difference });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: 'خطأ في تحويل الحجز' });

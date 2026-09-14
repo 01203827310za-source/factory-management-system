@@ -23,6 +23,7 @@ const ACTION_LABELS: Record<string, { label: string; color: string }> = {
   DELETE: { label: 'حذف',    color: 'bg-red-100 text-red-700'     },
   SHIPPING_PAYOUT_CONFIRMED: { label: 'تأكيد صرف شحن', color: 'bg-emerald-100 text-emerald-700' },
   SHIPPING_PAYOUT_CORRECTED: { label: 'تصحيح مبلغ صرف شحن', color: 'bg-amber-100 text-amber-700' },
+  SHIPPING_PAYOUT_REVERSED: { label: 'إلغاء صرف شحن', color: 'bg-red-100 text-red-700' },
 };
 
 function fmtDatetime(ts: string) {
@@ -238,6 +239,7 @@ export default function AuditLog() {
               <option value="DELETE">حذف</option>
               <option value="SHIPPING_PAYOUT_CONFIRMED">تأكيد صرف شحن</option>
               <option value="SHIPPING_PAYOUT_CORRECTED">تصحيح مبلغ صرف شحن</option>
+              <option value="SHIPPING_PAYOUT_REVERSED">إلغاء صرف شحن</option>
             </select>
           </div>
           <button onClick={handleSearch}
