@@ -154,7 +154,10 @@ async function gatherSnapshot(seasonId: number) {
   // ── Sales metrics ──────────────────────────────────────────────────────────
   const totalSalesValue   = sales.reduce((s, x) => s + x.invoice_value, 0);
   const totalDeposits     = sales.reduce((s, x) => s + x.deposit_paid, 0);
-  const totalRemaining    = sales.filter(x => x.order_status === 'لم يتم الصرف').reduce((s, x) => s + x.remaining, 0);
+  const dispatchedUncollected = sales
+    .filter(x => x.order_status === 'تم الصرف')
+    .reduce((s, x) => s + Math.max(0, x.remaining - x.shipping_collected), 0);
+  const totalRemaining    = sales.filter(x => x.order_status === 'لم يتم الصرف').reduce((s, x) => s + x.remaining, 0) + dispatchedUncollected;
   const reservationsCount = sales.filter(x => x.order_status === 'تم الحجز').length;
   const reservationsValue = sales.filter(x => x.order_status === 'تم الحجز').reduce((s, x) => s + x.invoice_value, 0);
   const dispatchedCount   = sales.filter(x => x.order_status === 'تم الصرف').length;
@@ -167,7 +170,9 @@ async function gatherSnapshot(seasonId: number) {
 
   // ── Financial metrics ──────────────────────────────────────────────────────
   const depositIn   = sales.reduce((s, x) => s + x.deposit_paid, 0);
-  const remainingIn = sales.filter(x => x.order_status === 'تم الصرف').reduce((s, x) => s + x.remaining, 0);
+  // Cash in from dispatched orders = only what the shipping company actually paid,
+  // never the full remaining invoice balance (see confirm-payout in sales.ts).
+  const remainingIn = sales.filter(x => x.order_status === 'تم الصرف').reduce((s, x) => s + x.shipping_collected, 0);
   const clientPayIn = paymentLogs.filter(p => p.type === 'client_payment').reduce((s, p) => s + p.amount, 0);
   const debtOut     = paymentLogs.filter(p => p.type === 'debt_payment').reduce((s, p) => s + p.amount, 0);
   const refundOut   = returns_.reduce((s, r) => s + r.refund_amount, 0);

@@ -83,7 +83,12 @@ function computeCapitalSnapshot(db: AllData, upToDate: string) {
 
   const clientBalance  = clientAccts.filter(ca => ca.date <= upToDate).reduce((s, ca) => s + ca.remaining, 0);
   const salesRemaining = sales.filter(s => sd(s) <= upToDate && s.order_status === 'لم يتم الصرف').reduce((s, x) => s + x.remaining, 0);
-  const moneyOwed      = salesRemaining + clientBalance;
+  // Dispatched orders where the shipping company paid less than the remaining balance
+  // still leave that gap owed by the customer — it must not vanish from the books.
+  const dispatchedUncollected = sales
+    .filter(s => sd(s) <= upToDate && s.order_status === 'تم الصرف')
+    .reduce((s, x) => s + Math.max(0, x.remaining - x.shipping_collected), 0);
+  const moneyOwed      = salesRemaining + dispatchedUncollected + clientBalance;
 
   const financialSummary = computeFinancialSummary(
     { sales: sales.filter(s => sd(s) <= upToDate), expenses: expenses.filter(e => e.date <= upToDate), returns_: returns_.filter(r => r.date <= upToDate), paymentLogs: paymentLogs.filter(p => p.date <= upToDate) },
@@ -196,7 +201,10 @@ router.get('/', async (req: Request, res: Response) => {
       clientMap[c].remaining += s.remaining;
     });
     const topClients      = Object.entries(clientMap).map(([client, d]) => ({ client, ...d })).sort((a, b) => b.value - a.value).slice(0, 15);
-    const totalOutstanding = sales.filter(s => s.order_status === 'لم يتم الصرف').reduce((s, x) => s + x.remaining, 0) + clientAccts.reduce((s, ca) => s + ca.remaining, 0);
+    const dispatchedUncollectedTotal = sales
+      .filter(s => s.order_status === 'تم الصرف')
+      .reduce((s, x) => s + Math.max(0, x.remaining - x.shipping_collected), 0);
+    const totalOutstanding = sales.filter(s => s.order_status === 'لم يتم الصرف').reduce((s, x) => s + x.remaining, 0) + dispatchedUncollectedTotal + clientAccts.reduce((s, ca) => s + ca.remaining, 0);
     const debtsList       = debts.filter(d => d.remaining > 0).map(d => ({ name: d.name, remaining: d.remaining }));
 
     const reservSales = sales.filter(s => s.order_status === 'تم الحجز');
@@ -307,13 +315,14 @@ router.get('/employee-movements', async (req: Request, res: Response) => {
         amount: s.deposit_paid, direction: 'in',
       }));
 
-    // 2. Remaining payments on dispatched orders
+    // 2. Actual cash received from the shipping company on dispatched orders
+    // (never the full remaining balance — see confirm-payout in sales.ts)
     sales
-      .filter(s => s.order_status === 'تم الصرف' && s.remaining !== 0 && inRange(saleD(s)))
+      .filter(s => s.order_status === 'تم الصرف' && s.shipping_collected !== 0 && inRange(saleD(s)))
       .forEach(s => transactions.push({
-        date: saleD(s), type: 'متبقي أوردر',
+        date: saleD(s), type: 'تحصيل شركة الشحن',
         description: `أوردر رقم ${s.order_number} — تم الصرف`, client: s.client,
-        amount: Math.abs(s.remaining), direction: s.remaining > 0 ? 'in' : 'out',
+        amount: Math.abs(s.shipping_collected), direction: s.shipping_collected > 0 ? 'in' : 'out',
       }));
 
     // 3. Client payment collections

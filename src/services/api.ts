@@ -164,6 +164,10 @@ export const salesApi = {
   remove: (id: number) => del<{ message: string }>(`/sales/${id}`),
   convertReservation: (id: number) => post<SaleRecord>(`/sales/${id}/convert-reservation`, {}),
   cancelReservation: (id: number) => post<SaleRecord>(`/sales/${id}/cancel-reservation`, {}),
+  // Confirms the ACTUAL amount received from the shipping company and marks the
+  // order "تم الصرف". Also used to correct an already-confirmed amount.
+  confirmPayout: (id: number, received_amount: number) =>
+    post<SaleRecord & { collection_difference: number }>(`/sales/${id}/confirm-payout`, { received_amount }),
 };
 
 export type SaleRecord = {

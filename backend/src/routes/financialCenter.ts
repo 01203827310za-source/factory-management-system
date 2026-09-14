@@ -24,9 +24,11 @@ router.get('/', async (req: Request, res: Response) => {
     ]);
 
     const depositIn   = sales.reduce((s, sale) => s + sale.deposit_paid, 0);
+    // Cash in from dispatched orders = only what the shipping company actually paid,
+    // never the full remaining invoice balance (see confirm-payout in sales.ts).
     const remainingIn = sales
       .filter(s => s.order_status === 'تم الصرف')
-      .reduce((s, sale) => s + sale.remaining, 0);
+      .reduce((s, sale) => s + sale.shipping_collected, 0);
     const clientPayIn = paymentLogs
       .filter(p => p.type === 'client_payment')
       .reduce((s, p) => s + p.amount, 0);
@@ -39,8 +41,12 @@ router.get('/', async (req: Request, res: Response) => {
     const totalOut = expenses.reduce((s, e) => s + e.amount_out, 0) + debtOut + refundOut;
 
     const remainingDebts = debts.reduce((s, d) => s + d.remaining, 0);
+    const dispatchedUncollected = sales
+      .filter(s => s.order_status === 'تم الصرف')
+      .reduce((s, sale) => s + Math.max(0, sale.remaining - sale.shipping_collected), 0);
     const moneyOwedToUs  =
       sales.filter(s => s.order_status === 'لم يتم الصرف').reduce((s, sale) => s + sale.remaining, 0) +
+      dispatchedUncollected +
       clientAccts.reduce((s, ca) => s + ca.remaining, 0);
 
     const cashAvailable = totalIn - totalOut;

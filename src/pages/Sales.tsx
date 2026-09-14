@@ -8,7 +8,7 @@ import {
 import type { Sale, ReturnItem } from '../types';
 import Modal from '../components/Modal';
 import { useToast } from '../components/Toast';
-import { Plus, Edit2, Trash2, Filter, Download, Search, UserPlus, Printer, ArrowLeftRight, RefreshCw, CheckSquare, XCircle, BookmarkPlus } from 'lucide-react';
+import { Plus, Edit2, Trash2, Filter, Download, Search, UserPlus, Printer, ArrowLeftRight, RefreshCw, CheckSquare, XCircle, BookmarkPlus, Banknote } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 const ORDER_STATUSES: Sale['order_status'][] = ['تم الصرف', 'لم يتم الصرف', 'حساب عميل', 'تم الحجز', 'تم الإلغاء'];
@@ -24,8 +24,12 @@ export default function Sales() {
   const [filterStatus, setFilterStatus] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
   const [isReservation, setIsReservation] = useState(false);
-  const [convertConfirm, setConvertConfirm] = useState<number | null>(null);
   const [cancelReservationConfirm, setCancelReservationConfirm] = useState<number | null>(null);
+
+  // Shipping payout confirmation ("تم الصرف" click flow)
+  const [payoutSale, setPayoutSale] = useState<Sale | null>(null);
+  const [payoutAmount, setPayoutAmount] = useState<string>('');
+  const [payoutSubmitting, setPayoutSubmitting] = useState(false);
 
   // Marketers
   const [marketers, setMarketers] = useState<string[]>([]);
@@ -170,13 +174,34 @@ readyStock.forEach((s: any) => {
 await loadData();; setDeleteConfirm(null); toast('success', 'تم حذف الأوردر');
   };
 
-  const handleConvertReservation = async (id: number) => {
+  // Open the "تأكيد مبلغ التحصيل" modal for a sale — used both to confirm a fresh
+  // "تم الصرف" payout and to correct one already confirmed.
+  const openPayoutModal = (sale: Sale) => {
+    setPayoutSale(sale);
+    setPayoutAmount(String(sale.order_status === 'تم الصرف' ? sale.shipping_collected : sale.remaining));
+  };
+
+  const payoutAmountNum = Number(payoutAmount);
+  const payoutMaxReceivable = payoutSale ? Math.max(payoutSale.remaining, 0) : 0;
+  const payoutIsValid = payoutAmount.trim() !== '' && Number.isFinite(payoutAmountNum) && payoutAmountNum >= 0
+    && !!payoutSale && payoutAmountNum <= payoutMaxReceivable;
+  const payoutDifference = payoutSale ? Math.max(0, payoutSale.remaining - (Number.isFinite(payoutAmountNum) ? payoutAmountNum : 0)) : 0;
+
+  const handleConfirmPayout = async () => {
+    if (!payoutSale || !payoutIsValid) return;
+    setPayoutSubmitting(true);
     try {
-      await salesApi.convertReservation(id);
+      const result = await salesApi.confirmPayout(payoutSale.id, payoutAmountNum);
       await loadData();
-      setConvertConfirm(null);
-      toast('success', 'تم صرف الحجز — تم خصم الكمية من المخزون');
-    } catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'خطأ'); }
+      setPayoutSale(null);
+      toast('success', result.collection_difference > 0
+        ? `تم تأكيد الصرف — المستلم فعليًا ${payoutAmountNum.toLocaleString('ar-EG')} ج، الفرق غير المحصل ${result.collection_difference.toLocaleString('ar-EG')} ج`
+        : 'تم تأكيد الصرف — تم تحصيل المبلغ بالكامل');
+    } catch (e: unknown) {
+      toast('error', e instanceof Error ? e.message : 'خطأ في تأكيد الصرف');
+    } finally {
+      setPayoutSubmitting(false);
+    }
   };
 
   const handleCancelReservation = async (id: number) => {
@@ -213,7 +238,8 @@ await loadData();; setDeleteConfirm(null); toast('success', 'تم حذف الأ�
     <tr><td>العربون المدفوع</td><td style="color:#10b981">${s.deposit_paid.toLocaleString('ar-EG')}</td></tr>
     ${s.deposit_receiver?`<tr><td>الذي استلم العربون</td><td>${s.deposit_receiver}</td></tr>`:''}
     <tr><td class="highlight">المتبقي</td><td class="highlight">${s.remaining.toLocaleString('ar-EG')}</td></tr>
-    ${s.shipping_collected>0?`<tr><td>تم التحصيل من الشحن</td><td>${s.shipping_collected.toLocaleString('ar-EG')}</td></tr>`:''}
+    ${s.order_status==='تم الصرف'?`<tr><td>المستلم فعليًا من شركة الشحن</td><td>${s.shipping_collected.toLocaleString('ar-EG')}</td></tr>`:''}
+    ${s.order_status==='تم الصرف'&&(s.remaining-s.shipping_collected)>0?`<tr><td class="highlight">الفرق غير المحصل</td><td class="highlight">${(s.remaining-s.shipping_collected).toLocaleString('ar-EG')}</td></tr>`:''}
     </table><div class="footer">نظام إدارة المصنع المتكامل</div>
     </body></html>`);
     w.document.close();
@@ -253,7 +279,9 @@ await loadData();(returnForm);
       'موديل 5': s.model5_code, 'عدد 5': s.model5_qty, 'لون 5': s.model5_color,
       'قيمة الفاتورة': s.invoice_value, 'العربون': s.deposit_paid, 'مستلم العربون': s.deposit_receiver, 'المتبقي': s.remaining,
       'الحالة': s.order_status, 'التسليم': s.delivery_method,
-      'المخزن': s.warehouse, 'تحصيل شحن': s.shipping_collected,
+      'المخزن': s.warehouse,
+      'المستلم فعليًا من الشحن': s.order_status === 'تم الصرف' ? s.shipping_collected : '',
+      'الفرق غير المحصل': s.order_status === 'تم الصرف' ? Math.max(0, s.remaining - s.shipping_collected) : '',
     })));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'المبيعات');
@@ -278,6 +306,8 @@ await loadData();(returnForm);
     invoices: filtered.reduce((s, r) => s + r.invoice_value, 0),
     deposits: filtered.reduce((s, r) => s + r.deposit_paid, 0),
     remaining: filtered.reduce((s, r) => s + r.remaining, 0),
+    shippingReceived: filtered.filter(r => r.order_status === 'تم الصرف').reduce((s, r) => s + r.shipping_collected, 0),
+    shippingGap: filtered.filter(r => r.order_status === 'تم الصرف').reduce((s, r) => s + Math.max(0, r.remaining - r.shipping_collected), 0),
   }), [filtered]);
 
   const inputClass = "w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent";
@@ -347,12 +377,14 @@ await loadData();(returnForm);
                 <th className="px-2 py-3 text-center font-semibold">العربون</th>
                 <th className="px-2 py-3 text-center font-semibold">مستلم</th>
                 <th className="px-2 py-3 text-center font-semibold">المتبقي</th>
+                <th className="px-2 py-3 text-center font-semibold">مستلم من الشحن</th>
+                <th className="px-2 py-3 text-center font-semibold">الفرق</th>
                 <th className="px-2 py-3 text-center font-semibold">الحالة</th>
                 <th className="px-2 py-3 text-center font-semibold">إجراءات</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.length === 0 && (<tr><td colSpan={12} className="text-center py-8 text-gray-400">لا توجد بيانات</td></tr>)}
+              {filtered.length === 0 && (<tr><td colSpan={14} className="text-center py-8 text-gray-400">لا توجد بيانات</td></tr>)}
               {filtered.map((sale, idx) => (
                 <tr key={sale.id} className="border-t border-gray-100 hover:bg-blue-50/40 transition">
                   <td className="px-2 py-3 text-gray-500">{idx + 1}</td>
@@ -383,6 +415,14 @@ await loadData();(returnForm);
                   <td className={`px-2 py-3 text-center font-semibold ${sale.remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>
                     {sale.remaining.toLocaleString('ar-EG')}
                   </td>
+                  <td className="px-2 py-3 text-center text-emerald-600">
+                    {sale.order_status === 'تم الصرف' ? sale.shipping_collected.toLocaleString('ar-EG') : <span className="text-gray-300">—</span>}
+                  </td>
+                  <td className="px-2 py-3 text-center">
+                    {sale.order_status === 'تم الصرف' && (sale.remaining - sale.shipping_collected) > 0 ? (
+                      <span className="text-red-600 font-semibold">{(sale.remaining - sale.shipping_collected).toLocaleString('ar-EG')}</span>
+                    ) : <span className="text-gray-300">—</span>}
+                  </td>
                   <td className="px-2 py-3 text-center">
                     <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                       sale.order_status === 'تم الصرف' ? 'bg-emerald-100 text-emerald-700' :
@@ -396,13 +436,23 @@ await loadData();(returnForm);
                     <div className="flex items-center justify-center gap-1 flex-wrap">
                       {sale.order_status === 'تم الحجز' && (
                         <>
-                          <button onClick={() => setConvertConfirm(sale.id)} className="p-1.5 text-emerald-600 hover:bg-emerald-100 rounded-lg" title="صرف الحجز">
+                          <button onClick={() => openPayoutModal(sale)} className="p-1.5 text-emerald-600 hover:bg-emerald-100 rounded-lg" title="صرف الحجز">
                             <CheckSquare size={14} />
                           </button>
                           <button onClick={() => setCancelReservationConfirm(sale.id)} className="p-1.5 text-red-500 hover:bg-red-100 rounded-lg" title="إلغاء الحجز">
                             <XCircle size={14} />
                           </button>
                         </>
+                      )}
+                      {(sale.order_status === 'لم يتم الصرف' || sale.order_status === 'حساب عميل') && (
+                        <button onClick={() => openPayoutModal(sale)} className="p-1.5 text-emerald-600 hover:bg-emerald-100 rounded-lg" title="تم الصرف">
+                          <Banknote size={14} />
+                        </button>
+                      )}
+                      {sale.order_status === 'تم الصرف' && (
+                        <button onClick={() => openPayoutModal(sale)} className="p-1.5 text-amber-600 hover:bg-amber-100 rounded-lg" title="تعديل المبلغ المستلم فعليًا">
+                          <Banknote size={14} />
+                        </button>
                       )}
                       <button onClick={() => setInvoiceSale(sale)} className="p-1.5 text-indigo-600 hover:bg-indigo-100 rounded-lg" title="فاتورة">
                         <Printer size={14} />
@@ -423,6 +473,8 @@ await loadData();(returnForm);
                 <td className={`px-2 py-3 text-center ${totals.remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>
                   {totals.remaining.toLocaleString('ar-EG')}
                 </td>
+                <td className="px-2 py-3 text-center text-emerald-600">{totals.shippingReceived.toLocaleString('ar-EG')}</td>
+                <td className={`px-2 py-3 text-center ${totals.shippingGap > 0 ? 'text-red-600' : 'text-green-600'}`}>{totals.shippingGap.toLocaleString('ar-EG')}</td>
                 <td colSpan={2}></td>
               </tr>
             </tfoot>
@@ -586,7 +638,12 @@ await loadData();(returnForm);
               <div className="flex justify-between"><span>قيمة الفاتورة:</span><strong>{invoiceSale.invoice_value.toLocaleString('ar-EG')}</strong></div>
               <div className="flex justify-between text-emerald-600"><span>العربون:</span><strong>{invoiceSale.deposit_paid.toLocaleString('ar-EG')}</strong></div>
               <div className="flex justify-between text-red-600"><span>المتبقي:</span><strong>{invoiceSale.remaining.toLocaleString('ar-EG')}</strong></div>
-              {invoiceSale.shipping_collected > 0 && <div className="flex justify-between"><span>تحصيل شحن:</span><strong>{invoiceSale.shipping_collected.toLocaleString('ar-EG')}</strong></div>}
+              {invoiceSale.order_status === 'تم الصرف' && (
+                <div className="flex justify-between"><span>المستلم فعليًا من شركة الشحن:</span><strong>{invoiceSale.shipping_collected.toLocaleString('ar-EG')}</strong></div>
+              )}
+              {invoiceSale.order_status === 'تم الصرف' && (invoiceSale.remaining - invoiceSale.shipping_collected) > 0 && (
+                <div className="flex justify-between text-red-600"><span>الفرق غير المحصل:</span><strong>{(invoiceSale.remaining - invoiceSale.shipping_collected).toLocaleString('ar-EG')}</strong></div>
+              )}
             </div>
           </div>
         )}
@@ -718,12 +775,49 @@ await loadData();(returnForm);
         </div>
       </Modal>
 
-      {/* Convert Reservation Confirm */}
-      <Modal isOpen={convertConfirm !== null} onClose={() => setConvertConfirm(null)} title="تأكيد صرف الحجز" size="sm">
-        <p className="text-gray-600">هل تريد تحويل هذا الحجز إلى أوردر مصروف؟ سيتم خصم الكميات من المخزون.</p>
+      {/* Shipping Payout Confirmation — "تأكيد مبلغ التحصيل" */}
+      <Modal isOpen={payoutSale !== null} onClose={() => !payoutSubmitting && setPayoutSale(null)} title="تأكيد مبلغ التحصيل" size="sm">
+        {payoutSale && (
+          <div className="space-y-4">
+            <div className="bg-gray-50 rounded-lg p-4 text-sm space-y-2">
+              <div className="flex justify-between"><span className="text-gray-500">رقم الفاتورة / الطلب:</span><strong>{payoutSale.order_number}</strong></div>
+              <div className="flex justify-between"><span className="text-gray-500">إجمالي الفاتورة:</span><strong>{payoutSale.invoice_value.toLocaleString('ar-EG')} ج</strong></div>
+              <div className="flex justify-between"><span className="text-gray-500">المبلغ المتبقي:</span><strong className="text-red-600">{payoutSale.remaining.toLocaleString('ar-EG')} ج</strong></div>
+              <div className="flex justify-between"><span className="text-gray-500">المبلغ المطلوب تأكيده:</span><strong>{payoutMaxReceivable.toLocaleString('ar-EG')} ج</strong></div>
+            </div>
+
+            <div>
+              <label className={labelClass}>المبلغ المستلم فعليًا من شركة الشحن</label>
+              <input
+                type="number" autoFocus
+                className={`${inputClass} ${!payoutIsValid ? 'border-red-400 focus:ring-red-400' : ''}`}
+                value={payoutAmount}
+                onChange={e => setPayoutAmount(e.target.value)}
+                min={0} max={payoutMaxReceivable}
+              />
+              {!payoutIsValid && (
+                <p className="text-xs text-red-600 mt-1">
+                  {payoutAmount.trim() === '' || !Number.isFinite(payoutAmountNum)
+                    ? 'يرجى إدخال مبلغ صحيح'
+                    : payoutAmountNum < 0
+                      ? 'المبلغ لا يمكن أن يكون أقل من صفر'
+                      : 'المبلغ لا يمكن أن يتجاوز المبلغ المتبقي'}
+                </p>
+              )}
+            </div>
+
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm space-y-1">
+              <div className="flex justify-between"><span>المتبقي قبل الصرف:</span><strong>{payoutSale.remaining.toLocaleString('ar-EG')} ج</strong></div>
+              <div className="flex justify-between"><span>المستلم فعليًا:</span><strong className="text-emerald-600">{payoutIsValid ? payoutAmountNum.toLocaleString('ar-EG') : 0} ج</strong></div>
+              <div className="flex justify-between"><span>الفرق غير المحصل:</span><strong className={payoutDifference > 0 ? 'text-red-600' : 'text-gray-400'}>{payoutDifference.toLocaleString('ar-EG')} ج</strong></div>
+            </div>
+          </div>
+        )}
         <div className="flex justify-end gap-3 mt-6">
-          <button onClick={() => setConvertConfirm(null)} className="px-5 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">إلغاء</button>
-          <button onClick={() => convertConfirm !== null && handleConvertReservation(convertConfirm)} className="px-5 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">صرف</button>
+          <button disabled={payoutSubmitting} onClick={() => setPayoutSale(null)} className="px-5 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50">إلغاء</button>
+          <button disabled={!payoutIsValid || payoutSubmitting} onClick={handleConfirmPayout} className="px-5 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed">
+            {payoutSubmitting ? '...جارٍ التأكيد' : 'تأكيد الصرف'}
+          </button>
         </div>
       </Modal>
 

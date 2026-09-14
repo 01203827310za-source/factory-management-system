@@ -128,7 +128,7 @@ async function main() {
           model1_code: 'M002', model1_qty: 15, model1_color: 'أزرق',
           invoice_value: 1275, deposit_paid: 1275, deposit_receiver: '', remaining: 0,
           shipping_number: 'SHP-002', order_status: 'تم الصرف', delivery_method: 'مصنع',
-          mobile: '01198765432', warehouse: 'المخزن الرئيسي', shipping_collected: 50,
+          mobile: '01198765432', warehouse: 'المخزن الرئيسي', shipping_collected: 0,
         },
         {
           order_number: 'ORD-003', row_number: 3, marketer: 'أحمد', client: 'عبد الرحمن',

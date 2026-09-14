@@ -49,9 +49,11 @@ export function computeFinancialSummary(input: FinancialInput, range?: DateRange
 
   // Cash inflows
   const depositIn      = sales.reduce((s, x) => s + x.deposit_paid, 0);
+  // Only the amount actually confirmed as received from the shipping company enters
+  // cash — never the full remaining invoice balance (see confirm-payout in sales.ts).
   const remainingIn    = sales
     .filter(s => s.order_status === STATUS_DISPATCHED)
-    .reduce((s, x) => s + x.remaining, 0);
+    .reduce((s, x) => s + x.shipping_collected, 0);
   const clientPayIn    = paymentLogs
     .filter(p => p.type === CLIENT_PAYMENT)
     .reduce((s, p) => s + p.amount, 0);
@@ -87,10 +89,15 @@ export function computeMoneyOwedToUs(input: Pick<BalanceInput, 'sales' | 'client
   const salesRemaining = input.sales
     .filter(s => isInRange(saleDate(s), range) && s.order_status === STATUS_NOT_DISPATCHED)
     .reduce((s, sale) => s + sale.remaining, 0);
+  // A dispatched order whose shipping company paid less than the remaining balance
+  // still leaves that gap owed by the customer — it must not vanish from the books.
+  const dispatchedUncollected = input.sales
+    .filter(s => isInRange(saleDate(s), range) && s.order_status === STATUS_DISPATCHED)
+    .reduce((s, sale) => s + Math.max(0, sale.remaining - sale.shipping_collected), 0);
   const clientBalance = input.clientAccts
     .filter(ca => isInRange(ca.date, range))
     .reduce((s, ca) => s + ca.remaining, 0);
-  return salesRemaining + clientBalance;
+  return salesRemaining + dispatchedUncollected + clientBalance;
 }
 
 export function computeAccessoriesValue(accessories: AccessoriesWarehouse[], range?: DateRange) {
