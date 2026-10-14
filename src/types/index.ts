@@ -340,7 +340,7 @@ export interface DashboardMetrics {
   reserved_orders_count?: number;
   assets_reconciliation?: {
     components_sum: number;
-    differences: Record<'fabric' | 'stock' | 'accessories' | 'cutting' | 'wip' | 'receivables', number>;
+    differences: Record<'cash' | 'fabric' | 'stock' | 'accessories' | 'cutting' | 'wip' | 'receivables', number>;
     reconciled: boolean;
   };
   pending_orders?: {
@@ -348,6 +348,9 @@ export interface DashboardMetrics {
     requested: number; reserved: number; pending: number;
     slots: { code: string; color: string; requested: number; reserved: number; pending: number; has_card: boolean }[];
   }[];
+  /** Actual cash in the safe (= the top table's «الصافي»). Separate from cash_available. */
+  cash_on_hand?: number;
+  cash_items?: { key: string; label: string; amount: number; direction: 'in' | 'out' }[];
   pending_units?: number;
   /** Shortages grouped by model code + colour (same allocation as pending_orders). */
   missing_stock?: MissingStockSummaryData;

@@ -33,7 +33,8 @@ router.get('/', async (req: Request, res: Response) => {
       .reduce((s, sale) => s + sale.invoice_value, 0);
 
     // Shared with the /breakdown endpoints so cards and drill-downs always reconcile.
-    const { totalIn, totalOut, netProfit, refundOut } = computeDashboardCashFlow({ sales, expenses, returns_, paymentLogs });
+    const cashFlow = computeDashboardCashFlow({ sales, expenses, returns_, paymentLogs });
+    const { totalIn, totalOut, netProfit, refundOut } = cashFlow;
 
     const remainingDebts = debts.reduce((s, d) => s + d.remaining, 0);
     const dispatchedUncollected = sales
@@ -283,12 +284,27 @@ router.get('/', async (req: Request, res: Response) => {
     });
     // Total current assets = warehouses + remaining cutting pieces + WIP + receivables.
     // Deliberately excludes cash/net-profit/debts and Fixed Assets — those live in the Financial Center, not here.
-    const totalCurrentAssets = fabricValue + stockValue + accessoriesValue + cuttingInventoryValue + wipValue + moneyOwedToUs;
+    // Actual cash in the safe = the top table's «الصافي»: every pound really received minus every pound really
+    // paid out. It is NOT «الكاش المتاح» (that one also subtracts outstanding debts). Receivables are money that
+    // has NOT been received, so they are counted separately and only become cash when collected — a deposit or a
+    // shipping-company payment moves from "owed" to "cash", never both.
+    const cashOnHand = netProfit;
+    const cashItems = [
+      { key: 'expense_in', label: 'وارد المصروفات والإيرادات (رأس مال / إيراد / استلاف ...)', amount: cashFlow.expenseIn, direction: 'in' as const },
+      { key: 'deposits', label: 'عربون مستلم من العملاء', amount: cashFlow.depositIn, direction: 'in' as const },
+      { key: 'shipping_collected', label: 'محصّل فعليًا من شركة الشحن', amount: cashFlow.remainingIn, direction: 'in' as const },
+      { key: 'client_payments', label: 'دفعات حسابات العملاء', amount: cashFlow.clientPayIn, direction: 'in' as const },
+      { key: 'expense_out', label: 'المصروفات والمنصرفات', amount: cashFlow.expenseOut, direction: 'out' as const },
+      { key: 'debt_payments', label: 'سداد ديون', amount: cashFlow.debtOut, direction: 'out' as const },
+      { key: 'refunds', label: 'مرتجعات (مبالغ مستردة)', amount: cashFlow.refundOut, direction: 'out' as const },
+    ];
+    const totalCurrentAssets = cashOnHand + fabricValue + stockValue + accessoriesValue + cuttingInventoryValue + wipValue + moneyOwedToUs;
 
     // Proof that the headline total, each component and its detail rows agree (checked on every request).
     const sumOf = <T,>(rows: T[], f: (r: T) => number) => rows.reduce((n, r) => n + f(r), 0);
-    const components = { fabric: fabricValue, stock: stockValue, accessories: accessoriesValue, cutting: cuttingInventoryValue, wip: wipValue, receivables: moneyOwedToUs };
+    const components = { cash: cashOnHand, fabric: fabricValue, stock: stockValue, accessories: accessoriesValue, cutting: cuttingInventoryValue, wip: wipValue, receivables: moneyOwedToUs };
     const fromRows = {
+      cash: sumOf(cashItems, i => (i.direction === 'in' ? i.amount : -i.amount)),
       fabric: sumOf(fabricItems, i => i.total), stock: sumOf(stockItems, i => i.total), accessories: sumOf(accessoriesItems, i => i.total),
       cutting: sumOf(cuttingItems, i => i.total), wip: sumOf(wipItems, i => i.total), receivables: sumOf(receivableItems, i => i.remaining),
     };
@@ -319,6 +335,8 @@ router.get('/', async (req: Request, res: Response) => {
       total_in: totalIn,
       total_out: totalOut,
       cash_available: cashAvailable,
+      cash_on_hand: cashOnHand,
+      cash_items: cashItems,
       money_owed_to_us: moneyOwedToUs,
       sales_by_marketer: salesByMarketer,
       order_status_counts: orderStatusCounts,

@@ -9,7 +9,8 @@ import { M1, NOT_PAID_OUT, PAID_OUT, PREPARED, scenario, acct, invoice } from '.
 type Row = { season_id: number };
 type Json = Record<string, unknown> & {
   stock_value: number; stock_reserved_value: number; stock_available_value: number; money_owed_to_us: number;
-  total_current_assets: number; total_in: number; net_profit: number; cash_available: number;
+  total_current_assets: number; total_in: number; total_out: number; net_profit: number; cash_available: number;
+  cash_on_hand: number; cash_items: { key: string; amount: number; direction: 'in' | 'out' }[];
   receivable_overlap_orders: number; receivable_overlap_amount: number;
   assets_reconciliation: { reconciled: boolean; components_sum: number; differences: Record<string, number> };
   receivable_items: { source: string; reference: string; remaining: number; stock_status?: string; inventory_still_in_stock?: boolean; duplicate_in_client_account?: boolean }[];
@@ -100,9 +101,11 @@ test('Dashboard: the «إجمالي الأصول الحالية» total reconcil
   const { w, clientAccts, clientInvoices } = await scenario();
   const d = await callDashboard(dataOf(w, { clientAccts, clientInvoices }), 1);
   assert.equal(d.assets_reconciliation.reconciled, true);
-  assert.deepEqual(Object.values(d.assets_reconciliation.differences).map(Math.abs), [0, 0, 0, 0, 0, 0]);
+  assert.deepEqual(Object.values(d.assets_reconciliation.differences).map(Math.abs), [0, 0, 0, 0, 0, 0, 0]);   // cash + 6 other components
   assert.equal(d.total_current_assets, d.assets_reconciliation.components_sum);
-  assert.equal(d.total_current_assets, 178 * 600 + 18300);
+  // real cash 13,700 (deposits 2,000 + 3,500 + collected 8,200) + stock 178 pcs + valid receivables 18,300
+  assert.equal(d.total_current_assets, d.cash_on_hand + 178 * 600 + 18300);
+  assert.equal(d.cash_on_hand, 13700);
 });
 
 test('Dashboard: reserving alone leaves total current assets unchanged', async () => {
@@ -168,7 +171,7 @@ test('Dashboard: an under-stocked «يتم التجهيز» order — only real 
   await w.saveOrder({ order_number: 'P-1', status: PREPARED, slots: [{ ...M1, qty: 10 }], invoice: 8500, deposit: 1000 });
   const d = await callDashboard(dataOf(w), 1);
   assert.equal(d.stock_value, 4 * 600);                         // the 6 missing pieces are NOT assets
-  assert.equal(d.total_current_assets, 4 * 600);
+  assert.equal(d.total_current_assets, 4 * 600 + 1000);         // 4 real pieces + the 1,000 deposit actually received
   assert.equal(d.money_owed_to_us, 0);                          // a prepared order is not a receivable
   assert.equal(d.total_in, 1000);                               // only the deposit is real cash…
   assert.equal(d.advances_on_open_reservations, 1000);          // …and it is shown as an obligation
@@ -215,4 +218,75 @@ test('Dashboard: «ملخص النواقص» is per season', async () => {
   const data = dataOf(w);
   assert.deepEqual((await callDashboard(data, 1)).missing_stock.rows.map(r => r.missing), [9]);
   assert.deepEqual((await callDashboard(data, 2)).missing_stock.rows.map(r => r.missing), [5]);
+});
+
+// ───────────── actual cash in the safe («الصافي») inside current assets ─────────────
+const extras = {
+  expenses: [{ season_id: 1, amount_in: 50000, amount_out: 8000 }],
+  paymentLogs: [{ season_id: 1, type: 'debt_payment', amount: 1000 }, { season_id: 1, type: 'client_payment', amount: 500 }],
+  debts: [{ season_id: 1, remaining: 3000 }],
+} as unknown as Record<string, Row[]>;
+
+async function cashWorld() {
+  const w = new World();
+  w.addStock('M1', 'أسود', 100, 600);
+  const o = await w.saveOrder({ order_number: 'C-1', status: NOT_PAID_OUT, slots: [M1], invoice: 8500, deposit: 1000 });   // 7,500 owed
+  return { w, o };
+}
+
+test('Dashboard cash: «الصافي» = total in − total out is the actual cash, and is added to current assets once', async () => {
+  const { w } = await cashWorld();
+  const d = await callDashboard(dataOf(w, extras), 1);
+  // derived from the inputs (nothing hardcoded): in = 50,000 + deposit 1,000 + client 500; out = 8,000 + debt payment 1,000
+  const expectedCash = (50000 + 1000 + 500) - (8000 + 1000);
+  assert.equal(d.cash_on_hand, expectedCash);
+  assert.equal(d.cash_on_hand, d.net_profit);                                   // the top table's «الصافي»
+  assert.equal(d.cash_on_hand, d.total_in - d.total_out);
+  assert.equal(d.cash_items.reduce((n, i) => n + (i.direction === 'in' ? i.amount : -i.amount), 0), d.cash_on_hand);
+  // exactly once: total = cash + stock + valid receivables, nothing else, nothing twice
+  assert.equal(d.total_current_assets, expectedCash + 90 * 600 + 7500);
+  assert.equal(d.assets_reconciliation.reconciled, true);
+});
+
+test('Dashboard cash: «الكاش الفعلي بالخزنة» stays separate from «الكاش المتاح»', async () => {
+  const { w } = await cashWorld();
+  const d = await callDashboard(dataOf(w, extras), 1);
+  assert.equal(d.cash_available, d.cash_on_hand - 3000);                        // «المتاح» also subtracts outstanding debts
+  assert.notEqual(d.cash_available, d.cash_on_hand);
+  assert.equal(d.total_current_assets - d.cash_on_hand, 90 * 600 + 7500);       // the asset total uses the actual cash, not «المتاح»
+});
+
+test('Dashboard cash: receivables stay out of cash until collected, then move (never counted twice)', async () => {
+  const { w, o } = await cashWorld();
+  const before = await callDashboard(dataOf(w), 1);
+  assert.equal(before.cash_on_hand, 1000);                                      // only the deposit is real cash
+  assert.equal(before.money_owed_to_us, 7500);                                  // the rest is a receivable, not cash
+  await w.saveOrder({ id: o.id, status: PAID_OUT, slots: [M1], invoice: 8500, deposit: 1000, collected: 7000, date: '2026-10-05' });
+  const after = await callDashboard(dataOf(w), 1);
+  assert.equal(after.cash_on_hand, 1000 + 7000);                                // collected money became cash…
+  assert.equal(after.money_owed_to_us, 500);                                    // …and left the receivable
+  // moving 7,000 from "owed" to "cash" must not change total current assets
+  assert.equal(after.total_current_assets, before.total_current_assets);
+  assert.equal(after.assets_reconciliation.reconciled, true);
+});
+
+test('Dashboard cash: an uncollected invoice, a prepared order and a pending shortage add no cash', async () => {
+  const w = new World();
+  w.addStock('M1', 'أسود', 4, 600);
+  await w.saveOrder({ status: PREPARED, slots: [{ ...M1, qty: 10 }], invoice: 9999 });     // no deposit
+  await w.saveOrder({ status: NOT_PAID_OUT, slots: [{ ...M1, qty: 4 }], invoice: 5000 }).catch(() => undefined); // refused (reserved) → still nothing
+  const d = await callDashboard(dataOf(w), 1);
+  assert.equal(d.cash_on_hand, 0);
+  assert.equal(d.total_current_assets, 4 * 600);
+});
+
+test('Dashboard cash: each season has its own cash', async () => {
+  const w = new World();
+  w.addStock('M1', 'أسود', 50, 600, 1); w.addStock('M1', 'أسود', 50, 600, 2);
+  await w.saveOrder({ season: 1, status: PREPARED, slots: [M1], invoice: 1000, deposit: 300 });
+  await w.saveOrder({ season: 2, status: PREPARED, slots: [M1], invoice: 1000, deposit: 700 });
+  const s1 = await callDashboard(dataOf(w), 1);
+  const s2 = await callDashboard(dataOf(w), 2);
+  assert.deepEqual([s1.cash_on_hand, s2.cash_on_hand], [300, 700]);
+  assert.deepEqual([s1.total_current_assets, s2.total_current_assets], [50 * 600 + 300, 50 * 600 + 700]);
 });

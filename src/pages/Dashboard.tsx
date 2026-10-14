@@ -32,7 +32,7 @@ const EMPTY: DashboardMetrics = {
 
 const fmt = (n: number) => n.toLocaleString('ar-EG', { maximumFractionDigits: 2 });
 
-type CategoryKey = 'fabric' | 'stock' | 'accessories' | 'cutting' | 'wip' | 'receivables';
+type CategoryKey = 'fabric' | 'stock' | 'accessories' | 'cutting' | 'wip' | 'receivables' | 'cash';
 
 const PAGE_SIZE = 10;
 
@@ -71,6 +71,8 @@ export default function Dashboard() {
     { key: 'cutting', label: 'قطع متبقية × تكلفة المتر', val: metrics.cutting_value },
     { key: 'wip', label: 'قيمة التشغيل (قيد التشغيل)', val: metrics.wip_value },
     { key: 'receivables', label: 'الفلوس اللي لنا برا (حسابات العملاء)', val: metrics.money_owed_to_us },
+    // Real money in hand (= «الصافي» above). Not «الكاش المتاح», and not the receivables line.
+    { key: 'cash', label: 'الكاش الفعلي بالخزنة', val: metrics.cash_on_hand ?? metrics.net_profit },
   ];
 
   const openCategory = (key: CategoryKey) => {
@@ -121,6 +123,11 @@ export default function Dashboard() {
         .filter(i => !q || i.model_code.toLowerCase().includes(q) || i.model_description.toLowerCase().includes(q) || i.color.toLowerCase().includes(q))
         .sort((a, b) => sortNum(a.total, b.total));
       return { rows, total: metrics.wip_value };
+    }
+    if (detailCategory === 'cash') {
+      // Natural order (inflows, then outflows) — sorting by amount would interleave them.
+      const rows = (metrics.cash_items ?? []).filter(i => !q || i.label.toLowerCase().includes(q));
+      return { rows, total: metrics.cash_on_hand ?? metrics.net_profit };
     }
     if (detailCategory === 'receivables') {
       const rows = metrics.receivable_items
@@ -534,6 +541,27 @@ export default function Dashboard() {
                   </table>
                 )}
 
+                {detailCategory === 'cash' && (
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-gray-50 text-gray-600">
+                        <th className="text-right px-3 py-2 font-semibold">البند</th>
+                        <th className="text-right px-3 py-2 font-semibold">النوع</th>
+                        <th className="text-right px-3 py-2 font-semibold">المبلغ</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {(pagedRows as NonNullable<DashboardMetrics['cash_items']>).map(it => (
+                        <tr key={it.key}>
+                          <td className="px-3 py-2 font-medium text-gray-800">{it.label}</td>
+                          <td className={`px-3 py-2 ${it.direction === 'in' ? 'text-emerald-700' : 'text-red-700'}`}>{it.direction === 'in' ? 'وارد' : 'منصرف'}</td>
+                          <td className={`px-3 py-2 font-bold ${it.direction === 'in' ? 'text-emerald-700' : 'text-red-700'}`}>{it.direction === 'out' ? '−' : ''}{fmt(it.amount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+
                 {detailCategory === 'receivables' && (
                   <table className="w-full text-sm">
                     <thead>
@@ -593,6 +621,13 @@ export default function Dashboard() {
                   >
                     التالي <ChevronLeft size={13} />
                   </button>
+                </div>
+              )}
+
+              {detailCategory === 'cash' && (
+                <div className="space-y-1.5 text-sm">
+                  <div className="flex items-center justify-between px-4 py-2 bg-gray-50 rounded-lg"><span className="text-gray-600">الكاش المتاح (بعد خصم الديون المتبقية)</span><span className="font-bold">{fmt(metrics.cash_available)} ج.م</span></div>
+                  <p className="text-xs text-gray-400">الكاش الفعلي = إجمالي الوارد − إجمالي المنصرف (نفس رقم «الصافي» أعلى الصفحة). «الكاش المتاح» رقم مختلف لأنه يخصم الديون. المستحقات لدى العملاء وشركة الشحن غير داخلة هنا — تتحول إلى كاش فقط عند تحصيلها فعليًا، وتُحسب مرة واحدة في أحدهما.</p>
                 </div>
               )}
 
