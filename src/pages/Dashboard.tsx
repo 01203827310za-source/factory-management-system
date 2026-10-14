@@ -13,6 +13,7 @@ import {
 } from 'recharts';
 import ProfitByPeriod from '../components/ProfitByPeriod';
 import DashboardBreakdownModal, { type BreakdownKind } from '../components/DashboardBreakdownModal';
+import CharitySection from '../components/CharitySection';
 import { useAuth } from '../contexts/AuthContext';
 
 const PIE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
@@ -509,6 +510,9 @@ export default function Dashboard() {
         </Modal>
 
         <DashboardBreakdownModal kind={cardBreakdown} onClose={() => setCardBreakdown(null)} />
+
+        {/* Monthly charity — a payment creates a real expense, so refresh the totals above after any change */}
+        {can('expenses.view') && <CharitySection onChanged={loadData} />}
 
         {/* Profit by Period */}
         <ProfitByPeriod />

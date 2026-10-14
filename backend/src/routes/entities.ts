@@ -58,6 +58,11 @@ expensesRouter.put('/:id', requireManager, async (req, res) => {
     const seasonId = await getSeasonId(req);
     const before = await prisma.expenseRevenue.findFirst({ where: { id, season_id: seasonId } });
     if (!before) return res.status(404).json({ message: 'السجل غير موجود' });
+    // Charity-linked expenses are the SAME payment as a charity_payments row; editing or
+    // deleting them directly would desync the two. They must be reversed via /api/charity.
+    if (await prisma.charityPayment.findUnique({ where: { expense_id: id }, select: { id: true } })) {
+      return res.status(409).json({ message: 'هذا المصروف مرتبط بدفعة صدقة — عدّل أو ألغِ الدفعة من قسم «صدقة الشهر» في لوحة التحكم' });
+    }
     const rec = await prisma.expenseRevenue.update({ where: { id }, data: { ...req.body, season_id: seasonId } });
     logAudit({ user: req.user, module: 'Expenses', action: 'UPDATE', record_id: id,
       before_data: before, after_data: rec, description: `تعديل ${rec.operation_type}: ${rec.statement}` });
@@ -70,6 +75,11 @@ expensesRouter.delete('/:id', requireManager, async (req, res) => {
     const seasonId = await getSeasonId(req);
     const before = await prisma.expenseRevenue.findFirst({ where: { id, season_id: seasonId } });
     if (!before) return res.status(404).json({ message: 'السجل غير موجود' });
+    // Charity-linked expenses are the SAME payment as a charity_payments row; editing or
+    // deleting them directly would desync the two. They must be reversed via /api/charity.
+    if (await prisma.charityPayment.findUnique({ where: { expense_id: id }, select: { id: true } })) {
+      return res.status(409).json({ message: 'هذا المصروف مرتبط بدفعة صدقة — عدّل أو ألغِ الدفعة من قسم «صدقة الشهر» في لوحة التحكم' });
+    }
     await prisma.expenseRevenue.delete({ where: { id } });
     logAudit({ user: req.user, module: 'Expenses', action: 'DELETE', record_id: id,
       before_data: before, description: `حذف ${before?.operation_type}: ${before?.statement}` });

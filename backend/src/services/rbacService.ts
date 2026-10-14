@@ -148,6 +148,8 @@ const apiModuleBySegment: Record<string, string> = {
   seasons: 'seasons',
   sales: 'sales',
   expenses: 'expenses',
+  // Charity payments ARE expenses (they create expenses_revenues rows), so they reuse its permissions.
+  charity: 'expenses',
   'ready-stock': 'ready_stock',
   fabric: 'fabric',
   accessories: 'accessories',

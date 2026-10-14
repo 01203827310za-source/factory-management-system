@@ -893,3 +893,29 @@ export const printOrdersApi = {
   getAll: () => get<PrintOrderRecord[]>('/print-orders'),
   create: (data: PrintOrderInput) => post<PrintOrderRecord>('/print-orders', data),
 };
+
+
+// ===== MONTHLY CHARITY (صدقة الشهر) =====
+export interface CharityPaymentRow {
+  id: number; amount: number; payment_date: string; payment_method: string; notes: string;
+  created_by: string; created_at: string;
+  expense: { id: number; date: string; operation_type: string; statement: string; amount_out: number } | null;
+}
+export interface CharityMonthSummary {
+  month: string; label: string; season_id: number;
+  collections_total: number; order_count: number; estimated_count: number; estimated_total: number;
+  rate: number; rate_percent: number; due: number; paid: number; remaining: number; overpaid: number;
+  status: 'none_due' | 'unpaid' | 'partial' | 'paid'; status_label: string;
+  payment_count: number; payments: CharityPaymentRow[];
+}
+export type CharityHistoryRow = Omit<CharityMonthSummary, 'payments'>;
+export interface CharityPaymentInput {
+  charity_month: string; amount: number; payment_date: string; payment_method: string; notes: string; idempotency_key: string;
+}
+export const charityApi = {
+  getSummary: (month: string) => get<CharityMonthSummary>(`/charity/summary?month=${encodeURIComponent(month)}`),
+  getHistory: () => get<{ season_id: number; months: CharityHistoryRow[] }>('/charity/history'),
+  pay: (input: CharityPaymentInput) =>
+    post<{ duplicate: boolean; payment: CharityPaymentRow; summary: CharityMonthSummary }>('/charity/payments', input),
+  reverse: (id: number) => del<{ message: string; summary: CharityMonthSummary }>(`/charity/payments/${id}`),
+};

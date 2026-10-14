@@ -75,6 +75,7 @@ model Season {
 
   sales                  Sale[]
   expenses_revenues      ExpenseRevenue[]
+  charity_payments       CharityPayment[]
   ready_stock            ReadyStock[]
   fabric_warehouse       FabricWarehouse[]
   fabric_purchases       FabricPurchase[]
@@ -153,6 +154,9 @@ model Sale {
   mobile             String   @default("")
   warehouse          String   @default("")
   shipping_collected Float    @default(0)
+  // Calendar day (YYYY-MM-DD, Africa/Cairo) the shipping company's payout was confirmed.
+  // NULL for orders dispatched before this column existed — never back-filled/invented.
+  shipping_collected_date String?
   created_at         DateTime @default(now())
 
   @@map("sales")
@@ -174,6 +178,7 @@ model ExpenseRevenue {
   mido_in        Float    @default(0)
   mido_out       Float    @default(0)
   created_at     DateTime @default(now())
+  charity_payment CharityPayment?
 
   @@map("expenses_revenues")
 }
@@ -598,4 +603,29 @@ model AuditLog {
   description String   @default("")
 
   @@map("audit_logs")
+}
+
+
+// ===== MONTHLY CHARITY (صدقة الشهر) =====
+// The amount due is computed on the fly from sales.shipping_collected (never stored).
+// Each payment is the SAME money movement as its linked expenses_revenues row
+// (operation_type = 'صدقة', amount_out = amount); only the expense row is read by the
+// financial formulas, so nothing is counted twice.
+model CharityPayment {
+  id              Int             @id @default(autoincrement())
+  season_id       Int
+  season          Season          @relation(fields: [season_id], references: [id])
+  charity_month   String          // YYYY-MM the charity belongs to
+  amount          Float
+  payment_date    String          // YYYY-MM-DD
+  payment_method  String          @default("")
+  notes           String          @default("")
+  expense_id      Int?            @unique
+  expense         ExpenseRevenue? @relation(fields: [expense_id], references: [id], onDelete: Restrict)
+  idempotency_key String          @unique
+  created_by      String          @default("")
+  created_at      DateTime        @default(now())
+
+  @@index([season_id, charity_month])
+  @@map("charity_payments")
 }

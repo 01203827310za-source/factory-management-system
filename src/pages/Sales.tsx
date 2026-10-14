@@ -101,7 +101,7 @@ setReadyStock(stock);
     model5_code: '', model5_qty: 0, model5_color: '',
     invoice_value: 0, deposit_paid: 0, deposit_receiver: '',
     shipping_number: '', order_status: 'تم الصرف' as Sale['order_status'],
-    delivery_method: DELIVERY_METHODS[0], warehouse: '', shipping_collected: 0,
+    delivery_method: DELIVERY_METHODS[0], warehouse: '', shipping_collected: 0, shipping_collected_date: '',
   };
   const [form, setForm] = useState(emptyForm);
 
@@ -146,6 +146,7 @@ readyStock.forEach((s: any) => {
       deposit_receiver: sale.deposit_receiver || '',
       shipping_number: sale.shipping_number, order_status: sale.order_status,
       delivery_method: sale.delivery_method, warehouse: sale.warehouse, shipping_collected: sale.shipping_collected,
+      shipping_collected_date: sale.shipping_collected_date || '',
     });
     setModalOpen(true);
   };
@@ -201,6 +202,8 @@ readyStock.forEach((s: any) => {
       deposit_receiver: form.deposit_receiver,
       shipping_number: form.shipping_number, order_status: form.order_status,
       delivery_method: form.delivery_method, warehouse: form.warehouse, shipping_collected: form.shipping_collected,
+      // Blank → the server stamps today (new payout) or keeps the stored date (amount correction).
+      shipping_collected_date: form.shipping_collected_date || undefined,
       row_number: sales.length + 1,
     };
     try {
@@ -616,6 +619,14 @@ await loadData();(returnForm);
                   min={0} max={remainingNow}
                 />
                 {shippingCollectedError && <p className="text-xs text-red-600 mt-1">{shippingCollectedError}</p>}
+                <label className={`${labelClass} mt-2`}>تاريخ استلام المبلغ (يحدد شهر صدقة الشهر)</label>
+                <input
+                  type="date"
+                  className={inputClass}
+                  value={form.shipping_collected_date}
+                  onChange={e => setForm({ ...form, shipping_collected_date: e.target.value })}
+                />
+                <p className="text-xs text-gray-400 mt-1">اتركه فارغًا لاستخدام تاريخ اليوم (أو التاريخ المسجل سابقًا).</p>
               </div>
             )}
           </div>

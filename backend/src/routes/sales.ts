@@ -4,6 +4,7 @@ import prisma from '../lib/prisma';
 import { authenticate, requireManager } from '../middleware/auth';
 import { logAudit } from '../services/auditHelper';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
+import { cairoToday, isValidDate } from '../services/charity';
 
 const router = Router();
 router.use(authenticate);
@@ -93,6 +94,22 @@ function resolveShippingCollected(
   return { value: parsed.value, isCorrection: wasDispatched };
 }
 
+// Day the shipping company's payout belongs to (drives the monthly-charity month).
+//   - not 'تم الصرف'            → null (no active receipt)
+//   - caller sent a valid date   → that date (lets a payout be dated to when it was really received)
+//   - already dispatched         → keep the stored date (a pure amount correction must not move
+//                                  the money to another month); legacy NULL stays NULL
+//   - newly dispatched           → today (Cairo)
+function resolvePayoutDate(status: string, providedRaw: unknown, wasDispatched: boolean, previous: string | null): { value: string | null } | { error: string } {
+  if (status !== 'تم الصرف') return { value: null };
+  if (providedRaw !== undefined && providedRaw !== null && providedRaw !== '') {
+    if (!isValidDate(providedRaw)) return { error: 'تاريخ استلام المبلغ من شركة الشحن غير صالح' };
+    return { value: providedRaw };
+  }
+  if (wasDispatched) return { value: previous ?? null };
+  return { value: cairoToday() };
+}
+
 // ─── routes ─────────────────────────────────────────────────────────────────
 
 // GET /api/sales
@@ -123,6 +140,9 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
       return res.status(400).json({ message: resolved.error });
     }
 
+    const payoutDate = resolvePayoutDate(status, data.shipping_collected_date, false, null);
+    if ('error' in payoutDate) return res.status(400).json({ message: payoutDate.error });
+
     const { season: _season, id: _id, season_id: _seasonId, ...saleData } = data as Omit<Prisma.SaleUncheckedCreateInput, 'season_id' | 'remaining'> & Record<string, unknown>;
 
     const sale = await prisma.sale.create({
@@ -131,6 +151,7 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
         season_id: seasonId,
         remaining,
         shipping_collected: resolved.value,
+        shipping_collected_date: payoutDate.value,
       },
     });
 
@@ -188,6 +209,9 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
       return res.status(400).json({ message: resolved.error });
     }
     data.shipping_collected = resolved.value;
+    const payoutDate = resolvePayoutDate(newStatus, data.shipping_collected_date, wasDispatched, oldSale.shipping_collected_date);
+    if ('error' in payoutDate) return res.status(400).json({ message: payoutDate.error });
+    data.shipping_collected_date = payoutDate.value;
 
     const sale = await prisma.$transaction(async (tx) => {
       // Reverse old reservation quantities before saving
@@ -270,7 +294,7 @@ router.post('/:id/convert-reservation', requireManager, async (req: Request, res
       await adjustReserved(extractModels(sale as unknown as Record<string, unknown>), -1, seasonId, tx);
       return tx.sale.update({
         where: { id },
-        data: { order_status: 'تم الصرف', shipping_collected: resolved.value },
+        data: { order_status: 'تم الصرف', shipping_collected: resolved.value, shipping_collected_date: cairoToday() },
       });
     });
 

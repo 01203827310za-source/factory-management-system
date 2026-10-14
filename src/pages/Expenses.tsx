@@ -6,6 +6,8 @@ import { useToast } from '../components/Toast';
 import { Plus, Edit2, Trash2, Download, Search, RefreshCw } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
+// Created only by the Dashboard's صدقة الشهر flow (linked to a charity payment) — never selectable in the form.
+const CHARITY_TYPE: ExpenseRevenue['operation_type'] = 'صدقة';
 const OP_TYPES: ExpenseRevenue['operation_type'][] = ['راس مالى', 'مصروف تشغيل', 'ايراد مبيعات', 'استلاف', 'سداد'];
 const ic = "w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400";
 const lc = "block text-xs font-semibold text-gray-600 mb-1";
@@ -108,7 +110,7 @@ export default function Expenses() {
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1"><Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="بحث في البيان..." className={`w-full pr-10 ${ic}`} /></div>
         <select value={filterType} onChange={e => setFilterType(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400">
-          <option value="">كل العمليات</option>{OP_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+          <option value="">كل العمليات</option>{[...OP_TYPES, CHARITY_TYPE].map(t => <option key={t} value={t}>{t}</option>)}
         </select>
         <input type="date" value={filterDateFrom} onChange={e => setFilterDateFrom(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
         <input type="date" value={filterDateTo} onChange={e => setFilterDateTo(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
@@ -128,14 +130,14 @@ export default function Expenses() {
                   <td className="px-4 py-3 text-center text-gray-500">{idx + 1}</td>
                   <td className="px-4 py-3 text-center">{item.date}</td>
                   <td className="px-4 py-3 text-center">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${item.operation_type === 'راس مالى' ? 'bg-purple-100 text-purple-700' : item.operation_type === 'مصروف تشغيل' ? 'bg-red-100 text-red-700' : item.operation_type === 'ايراد مبيعات' ? 'bg-emerald-100 text-emerald-700' : item.operation_type === 'استلاف' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>{item.operation_type}</span>
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${item.operation_type === 'راس مالى' ? 'bg-purple-100 text-purple-700' : item.operation_type === 'مصروف تشغيل' ? 'bg-red-100 text-red-700' : item.operation_type === 'ايراد مبيعات' ? 'bg-emerald-100 text-emerald-700' : item.operation_type === 'استلاف' ? 'bg-amber-100 text-amber-700' : item.operation_type === 'صدقة' ? 'bg-pink-100 text-pink-700' : 'bg-blue-100 text-blue-700'}`}>{item.operation_type}</span>
                   </td>
                   <td className="px-4 py-3 font-medium text-right">{item.statement}</td>
                   <td className="px-4 py-3 text-center text-emerald-600">{item.amount_in > 0 ? item.amount_in.toLocaleString('ar-EG') : '-'}</td>
                   <td className="px-4 py-3 text-center text-red-600">{item.amount_out > 0 ? item.amount_out.toLocaleString('ar-EG') : '-'}</td>
                   <td className="px-4 py-3 text-center"><div className="flex items-center justify-center gap-1">
-                    <button onClick={() => openEdit(item)} className="p-1.5 text-blue-600 hover:bg-blue-100 rounded-lg"><Edit2 size={15} /></button>
-                    <button onClick={() => setDeleteConfirm(item.id)} className="p-1.5 text-red-600 hover:bg-red-100 rounded-lg"><Trash2 size={15} /></button>
+                    <button onClick={() => openEdit(item)} disabled={item.operation_type === CHARITY_TYPE} title={item.operation_type === CHARITY_TYPE ? 'تُدار من قسم صدقة الشهر في لوحة التحكم' : undefined} className="p-1.5 text-blue-600 hover:bg-blue-100 rounded-lg disabled:opacity-30 disabled:pointer-events-none"><Edit2 size={15} /></button>
+                    <button onClick={() => setDeleteConfirm(item.id)} disabled={item.operation_type === CHARITY_TYPE} title={item.operation_type === CHARITY_TYPE ? 'تُدار من قسم صدقة الشهر في لوحة التحكم' : undefined} className="p-1.5 text-red-600 hover:bg-red-100 rounded-lg disabled:opacity-30 disabled:pointer-events-none"><Trash2 size={15} /></button>
                   </div></td>
                 </tr>
               ))}

@@ -21,13 +21,15 @@ export interface Sale {
   mobile: string;
   warehouse: string;
   shipping_collected: number;
+  /** YYYY-MM-DD the shipping payout was confirmed; null for orders confirmed before this was recorded. */
+  shipping_collected_date?: string | null;
   created_at: string;
 }
 
 export interface ExpenseRevenue {
   id: number;
   date: string;
-  operation_type: 'راس مالى' | 'مصروف تشغيل' | 'ايراد مبيعات' | 'استلاف' | 'سداد';
+  operation_type: 'راس مالى' | 'مصروف تشغيل' | 'ايراد مبيعات' | 'استلاف' | 'سداد' | 'صدقة';
   statement: string;
   amount_in: number;
   amount_out: number;
