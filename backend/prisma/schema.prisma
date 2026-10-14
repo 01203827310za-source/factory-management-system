@@ -76,6 +76,8 @@ model Season {
   sales                  Sale[]
   expenses_revenues      ExpenseRevenue[]
   charity_payments       CharityPayment[]
+  shipping_collections   ShippingCollection[]
+  inventory_movements    InventoryMovement[]
   ready_stock            ReadyStock[]
   fabric_warehouse       FabricWarehouse[]
   fabric_purchases       FabricPurchase[]
@@ -158,6 +160,8 @@ model Sale {
   // NULL for orders dispatched before this column existed — never back-filled/invented.
   shipping_collected_date String?
   created_at         DateTime @default(now())
+  collections        ShippingCollection[]
+  movements          InventoryMovement[]
 
   @@map("sales")
 }
@@ -628,4 +632,55 @@ model CharityPayment {
 
   @@index([season_id, charity_month])
   @@map("charity_payments")
+}
+
+
+// ===== SHIPPING COLLECTIONS (cash actually received from the shipping company) =====
+// Append-only, signed ledger. sales.shipping_collected is the maintained SUM of these rows
+// (kept so every existing cash/receivable formula keeps working unchanged). Changing a
+// collection never rewrites history: only the difference is appended as a new row.
+model ShippingCollection {
+  id             Int      @id @default(autoincrement())
+  season_id      Int
+  season         Season   @relation(fields: [season_id], references: [id])
+  sale_id        Int
+  sale           Sale     @relation(fields: [sale_id], references: [id], onDelete: Cascade)
+  amount         Float    // signed: + received, − correction / reversal
+  kind           String   @default("collection") // opening | collection | correction | reversal
+  collected_date String   // YYYY-MM-DD the money belongs to
+  date_estimated Boolean  @default(false) // true when the real receipt date was never recorded
+  reference      String   @default("")
+  created_by     String   @default("")
+  created_at     DateTime @default(now())
+
+  @@index([sale_id])
+  @@index([season_id, collected_date])
+  @@map("shipping_collections")
+}
+
+// ===== INVENTORY MOVEMENTS (cost snapshot of goods that left / came back) =====
+// One row per model slot when an order's goods physically leave the factory. unit_cost is the
+// recorded cost_per_piece AT THAT MOMENT, so cost of goods sold stays correct if the stock
+// card's cost is edited later. Physical quantities are still derived from order statuses; this
+// ledger records the cost side and the trail. Edits append SHIP_REVERSAL rows, never rewrite.
+model InventoryMovement {
+  id            Int      @id @default(autoincrement())
+  season_id     Int
+  season        Season   @relation(fields: [season_id], references: [id])
+  sale_id       Int
+  sale          Sale     @relation(fields: [sale_id], references: [id], onDelete: Cascade)
+  stock_id      Int?     // ready_stock row the cost came from (NULL = no matching stock card → cost unknown)
+  movement_type String   // SHIP | SHIP_REVERSAL
+  model_code    String
+  color         String   @default("")
+  qty           Int      // always positive; direction comes from movement_type
+  unit_cost     Float    @default(0)
+  total_cost    Float    @default(0)
+  reference     String   @default("")
+  created_by    String   @default("")
+  created_at    DateTime @default(now())
+
+  @@index([sale_id])
+  @@index([season_id])
+  @@map("inventory_movements")
 }

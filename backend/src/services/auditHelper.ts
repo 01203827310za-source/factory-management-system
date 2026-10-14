@@ -10,7 +10,7 @@ import { AuthPayload } from '../middleware/auth';
 export async function logAudit(opts: {
   user?: AuthPayload;
   module: string;
-  action: 'CREATE' | 'UPDATE' | 'DELETE' | 'SHIPPING_PAYOUT_CONFIRMED' | 'SHIPPING_PAYOUT_CORRECTED' | 'SHIPPING_PAYOUT_REVERSED';
+  action: 'CREATE' | 'UPDATE' | 'DELETE' | 'SHIPPING_PAYOUT_CONFIRMED' | 'SHIPPING_PAYOUT_CORRECTED' | 'SHIPPING_PAYOUT_REVERSED' | 'STOCK_RESERVED' | 'STOCK_RELEASED' | 'STOCK_SHIPPED';
   record_id: string | number;
   before_data?: unknown;
   after_data?: unknown;

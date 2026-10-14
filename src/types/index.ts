@@ -292,10 +292,24 @@ export interface DashboardMetrics {
   total_current_assets: number;
   fabric_value: number;
   stock_value: number;
+  /** Portion of stock_value that is reserved for orders (still physically in the factory). */
+  stock_reserved_value?: number;
+  stock_available_value?: number;
   accessories_value: number;
   cutting_value: number;
   wip_value: number;
   total_reservations: number;
+  recognized_sales?: number;
+  costed_sales?: number;
+  cogs?: number;
+  gross_margin?: number;
+  uncosted_shipped_orders?: number;
+  unmatched_return_cost_lines?: number;
+  shipping_receivable?: number;
+  client_accounts_receivable?: number;
+  advances_on_open_reservations?: number;
+  advances_on_canceled_orders?: number;
+  reserved_orders_count?: number;
   fabric_items: FabricAssetItem[];
   stock_items: StockAssetItem[];
   accessories_items: AccessoriesAssetItem[];

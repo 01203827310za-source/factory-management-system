@@ -162,6 +162,7 @@ export interface RbacMetadata {
 // received from the shipping company (see the shipping_collected field below).
 export const salesApi = {
   getAll: () => get<SaleRecord[]>('/sales'),
+  getLedger: (id: number) => get<SaleLedger>(`/sales/${id}/ledger`),
   add: (data: Omit<SaleRecord, 'id' | 'created_at'>) => post<SaleRecord & { collection_difference: number }>('/sales', data),
   update: (id: number, data: Partial<SaleRecord>) => put<SaleRecord & { collection_difference: number }>(`/sales/${id}`, data),
   remove: (id: number) => del<{ message: string }>(`/sales/${id}`),
@@ -542,12 +543,25 @@ export interface DashboardMetrics {
   total_current_assets: number;
   fabric_value: number;
   stock_value: number;
+  stock_reserved_value?: number;
+  stock_available_value?: number;
   accessories_value: number;
   cutting_value: number;
   wip_value: number;
   total_reservations: number;
+  recognized_sales?: number;
+  costed_sales?: number;
+  cogs?: number;
+  gross_margin?: number;
+  uncosted_shipped_orders?: number;
+  unmatched_return_cost_lines?: number;
+  shipping_receivable?: number;
+  client_accounts_receivable?: number;
+  advances_on_open_reservations?: number;
+  advances_on_canceled_orders?: number;
+  reserved_orders_count?: number;
   fabric_items: { material_type: string; color: string; available_qty: number; unit_cost: number; total: number }[];
-  stock_items: { model_code: string; product_name: string; color: string; actual_qty: number; reserved_qty: number; available_qty: number; unit_cost: number; total: number }[];
+  stock_items: { model_code: string; product_name: string; color: string; actual_qty: number; reserved_qty: number; available_qty: number; unit_cost: number; total: number; reserved_value?: number; available_value?: number }[];
   accessories_items: { item_name: string; qty: number; unit_cost: number; total: number }[];
   cutting_items: { cut_number: number; cut_description: string; material_type: string; color: string; total_pieces: number; used_pieces: number; remaining_pieces: number; cost_per_meter: number; total: number }[];
   wip_items: { model_code: string; model_description: string; color: string; qty_received: number; cost_per_piece: number; total: number; status: string }[];
@@ -919,3 +933,12 @@ export const charityApi = {
     post<{ duplicate: boolean; payment: CharityPaymentRow; summary: CharityMonthSummary }>('/charity/payments', input),
   reverse: (id: number) => del<{ message: string; summary: CharityMonthSummary }>(`/charity/payments/${id}`),
 };
+
+
+// Append-only history behind one order: money received from the shipping company and the
+// inventory-cost movements recorded when its goods left the factory.
+export interface SaleLedger {
+  collections: { id: number; amount: number; kind: string; collected_date: string; date_estimated: boolean; reference: string; created_by: string }[];
+  collected_total: number;
+  movements: { id: number; movement_type: string; model_code: string; color: string; qty: number; unit_cost: number; total_cost: number; created_at: string }[];
+}

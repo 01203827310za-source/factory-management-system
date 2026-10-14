@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate } from '../middleware/auth';
 import { computeFinancialSummary } from '../services/financialMetrics';
+import { valueStockRow } from '../services/readyStockPositions';
 import { FuzzyKeyIndex } from '../utils/textMatch';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
 
@@ -59,8 +60,8 @@ function computeCapitalSnapshot(db: AllData, upToDate: string) {
   readyStock.forEach(rs => {
     const k = modelIndex.resolve([rs.model_code, rs.color || '']);
     const actual = Math.max(0, rs.opening_balance + (newProd[k] || 0) - (soldQty[k] || 0) + (retQty[k] || 0));
-    const available = Math.max(0, actual - rs.reserved_quantity);
-    stockValue += available * rs.cost_per_piece;
+    // Physical (available + reserved) stock at recorded cost — reserved goods are still owned.
+    stockValue += valueStockRow(actual, rs.reserved_quantity, rs.cost_per_piece).physicalValue;
   });
 
   const fabricIndex = new FuzzyKeyIndex(['color', 'color']); // [material_type, color]

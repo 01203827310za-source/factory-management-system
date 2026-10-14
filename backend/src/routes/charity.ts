@@ -21,9 +21,10 @@ import { authenticate } from '../middleware/auth';
 import { logAudit } from '../services/auditHelper';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
 import {
-  CHARITY_OPERATION_TYPE, STATUS_DISPATCHED, STATUS_LABELS, cairoToday, charityDue, charityStatus,
-  collectionsByMonth, isValidDate, isValidMonth, monthLabel, round2,
+  CHARITY_OPERATION_TYPE, STATUS_LABELS, cairoToday, charityDue, charityStatus,
+  isValidDate, isValidMonth, monthLabel, round2,
 } from '../services/charity';
+import { collectionsByMonthFromLedger } from '../services/shippingCollections';
 
 const router = Router();
 router.use(authenticate);
@@ -46,7 +47,7 @@ const paymentView = (p: PaymentWithExpense) => ({
 function monthSummary(
   month: string,
   seasonId: number,
-  collections: ReturnType<typeof collectionsByMonth>,
+  collections: ReturnType<typeof collectionsByMonthFromLedger>,
   payments: PaymentWithExpense[],
 ) {
   const c = collections.get(month);
@@ -78,11 +79,13 @@ function monthSummary(
 }
 
 async function loadSeason(seasonId: number) {
-  const [sales, payments] = await Promise.all([
-    prisma.sale.findMany({ where: { ...seasonWhere(seasonId), order_status: STATUS_DISPATCHED } }),
+  // Actual money received from the shipping company, by the date each amount was received
+  // (append-only ledger — partial collections and corrections land in the right month).
+  const [ledger, payments] = await Promise.all([
+    prisma.shippingCollection.findMany({ where: seasonWhere(seasonId) }),
     prisma.charityPayment.findMany({ where: seasonWhere(seasonId), include: { expense: true }, orderBy: { id: 'asc' } }),
   ]);
-  return { collections: collectionsByMonth(sales), payments };
+  return { collections: collectionsByMonthFromLedger(ledger), payments };
 }
 
 router.get('/summary', async (req: Request, res: Response) => {
@@ -156,11 +159,11 @@ router.post('/payments', async (req: Request, res: Response) => {
         // Serialise concurrent payments for the same season+month so the outstanding check can't race.
         await tx.$queryRaw`SELECT pg_advisory_xact_lock(${seasonId}::int, hashtext(${month}))`;
 
-        const [sales, existing] = await Promise.all([
-          tx.sale.findMany({ where: { ...seasonWhere(seasonId), order_status: STATUS_DISPATCHED } }),
+        const [ledger, existing] = await Promise.all([
+          tx.shippingCollection.findMany({ where: seasonWhere(seasonId) }),
           tx.charityPayment.findMany({ where: { season_id: seasonId, charity_month: month } }),
         ]);
-        const total = round2(collectionsByMonth(sales).get(month)?.total ?? 0);
+        const total = round2(collectionsByMonthFromLedger(ledger).get(month)?.total ?? 0);
         const { due } = charityDue(total);
         const paidBefore = round2(existing.reduce((s, p) => s + p.amount, 0));
         const outstanding = round2(due - paidBefore);

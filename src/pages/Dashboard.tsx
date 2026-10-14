@@ -62,7 +62,7 @@ export default function Dashboard() {
 
   const assetBreakdown: { key: CategoryKey; label: string; val: number }[] = [
     { key: 'fabric', label: 'القماش المتاح × التكلفة', val: metrics.fabric_value },
-    { key: 'stock', label: 'الاستوك المتاح × التكلفة', val: metrics.stock_value },
+    { key: 'stock', label: 'الاستوك الفعلي (متاح + محجوز) × التكلفة', val: metrics.stock_value },
     { key: 'accessories', label: 'الإكسسوارات × التكلفة', val: metrics.accessories_value },
     { key: 'cutting', label: 'قطع متبقية × تكلفة المتر', val: metrics.cutting_value },
     { key: 'wip', label: 'قيمة التشغيل (قيد التشغيل)', val: metrics.wip_value },
@@ -168,6 +168,24 @@ export default function Dashboard() {
             <span className="text-lg font-bold text-orange-700">إجمالي الحجوزات: {metrics.total_reservations.toLocaleString('ar-EG')}</span>
           </div>
         )}
+
+        {/* Sales recognition, cost, receivables and advances — separate metrics, none of them added to cash */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+          <h2 className="text-base font-bold text-gray-800 mb-1">المبيعات والتكلفة والمستحقات</h2>
+          <p className="text-xs text-gray-400 mb-4">مؤشرات منفصلة — لا تدخل قيمة الفاتورة في الكاش إلا بعد التحصيل الفعلي</p>
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
+            <div className="bg-gray-50 rounded-lg p-3"><p className="text-xs text-gray-500">مبيعات خرجت من المصنع (معترف بها)</p><p className="font-bold text-blue-800">{fmt(metrics.recognized_sales ?? 0)} ج.م</p></div>
+            <div className="bg-gray-50 rounded-lg p-3"><p className="text-xs text-gray-500">تكلفة البضاعة المباعة (بتكلفة الشحن المسجّلة)</p><p className="font-bold text-red-700">{fmt(metrics.cogs ?? 0)} ج.م</p></div>
+            <div className="bg-gray-50 rounded-lg p-3"><p className="text-xs text-gray-500">هامش إجمالي (للأوردرات المسجّلة التكلفة)</p><p className="font-bold text-emerald-700">{fmt(metrics.gross_margin ?? 0)} ج.م</p></div>
+            <div className="bg-gray-50 rounded-lg p-3"><p className="text-xs text-gray-500">مستحق عند شركة الشحن</p><p className="font-bold text-purple-700">{fmt(metrics.shipping_receivable ?? 0)} ج.م</p></div>
+            <div className="bg-gray-50 rounded-lg p-3"><p className="text-xs text-gray-500">عربون على حجوزات لم تُشحن (التزام)</p><p className="font-bold text-amber-700">{fmt(metrics.advances_on_open_reservations ?? 0)} ج.م</p></div>
+            <div className="bg-gray-50 rounded-lg p-3"><p className="text-xs text-gray-500">عربون على أوردرات ملغاة (قد يُرد)</p><p className="font-bold text-amber-700">{fmt(metrics.advances_on_canceled_orders ?? 0)} ج.م</p></div>
+          </div>
+          {(metrics.uncosted_shipped_orders ?? 0) > 0 && (
+            <p className="text-xs text-amber-700 mt-3">{(metrics.uncosted_shipped_orders ?? 0).toLocaleString('ar-EG')} أوردر مشحون لا توجد له تكلفة مسجّلة (قبل تفعيل سجل التكلفة) — لا يدخل في التكلفة والهامش أعلاه.</p>
+          )}
+          <p className="text-xs text-gray-400 mt-2">الحجوزات ({(metrics.reserved_orders_count ?? 0).toLocaleString('ar-EG')} أوردر) تُعرض كقسم تشغيلي منفصل ولا تُحسب ضمن الأصول.</p>
+        </div>
 
         {/* Financial Summary */}
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">

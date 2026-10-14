@@ -3,7 +3,8 @@ import {
   salesApi,
   returnsApi,
   readyStockApi,
-  marketersApi
+  marketersApi,
+  type SaleLedger
 } from '../services/api';
 import type { Sale, ReturnItem } from '../types';
 import Modal from '../components/Modal';
@@ -39,6 +40,7 @@ export default function Sales() {
 
   // Invoice
   const [invoiceSale, setInvoiceSale] = useState<Sale | null>(null);
+  const [ledger, setLedger] = useState<SaleLedger | null>(null);
 
   // Returns
   const [returnsModalOpen, setReturnsModalOpen] = useState(false);
@@ -132,6 +134,9 @@ readyStock.forEach((s: any) => {
   };
   const openEdit = (sale: Sale) => {
     setEditSale(sale);
+    // Collection history of an already paid-out order (read-only; the amount field below edits the total).
+    setLedger(null);
+    if (sale.order_status === 'تم الصرف') salesApi.getLedger(sale.id).then(setLedger).catch(() => setLedger(null));
     // Already "تم الصرف"? Show its previously saved amount as-is (don't overwrite it).
     // Otherwise start in auto mode so switching the status to "تم الصرف" defaults it.
     setShippingCollectedAuto(sale.order_status !== 'تم الصرف');
@@ -627,6 +632,19 @@ await loadData();(returnForm);
                   onChange={e => setForm({ ...form, shipping_collected_date: e.target.value })}
                 />
                 <p className="text-xs text-gray-400 mt-1">اتركه فارغًا لاستخدام تاريخ اليوم (أو التاريخ المسجل سابقًا).</p>
+                {editSale && ledger && ledger.collections.length > 0 && (
+                  <div className="mt-2 rounded-lg border border-gray-200 bg-gray-50 p-2">
+                    <p className="text-xs font-semibold text-gray-600 mb-1">سجل التحصيل (إجمالي {ledger.collected_total.toLocaleString('ar-EG')} ج.م)</p>
+                    <ul className="space-y-0.5 text-xs text-gray-600 max-h-24 overflow-y-auto">
+                      {ledger.collections.map(c => (
+                        <li key={c.id} className="flex justify-between">
+                          <span>{c.collected_date}{c.date_estimated ? ' (تقديري)' : ''} — {c.kind === 'opening' ? 'رصيد مرحّل' : c.kind === 'collection' ? 'تحصيل' : c.kind === 'correction' ? 'تصحيح' : 'عكس'}</span>
+                          <span className={c.amount < 0 ? 'text-red-600' : 'text-emerald-700'}>{c.amount.toLocaleString('ar-EG')}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -682,6 +700,23 @@ await loadData();(returnForm);
                 ))}
               </tbody>
             </table>
+            {(() => {
+              // Derived from the order's status — the same rule the stock engine uses:
+              // reserved = still in the factory; shipped = goods left (any status except reservation/cancelled).
+              const ordered = (invoiceSale.model1_qty || 0) + (invoiceSale.model2_qty || 0) + (invoiceSale.model3_qty || 0) + (invoiceSale.model4_qty || 0) + (invoiceSale.model5_qty || 0);
+              const reserved = invoiceSale.order_status === 'تم الحجز' ? ordered : 0;
+              const shipped = invoiceSale.order_status === 'تم الحجز' || invoiceSale.order_status === 'تم الإلغاء' ? 0 : ordered;
+              const remainingToFulfill = invoiceSale.order_status === 'تم الإلغاء' ? 0 : ordered - shipped;
+              return (
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 bg-blue-50 border border-blue-100 rounded-lg p-4 text-sm mb-4">
+                  <div><p className="text-xs text-gray-500">الكمية المطلوبة</p><strong>{ordered.toLocaleString('ar-EG')}</strong></div>
+                  <div><p className="text-xs text-gray-500">الكمية المحجوزة</p><strong className="text-orange-700">{reserved.toLocaleString('ar-EG')}</strong></div>
+                  <div><p className="text-xs text-gray-500">الكمية المشحونة</p><strong className="text-emerald-700">{shipped.toLocaleString('ar-EG')}</strong></div>
+                  <div><p className="text-xs text-gray-500">المتبقي للتنفيذ</p><strong>{remainingToFulfill.toLocaleString('ar-EG')}</strong></div>
+                  <div><p className="text-xs text-gray-500">حالة الأوردر</p><strong>{invoiceSale.order_status}</strong></div>
+                </div>
+              );
+            })()}
             <div className="grid grid-cols-2 gap-4 bg-gray-50 rounded-lg p-4 text-sm">
               <div className="flex justify-between"><span>قيمة الفاتورة:</span><strong>{invoiceSale.invoice_value.toLocaleString('ar-EG')}</strong></div>
               <div className="flex justify-between text-emerald-600"><span>العربون:</span><strong>{invoiceSale.deposit_paid.toLocaleString('ar-EG')}</strong></div>

@@ -5,6 +5,11 @@ import { authenticate, requireManager } from '../middleware/auth';
 import { logAudit } from '../services/auditHelper';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
 import { cairoToday, isValidDate } from '../services/charity';
+import {
+  STATUS_CANCELED, STATUS_RESERVED, isStockDeducting, reservedSyncUpdates, validateReservation,
+} from '../services/readyStockPositions';
+import { ledgerTotal } from '../services/shippingCollections';
+import { collectionDate, loadStockContext, syncCollections, syncShipMovements } from '../services/orderLedgers';
 
 const router = Router();
 router.use(authenticate);
@@ -23,30 +28,46 @@ function extractModels(data: Record<string, unknown>): ModelSlot[] {
     .filter(m => m.code && m.qty > 0);
 }
 
-// Prisma client or interactive-transaction client — helpers below accept either
-// so they can participate in an atomic transaction when needed.
-type Db = typeof prisma | Prisma.TransactionClient;
+type Tx = Prisma.TransactionClient;
 
-// Find the ReadyStock row that best matches (code+color), falling back to code-only
-async function findStockRow(code: string, color: string, seasonId: number, db: Db = prisma) {
-  if (color) {
-    const exact = await db.readyStock.findFirst({ where: { ...seasonWhere(seasonId), model_code: code, color } });
-    if (exact) return exact;
-  }
-  return db.readyStock.findFirst({ where: { ...seasonWhere(seasonId), model_code: code } });
+// Raised inside a transaction to roll everything back and answer 400 with an Arabic message.
+class StockError extends Error {}
+
+// Serialises every write that can change stock availability or reservations within a season,
+// so two orders can never reserve (or ship) the same units at the same time.
+async function lockStock(tx: Tx, seasonId: number) {
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(${seasonId}::int, hashtext('ready_stock'))`;
 }
 
-// Adjust reserved_quantity on all model slots of a sale by `delta` (+qty or -qty)
-async function adjustReserved(models: ModelSlot[], delta: 1 | -1, seasonId: number, db: Db = prisma) {
-  for (const m of models) {
-    const row = await findStockRow(m.code, m.color, seasonId, db);
-    if (!row) continue;
-    const next = Math.max(0, row.reserved_quantity + delta * m.qty);
-    await db.readyStock.update({
-      where: { id: row.id },
-      data: { reserved_quantity: next },
-    });
+// Brings ready_stock.reserved_quantity in line with the reservation ORDERS for the stock rows
+// the given slots map to. Recomputing (instead of +/- deltas) means a reservation is applied or
+// released exactly once however many times it is edited, cancelled or retried.
+async function syncReserved(tx: Tx, seasonId: number, slots: ModelSlot[]) {
+  const ctx = await loadStockContext(tx, seasonId);
+  const keys = new Set(slots.map(m => ctx.keyOf(m.code, m.color)));
+  const updates = reservedSyncUpdates(ctx, keys);
+  for (const u of updates) {
+    await tx.readyStock.update({ where: { id: u.id }, data: { reserved_quantity: u.to } });
   }
+}
+
+const slotSignature = (slots: ModelSlot[]) =>
+  slots.map(m => `${m.code}|${m.color}|${m.qty}`).sort().join(';');
+
+const describeSlots = (slots: ModelSlot[]) =>
+  slots.map(m => `${m.code}${m.color ? `/${m.color}` : ''}×${m.qty}`).join('، ');
+
+// Inventory movement trail (the system has no movement table; the audit log is its ledger).
+function logStockMovement(
+  user: Request['user'], action: 'STOCK_RESERVED' | 'STOCK_RELEASED' | 'STOCK_SHIPPED',
+  sale: { id: number; client: string; order_number: string }, slots: ModelSlot[], note: string,
+) {
+  if (slots.length === 0) return;
+  logAudit({
+    user, module: 'ReadyStock', action, record_id: sale.id,
+    after_data: { order_number: sale.order_number, slots },
+    description: `${note}: ${sale.client} - ${sale.order_number} — ${describeSlots(slots)}`,
+  });
 }
 
 // Validate a shipping-payout "received amount" against the real remaining balance.
@@ -145,19 +166,32 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
 
     const { season: _season, id: _id, season_id: _seasonId, ...saleData } = data as Omit<Prisma.SaleUncheckedCreateInput, 'season_id' | 'remaining'> & Record<string, unknown>;
 
-    const sale = await prisma.sale.create({
-      data: {
-        ...saleData,
-        season_id: seasonId,
-        remaining,
-        shipping_collected: resolved.value,
-        shipping_collected_date: payoutDate.value,
-      },
+    const newSlots = extractModels(data);
+    const explicitDate = data.shipping_collected_date;
+    const sale = await prisma.$transaction(async (tx) => {
+      await lockStock(tx, seasonId);
+      if (isReservation) {
+        // Reserving requires the goods to physically exist and be unallocated (model + colour).
+        const problem = validateReservation(await loadStockContext(tx, seasonId), newSlots);
+        if (problem) throw new StockError(problem);
+      }
+      const created = await tx.sale.create({
+        data: {
+          ...saleData,
+          season_id: seasonId,
+          remaining,
+          shipping_collected: resolved.value,
+          shipping_collected_date: payoutDate.value,
+        },
+      });
+      if (isReservation) await syncReserved(tx, seasonId, newSlots);
+      await syncCollections(tx, created, { previousCached: 0, desired: resolved.value, date: collectionDate(explicitDate, null), user: req.user?.username });
+      await syncShipMovements(tx, created, newSlots, req.user?.username);
+      return created;
     });
 
-    if (isReservation) {
-      await adjustReserved(extractModels(data), +1, seasonId);
-    }
+    if (isReservation) logStockMovement(req.user, 'STOCK_RESERVED', sale, newSlots, 'حجز مخزون');
+    else if (isStockDeducting(status)) logStockMovement(req.user, 'STOCK_SHIPPED', sale, newSlots, 'خروج مخزون (شحن)');
 
     const isDispatched = status === 'تم الصرف';
     const collection_difference = isDispatched ? Math.max(0, remaining - resolved.value) : 0;
@@ -170,6 +204,7 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
     });
     return res.status(201).json({ ...sale, collection_difference });
   } catch (err) {
+    if (err instanceof StockError) return res.status(400).json({ message: err.message });
     console.error(err);
     return res.status(500).json({ message: 'خطأ في إضافة الطلب' });
   }
@@ -209,25 +244,55 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
       return res.status(400).json({ message: resolved.error });
     }
     data.shipping_collected = resolved.value;
+    const explicitCollectionDate = data.shipping_collected_date;
     const payoutDate = resolvePayoutDate(newStatus, data.shipping_collected_date, wasDispatched, oldSale.shipping_collected_date);
     if ('error' in payoutDate) return res.status(400).json({ message: payoutDate.error });
     data.shipping_collected_date = payoutDate.value;
 
+    // Goods that already left the factory are never restored by a cancellation — they come
+    // back only through the returns workflow, once physically received.
+    if (newStatus === STATUS_CANCELED && isStockDeducting(oldSale.order_status)) {
+      return res.status(400).json({ message: 'لا يمكن إلغاء أوردر تم شحنه — استخدم المرتجعات لإرجاع البضاعة للمخزن بعد استلامها فعليًا' });
+    }
+
+    const oldSlots = extractModels(oldSale as unknown as Record<string, unknown>);
+    const newSlots = extractModels({ ...oldSale, ...data } as unknown as Record<string, unknown>);
+    const slotsChanged = slotSignature(oldSlots) !== slotSignature(newSlots);
+
     const sale = await prisma.$transaction(async (tx) => {
-      // Reverse old reservation quantities before saving
-      if (wasReservation) {
-        await adjustReserved(extractModels(oldSale as unknown as Record<string, unknown>), -1, seasonId, tx);
+      await lockStock(tx, seasonId);
+
+      // Re-read under the lock so a concurrent edit/cancel can't be applied twice.
+      const current = await tx.sale.findFirst({ where: { id, season_id: seasonId } });
+      if (!current || current.order_status !== oldSale.order_status || current.shipping_collected !== oldSale.shipping_collected) {
+        throw new StockError('تم تعديل هذا الأوردر من مستخدم آخر — أعد تحميل الصفحة وحاول مرة أخرى');
+      }
+
+      // Validate the NEW reservation against stock minus every OTHER order's reservation
+      // (this order's own old reservation is excluded, i.e. released first).
+      if (willBeReservation && (!wasReservation || slotsChanged)) {
+        const problem = validateReservation(await loadStockContext(tx, seasonId, id), newSlots);
+        if (problem) throw new StockError(problem);
       }
 
       const updated = await tx.sale.update({ where: { id }, data: { ...data, season_id: seasonId } });
-
-      // Apply new reservation quantities after saving
-      if (willBeReservation) {
-        await adjustReserved(extractModels(data), +1, seasonId, tx);
-      }
-
+      await syncReserved(tx, seasonId, [...oldSlots, ...newSlots]);
+      // Cash side: append only the change in what the shipping company actually paid.
+      await syncCollections(tx, updated, {
+        previousCached: current.shipping_collected, desired: resolved.value,
+        date: collectionDate(explicitCollectionDate, oldSale.shipping_collected_date), user: req.user?.username,
+      });
+      // Inventory-cost side: append only the change in what physically left the factory.
+      await syncShipMovements(tx, updated, extractModels(updated as unknown as Record<string, unknown>), req.user?.username);
       return updated;
     });
+
+    if (willBeReservation && (!wasReservation || slotsChanged)) {
+      logStockMovement(req.user, 'STOCK_RESERVED', sale, newSlots, wasReservation ? 'تعديل حجز مخزون' : 'حجز مخزون');
+    } else if (wasReservation && !willBeReservation) {
+      logStockMovement(req.user, newStatus === STATUS_CANCELED ? 'STOCK_RELEASED' : 'STOCK_SHIPPED', sale, oldSlots,
+        newStatus === STATUS_CANCELED ? 'فك حجز مخزون (إلغاء)' : 'خروج مخزون (شحن)');
+    }
 
     const collection_difference = willBeDispatched ? Math.max(0, remaining - resolved.value) : 0;
     const action = willBeDispatched
@@ -243,8 +308,26 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
       before_data: oldSale, after_data: { ...sale, collection_difference }, description });
     return res.json({ ...sale, collection_difference });
   } catch (err) {
+    if (err instanceof StockError) return res.status(400).json({ message: err.message });
     console.error(err);
     return res.status(500).json({ message: 'خطأ في تحديث الطلب' });
+  }
+});
+
+// GET /api/sales/:id/ledger — collection history + inventory-cost movements of one order
+router.get('/:id/ledger', async (req: Request, res: Response) => {
+  try {
+    const seasonId = await getSeasonId(req);
+    const id = parseInt(req.params.id as string);
+    const sale = await prisma.sale.findFirst({ where: { id, season_id: seasonId }, select: { id: true } });
+    if (!sale) return res.status(404).json({ message: 'الطلب غير موجود' });
+    const [collections, movements] = await Promise.all([
+      prisma.shippingCollection.findMany({ where: { sale_id: id }, orderBy: { id: 'asc' } }),
+      prisma.inventoryMovement.findMany({ where: { sale_id: id }, orderBy: { id: 'asc' } }),
+    ]);
+    return res.json({ collections, collected_total: ledgerTotal(collections), movements });
+  } catch {
+    return res.status(500).json({ message: 'خطأ في جلب سجل الأوردر' });
   }
 });
 
@@ -253,16 +336,19 @@ router.delete('/:id', requireManager, async (req: Request, res: Response) => {
   try {
     const seasonId = await getSeasonId(req);
     const id = parseInt(req.params.id as string);
-    // If deleting a reservation, release reserved stock first
     const sale = await prisma.sale.findFirst({ where: { id, season_id: seasonId } });
-    if (sale?.order_status === 'تم الحجز') {
-      await adjustReserved(extractModels(sale as unknown as Record<string, unknown>), -1, seasonId);
-    }
-    await prisma.sale.delete({ where: { id } });
+    if (!sale) return res.status(404).json({ message: 'الطلب غير موجود' });
+    // Deleting a reservation releases its reserved units, atomically with the delete.
+    await prisma.$transaction(async (tx) => {
+      await lockStock(tx, seasonId);
+      await tx.sale.delete({ where: { id } });
+      if (sale.order_status === STATUS_RESERVED) await syncReserved(tx, seasonId, extractModels(sale as unknown as Record<string, unknown>));
+    });
     logAudit({ user: req.user, module: 'Sales', action: 'DELETE', record_id: id,
       before_data: sale, description: `حذف عملية بيع: ${sale?.client} - ${sale?.order_number}` });
     return res.json({ message: 'تم حذف الطلب' });
-  } catch {
+  } catch (err) {
+    if (err instanceof StockError) return res.status(400).json({ message: err.message });
     return res.status(500).json({ message: 'خطأ في حذف الطلب' });
   }
 });
@@ -289,14 +375,22 @@ router.post('/:id/convert-reservation', requireManager, async (req: Request, res
       return res.status(400).json({ message: resolved.error });
     }
 
+    const slots = extractModels(sale as unknown as Record<string, unknown>);
     const updated = await prisma.$transaction(async (tx) => {
-      // Release reserved qty; actual_balance automatically drops once status → 'تم الصرف'
-      await adjustReserved(extractModels(sale as unknown as Record<string, unknown>), -1, seasonId, tx);
-      return tx.sale.update({
+      await lockStock(tx, seasonId);
+      const current = await tx.sale.findFirst({ where: { id, season_id: seasonId } });
+      if (!current || current.order_status !== STATUS_RESERVED) throw new StockError('هذا الطلب ليس حجزاً');
+      // Physical stock drops once status leaves the reservation state; the reservation is released with it.
+      const upd = await tx.sale.update({
         where: { id },
         data: { order_status: 'تم الصرف', shipping_collected: resolved.value, shipping_collected_date: cairoToday() },
       });
+      await syncReserved(tx, seasonId, slots);
+      await syncCollections(tx, upd, { previousCached: current.shipping_collected, desired: resolved.value, date: cairoToday(), user: req.user?.username });
+      await syncShipMovements(tx, upd, slots, req.user?.username);
+      return upd;
     });
+    logStockMovement(req.user, 'STOCK_SHIPPED', sale, slots, 'خروج مخزون (شحن)');
 
     const collection_difference = Math.max(0, sale.remaining - resolved.value);
     logAudit({ user: req.user, module: 'Sales', action: 'SHIPPING_PAYOUT_CONFIRMED', record_id: id,
@@ -304,6 +398,7 @@ router.post('/:id/convert-reservation', requireManager, async (req: Request, res
       description: `تحويل حجز إلى صرف: ${sale.client} - ${sale.order_number} — المتبقي: ${sale.remaining} — المستلم فعليًا: ${resolved.value} — الفرق غير المحصل: ${collection_difference}` });
     return res.json({ ...updated, collection_difference });
   } catch (err) {
+    if (err instanceof StockError) return res.status(400).json({ message: err.message });
     console.error(err);
     return res.status(500).json({ message: 'خطأ في تحويل الحجز' });
   }
@@ -320,17 +415,22 @@ router.post('/:id/cancel-reservation', requireManager, async (req: Request, res:
       return res.status(400).json({ message: 'هذا الطلب ليس حجزاً' });
     }
 
-    // Release reserved qty; actual_balance is unchanged (cancelled sales excluded from totalSales)
-    await adjustReserved(extractModels(sale as unknown as Record<string, unknown>), -1, seasonId);
-
-    const updated = await prisma.sale.update({
-      where: { id },
-      data: { order_status: 'تم الإلغاء' },
+    // Release the reservation; physical stock is unchanged (the goods never left).
+    const slots = extractModels(sale as unknown as Record<string, unknown>);
+    const updated = await prisma.$transaction(async (tx) => {
+      await lockStock(tx, seasonId);
+      const current = await tx.sale.findFirst({ where: { id, season_id: seasonId } });
+      if (!current || current.order_status !== STATUS_RESERVED) throw new StockError('هذا الطلب ليس حجزاً');
+      const upd = await tx.sale.update({ where: { id }, data: { order_status: STATUS_CANCELED } });
+      await syncReserved(tx, seasonId, slots);
+      return upd;
     });
+    logStockMovement(req.user, 'STOCK_RELEASED', sale, slots, 'فك حجز مخزون (إلغاء)');
     logAudit({ user: req.user, module: 'Sales', action: 'UPDATE', record_id: id,
       before_data: sale, after_data: updated, description: `إلغاء حجز: ${sale.client} - ${sale.order_number}` });
     return res.json(updated);
   } catch (err) {
+    if (err instanceof StockError) return res.status(400).json({ message: err.message });
     console.error(err);
     return res.status(500).json({ message: 'خطأ في إلغاء الحجز' });
   }

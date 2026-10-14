@@ -15,6 +15,7 @@ import { authenticate } from '../middleware/auth';
 import { calcEmployeePayroll, round2 } from '../services/payrollCalc';
 import { FuzzyKeyIndex } from '../utils/textMatch';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
+import { valueStockRow } from '../services/readyStockPositions';
 
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
 
@@ -285,8 +286,10 @@ async function gatherSnapshot(seasonId: number) {
     const returned = returnQty[k] || 0;
     const reserved = rs.reserved_quantity || 0;
     const actual   = Math.max(0, rs.opening_balance + produced - sold + returned);
-    const available = Math.max(0, actual - reserved);
-    const value    = available * rs.cost_per_piece;
+    const v = valueStockRow(actual, reserved, rs.cost_per_piece);
+    const available = v.availableQty;
+    // Valued at physical quantity: reserved goods are still in the factory.
+    const value    = v.physicalValue;
     stockValue += value;
     stockSummary.push({          // all items, including zero-stock
       code:     rs.model_code,

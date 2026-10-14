@@ -167,7 +167,7 @@ export default function ReadyStock() {
   }, [items, search]);
 
   const exportExcel = () => {
-    const ws = XLSX.utils.json_to_sheet(items.map(r => ({ 'كود الموديل': r.model_code, 'اسم الصنف': r.product_name, 'اللون': r.color, 'رصيد أول': r.opening_balance, 'إنتاج جديد': r.new_production, 'إجمالي المبيعات': r.total_sales, 'المرتجعات': r.total_returns, 'الرصيد الفعلي': r.actual_balance, 'محجوز': r.reserved_quantity, 'المتاح': r.available_quantity, 'تكلفة القطعة': r.cost_per_piece, 'المكان': r.location })));
+    const ws = XLSX.utils.json_to_sheet(items.map(r => ({ 'كود الموديل': r.model_code, 'اسم الصنف': r.product_name, 'اللون': r.color, 'رصيد أول': r.opening_balance, 'إنتاج جديد': r.new_production, 'إجمالي المبيعات': r.total_sales, 'المرتجعات': r.total_returns, 'الرصيد الفعلي': r.actual_balance, 'محجوز': r.reserved_quantity, 'المتاح': r.available_quantity, 'تكلفة القطعة': r.cost_per_piece, 'قيمة المخزون (الفعلي)': Math.max(0, r.actual_balance) * r.cost_per_piece, 'المكان': r.location })));
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'الاستوك'); XLSX.writeFile(wb, 'ready_stock_export.xlsx');
   };
 
@@ -193,11 +193,11 @@ export default function ReadyStock() {
         <div className="overflow-x-auto">
           <table className="w-full text-sm whitespace-nowrap">
             <thead><tr className="bg-[#1e3a5f] text-white">
-              {['#','كود الموديل','اسم الصنف','اللون','رصيد أول','إنتاج جديد 🔄','إجمالي مبيعات 🔄','المرتجعات 🔄','الرصيد الفعلي 🔄','محجوز 🔒','المتاح ✅','تكلفة القطعة','المكان','إجراءات'].map(h => <th key={h} className="px-3 py-3 text-center font-semibold">{h}</th>)}
+              {['#','كود الموديل','اسم الصنف','اللون','رصيد أول','إنتاج جديد 🔄','إجمالي مبيعات 🔄','المرتجعات 🔄','الرصيد الفعلي 🔄','محجوز 🔒','المتاح ✅','تكلفة القطعة','قيمة المخزون (الفعلي)','المكان','إجراءات'].map(h => <th key={h} className="px-3 py-3 text-center font-semibold">{h}</th>)}
             </tr></thead>
             <tbody>
-              {loading && <tr><td colSpan={14} className="text-center py-8 text-gray-400"><RefreshCw size={16} className="animate-spin inline mr-2" />جارٍ التحميل...</td></tr>}
-              {!loading && filtered.length === 0 && <tr><td colSpan={14} className="text-center py-8 text-gray-400">لا توجد بيانات</td></tr>}
+              {loading && <tr><td colSpan={15} className="text-center py-8 text-gray-400"><RefreshCw size={16} className="animate-spin inline mr-2" />جارٍ التحميل...</td></tr>}
+              {!loading && filtered.length === 0 && <tr><td colSpan={15} className="text-center py-8 text-gray-400">لا توجد بيانات</td></tr>}
               {filtered.map((item, idx) => (
                 <tr key={item.id} className={`border-t border-gray-100 hover:bg-blue-50/40 transition ${item.available_quantity < 0 ? 'bg-red-100' : item.available_quantity < 3 ? 'bg-red-50' : item.available_quantity <= 10 ? 'bg-amber-50' : ''}`}>
                   <td className="px-3 py-3 text-center text-gray-500">{idx + 1}</td>
@@ -218,6 +218,8 @@ export default function ReadyStock() {
                     {item.available_quantity.toLocaleString('ar-EG')}
                   </td>
                   <td className="px-3 py-3 text-center">{item.cost_per_piece.toLocaleString('ar-EG')}</td>
+                  {/* Physical (available + reserved) × recorded cost — reserved goods are still owned. */}
+                  <td className="px-3 py-3 text-center font-semibold text-blue-700">{(Math.max(0, item.actual_balance) * item.cost_per_piece).toLocaleString('ar-EG')}</td>
                   <td className="px-3 py-3 text-center text-xs">{item.location}</td>
                   <td className="px-3 py-3 text-center"><div className="flex items-center justify-center gap-1">
                     <button onClick={() => openEdit(item)} className="p-1.5 text-blue-600 hover:bg-blue-100 rounded-lg"><Edit2 size={15} /></button>

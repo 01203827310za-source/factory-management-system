@@ -4,6 +4,8 @@ import { authenticate } from '../middleware/auth';
 import { FuzzyKeyIndex } from '../utils/textMatch';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
 import { computeDashboardCashFlow } from '../services/financialMetrics';
+import { isStockDeducting, STATUS_CANCELED, STATUS_RESERVED, valueStockRow } from '../services/readyStockPositions';
+import { costOfGoodsShipped, returnsCostCredit, type MovementRow } from '../services/inventoryMovements';
 
 const router = Router();
 router.use(authenticate);
@@ -133,21 +135,27 @@ router.get('/', async (req: Request, res: Response) => {
     });
 
     let stockValue = 0;
-    const stockItems: Array<{ model_code: string; product_name: string; color: string; actual_qty: number; reserved_qty: number; available_qty: number; unit_cost: number; total: number }> = [];
+    const stockItems: Array<{ model_code: string; product_name: string; color: string; actual_qty: number; reserved_qty: number; available_qty: number; unit_cost: number; total: number; reserved_value: number; available_value: number }> = [];
+    let stockReservedValue = 0;
+    let stockAvailableValue = 0;
     readyStock.forEach(rs => {
       const k = modelIndex.resolve([rs.model_code, rs.color || '']);
       const prod = newProd[k] || 0;
       const sold = totalSalesQty[k] || 0;
       const returned = returnQty[k] || 0;
       const actual = Math.max(0, rs.opening_balance + prod - sold + returned);
-      const available = Math.max(0, actual - rs.reserved_quantity);
-      const total = available * rs.cost_per_piece;
+      // Stock is valued at PHYSICAL quantity (available + reserved): reserved goods are still in
+      // the factory, so reserving only moves value from "available" to "reserved".
+      const v = valueStockRow(actual, rs.reserved_quantity, rs.cost_per_piece);
+      const total = v.physicalValue;
       stockValue += total;
+      stockReservedValue += v.reservedValue;
+      stockAvailableValue += v.availableValue;
       if (total !== 0) {
         stockItems.push({
           model_code: rs.model_code, product_name: rs.product_name, color: rs.color,
-          actual_qty: actual, reserved_qty: rs.reserved_quantity, available_qty: available,
-          unit_cost: rs.cost_per_piece, total,
+          actual_qty: v.physicalQty, reserved_qty: v.reservedQty, available_qty: v.availableQty,
+          unit_cost: rs.cost_per_piece, total, reserved_value: v.reservedValue, available_value: v.availableValue,
         });
       }
     });
@@ -188,6 +196,48 @@ router.get('/', async (req: Request, res: Response) => {
           invoice_total: ca.total_amount, paid: ca.amount_paid, remaining: ca.remaining,
         });
       });
+
+    // ── Sales recognition, cost of goods sold, receivables and advances (additive metrics) ──
+    // "Recognized" sales = orders whose goods physically left the factory (any status except
+    // a reservation or a cancellation). total_sales above is kept as-is (it also counts
+    // reservations/cancellations) so existing cards don't change; these are separate metrics.
+    const shippedSales = sales.filter(s => isStockDeducting(s.order_status));
+    const recognizedSales = shippedSales.reduce((n, s) => n + s.invoice_value, 0);
+
+    const movements = await prisma.inventoryMovement.findMany({ where: seasonWhere(seasonId) });
+    const saleById = new Map(sales.map(s => [s.id, s]));
+    const movementsByOrder = new Map<string, MovementRow[]>();
+    movements.forEach(m => {
+      const sale = saleById.get(m.sale_id);
+      if (!sale) return;
+      const list = movementsByOrder.get(sale.order_number) ?? [];
+      list.push(m);
+      movementsByOrder.set(sale.order_number, list);
+    });
+    const costKeys = new FuzzyKeyIndex(['model', 'color']);
+    const keyOf = (code: string, color: string) => costKeys.resolve([code, color || '']);
+    const costedSaleIds = new Set<number>();
+    movements.forEach(m => { if (m.movement_type === 'SHIP') costedSaleIds.add(m.sale_id); });
+    const costedSales = shippedSales.filter(s => costedSaleIds.has(s.id));
+    const returnsCredit = returnsCostCredit({
+      returns: returns_.map(r => ({ order_number: r.order_number, model_code: r.model_code, model_color: r.model_color, model_qty: r.model_qty })),
+      movementsByOrder, keyOf,
+    });
+    const cogs = costOfGoodsShipped(movements) - returnsCredit.credit;
+    const costedRevenue = costedSales.reduce((n, s) => n + s.invoice_value, 0);
+
+    const shippingReceivable = receivableItems
+      .filter(i => i.source === 'sale' || i.source === 'sale_shipping_gap')
+      .reduce((n, i) => n + i.remaining, 0);
+    const clientAccountsReceivable = receivableItems
+      .filter(i => i.source === 'client_account')
+      .reduce((n, i) => n + i.remaining, 0);
+
+    // Deposits are real cash, but on an order that has not shipped they are an obligation to
+    // deliver (or refund) — not earned revenue. Surfaced so they are not mistaken for profit.
+    const advancesOnOpenReservations = sales.filter(s => s.order_status === STATUS_RESERVED).reduce((n, s) => n + s.deposit_paid, 0);
+    const advancesOnCanceledOrders = sales.filter(s => s.order_status === STATUS_CANCELED).reduce((n, s) => n + s.deposit_paid, 0);
+    const reservedOrdersCount = sales.filter(s => s.order_status === STATUS_RESERVED).length;
     // Total current assets = warehouses + remaining cutting pieces + WIP + receivables.
     // Deliberately excludes cash/net-profit/debts and Fixed Assets — those live in the Financial Center, not here.
     const totalCurrentAssets = fabricValue + stockValue + accessoriesValue + cuttingInventoryValue + wipValue + moneyOwedToUs;
@@ -217,6 +267,8 @@ router.get('/', async (req: Request, res: Response) => {
       total_current_assets: totalCurrentAssets,
       fabric_value: fabricValue,
       stock_value: stockValue,
+      stock_reserved_value: stockReservedValue,
+      stock_available_value: stockAvailableValue,
       accessories_value: accessoriesValue,
       cutting_value: cuttingInventoryValue,
       wip_value: wipValue,
@@ -227,6 +279,17 @@ router.get('/', async (req: Request, res: Response) => {
       cutting_items: cuttingItems,
       wip_items: wipItems,
       receivable_items: receivableItems,
+      recognized_sales: recognizedSales,
+      costed_sales: costedRevenue,
+      cogs,
+      gross_margin: costedRevenue - cogs,
+      uncosted_shipped_orders: shippedSales.length - costedSales.length,
+      unmatched_return_cost_lines: returnsCredit.unmatched,
+      shipping_receivable: shippingReceivable,
+      client_accounts_receivable: clientAccountsReceivable,
+      advances_on_open_reservations: advancesOnOpenReservations,
+      advances_on_canceled_orders: advancesOnCanceledOrders,
+      reserved_orders_count: reservedOrdersCount,
     });
   } catch (err) {
     console.error(err);

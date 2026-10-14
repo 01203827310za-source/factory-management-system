@@ -1,5 +1,6 @@
 import prisma from '../lib/prisma';
 import { FuzzyKeyIndex } from '../utils/textMatch';
+import { valueStockRow } from '../services/readyStockPositions';
 
 export type SnapshotData = {
   total_current_assets: number;
@@ -105,8 +106,8 @@ export async function computeSnapshot(seasonId: number): Promise<SnapshotData> {
   readyStock.forEach(rs => {
     const k        = modelIndex.resolve([rs.model_code, rs.color || '']);
     const actual   = Math.max(0, rs.opening_balance + (newProd[k] || 0) - (totalSalesQty[k] || 0) + (returnQty[k] || 0));
-    const available = Math.max(0, actual - rs.reserved_quantity);
-    stockValue     += available * rs.cost_per_piece;
+    // Physical (available + reserved) stock at recorded cost — reserved goods are still owned.
+    stockValue     += valueStockRow(actual, rs.reserved_quantity, rs.cost_per_piece).physicalValue;
   });
 
   const accessoriesValue = accessories
