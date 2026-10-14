@@ -12,6 +12,8 @@ import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
 import ProfitByPeriod from '../components/ProfitByPeriod';
+import DashboardBreakdownModal, { type BreakdownKind } from '../components/DashboardBreakdownModal';
+import { useAuth } from '../contexts/AuthContext';
 
 const PIE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
@@ -33,6 +35,9 @@ const PAGE_SIZE = 10;
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<DashboardMetrics>(EMPTY);
   const [loading, setLoading] = useState(true);
+  const [cardBreakdown, setCardBreakdown] = useState<BreakdownKind | null>(null);
+  const { can } = useAuth();
+  const canDetails = can('dashboard.view');
   const [breakdownOpen, setBreakdownOpen] = useState(false);
   const [detailCategory, setDetailCategory] = useState<CategoryKey | null>(null);
   const [search, setSearch] = useState('');
@@ -149,9 +154,9 @@ export default function Dashboard() {
       {!loading && <>
         {/* Top Stats */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard title="إجمالي المبيعات" value={metrics.total_sales} icon={<ShoppingCart size={22} />} color="blue" />
-          <StatCard title="إجمالي المصاريف" value={metrics.total_expenses} icon={<TrendingDown size={22} />} color="red" />
-          <StatCard title="صافي الربح" value={metrics.net_profit} icon={metrics.net_profit >= 0 ? <TrendingUp size={22} /> : <TrendingDown size={22} />} color={metrics.net_profit >= 0 ? 'green' : 'red'} />
+          <StatCard title="إجمالي المبيعات" value={metrics.total_sales} icon={<ShoppingCart size={22} />} color="blue" onDetails={canDetails ? () => setCardBreakdown('sales') : undefined} />
+          <StatCard title="إجمالي المصاريف" value={metrics.total_expenses} icon={<TrendingDown size={22} />} color="red" onDetails={canDetails ? () => setCardBreakdown('expenses') : undefined} />
+          <StatCard title="صافي الربح" value={metrics.net_profit} icon={metrics.net_profit >= 0 ? <TrendingUp size={22} /> : <TrendingDown size={22} />} color={metrics.net_profit >= 0 ? 'green' : 'red'} onDetails={canDetails ? () => setCardBreakdown('net_profit') : undefined} />
           <StatCard title="المتبقي من الديون" value={metrics.remaining_debts} icon={<AlertTriangle size={22} />} color="yellow" alert={metrics.remaining_debts > 0} />
         </div>
 
@@ -502,6 +507,8 @@ export default function Dashboard() {
             </div>
           )}
         </Modal>
+
+        <DashboardBreakdownModal kind={cardBreakdown} onClose={() => setCardBreakdown(null)} />
 
         {/* Profit by Period */}
         <ProfitByPeriod />

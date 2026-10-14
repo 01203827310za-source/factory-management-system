@@ -105,3 +105,38 @@ export function computeAccessoriesValue(accessories: AccessoriesWarehouse[], ran
     .filter(a => isInRange(a.date, range))
     .reduce((s, a) => s + Math.max(0, a.qty_in - a.qty_consumed) * a.cost, 0);
 }
+
+// ===== Dashboard cash-flow components =====
+// Single source of truth for the Dashboard's total_in / total_out / net_profit.
+// The breakdown endpoints and GET /api/dashboard both call this, so the cards and
+// their drill-downs cannot drift apart. Arithmetic is identical to the original
+// inline formula (cash basis; cost of goods sold is NOT part of it).
+export type DashboardCashFlow = {
+  expenseIn: number;
+  depositIn: number;
+  remainingIn: number;
+  clientPayIn: number;
+  expenseOut: number;
+  debtOut: number;
+  refundOut: number;
+  totalIn: number;
+  totalOut: number;
+  netProfit: number;
+};
+
+export function computeDashboardCashFlow(input: FinancialInput): DashboardCashFlow {
+  const { sales, expenses, returns_, paymentLogs } = input;
+  const depositIn   = sales.reduce((s, x) => s + x.deposit_paid, 0);
+  const remainingIn = sales
+    .filter(s => s.order_status === STATUS_DISPATCHED)
+    .reduce((s, x) => s + x.shipping_collected, 0);
+  const clientPayIn = paymentLogs.filter(p => p.type === CLIENT_PAYMENT).reduce((s, p) => s + p.amount, 0);
+  const debtOut     = paymentLogs.filter(p => p.type === DEBT_PAYMENT).reduce((s, p) => s + p.amount, 0);
+  const refundOut   = returns_.reduce((s, r) => s + r.refund_amount, 0);
+  const expenseIn   = expenses.reduce((s, e) => s + e.amount_in, 0);
+  const expenseOut  = expenses.reduce((s, e) => s + e.amount_out, 0);
+
+  const totalIn  = expenseIn + depositIn + remainingIn + clientPayIn;
+  const totalOut = expenseOut + debtOut + refundOut;
+  return { expenseIn, depositIn, remainingIn, clientPayIn, expenseOut, debtOut, refundOut, totalIn, totalOut, netProfit: totalIn - totalOut };
+}

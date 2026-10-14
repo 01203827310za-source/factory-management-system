@@ -490,7 +490,41 @@ export const marketersApi = {
 // ===== DASHBOARD =====
 export const dashboardApi = {
   getMetrics: () => get<DashboardMetrics>('/dashboard'),
+  getNetProfitBreakdown: () => get<NetProfitBreakdown>('/dashboard/breakdown/net-profit'),
+  getExpensesBreakdown: () => get<ExpensesBreakdown>('/dashboard/breakdown/expenses'),
+  getExpenseRecords: (category: string) =>
+    get<ExpenseRecordsResult>(`/dashboard/breakdown/expenses/records?category=${encodeURIComponent(category)}`),
+  getSalesBreakdown: () => get<SalesBreakdown>('/dashboard/breakdown/sales'),
+  getSalesRecords: (group: string, value: string) =>
+    get<SalesRecordsResult>(`/dashboard/breakdown/sales/records?group=${encodeURIComponent(group)}&value=${encodeURIComponent(value)}`),
 };
+
+export interface BreakdownLine { key: string; label: string; amount: number }
+export interface NetProfitBreakdown {
+  method: string; cogs_included: boolean; cogs_note: string;
+  total_revenue: number; total_expenses: number; net_profit: number;
+  inflows: BreakdownLine[]; outflows: BreakdownLine[];
+}
+export interface ExpenseCategoryRow { key: string; label: string; kind: 'expense' | 'debt_payment' | 'refund'; total: number; count: number }
+export interface ExpensesBreakdown {
+  total_expenses: number; categories_total: number; reconciled: boolean; difference: number;
+  categories: ExpenseCategoryRow[];
+  record_access: { expense: boolean; debt_payment: boolean; refund: boolean };
+}
+export interface ExpenseRecordRow { id: number; date: string; description: string; category: string; amount: number; reference: string }
+export interface ExpenseRecordsResult { category: string; count: number; total: number; records: ExpenseRecordRow[] }
+export interface SalesGroupRow { value: string; count: number; invoice_value: number; deposit_paid: number; collected: number }
+export interface SalesBreakdown {
+  total_sales: number; order_count: number; total_deposits: number; total_shipping_collected: number;
+  total_cash_collected: number; total_outstanding: number; canceled_count: number; canceled_value: number;
+  by_status: SalesGroupRow[]; by_marketer: SalesGroupRow[]; by_delivery_method: SalesGroupRow[];
+  can_view_records: boolean;
+}
+export interface SalesRecordRow {
+  id: number; order_number: string; date: string; client: string; marketer: string; order_status: string;
+  delivery_method: string; invoice_value: number; deposit_paid: number; shipping_collected: number; remaining: number;
+}
+export interface SalesRecordsResult { group: string; value: string; count: number; total_invoice_value: number; records: SalesRecordRow[] }
 
 export interface DashboardMetrics {
   total_sales: number;

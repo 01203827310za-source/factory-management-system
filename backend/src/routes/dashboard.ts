@@ -3,6 +3,7 @@ import prisma from '../lib/prisma';
 import { authenticate } from '../middleware/auth';
 import { FuzzyKeyIndex } from '../utils/textMatch';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
+import { computeDashboardCashFlow } from '../services/financialMetrics';
 
 const router = Router();
 router.use(authenticate);
@@ -27,23 +28,8 @@ router.get('/', async (req: Request, res: Response) => {
       .filter(s => s.order_status === 'تم الحجز')
       .reduce((s, sale) => s + sale.invoice_value, 0);
 
-    const depositIn      = sales.reduce((s, sale) => s + sale.deposit_paid, 0);
-    // Cash in from dispatched orders = only what the shipping company actually paid,
-    // never the full remaining invoice balance (see confirm-payout in sales.ts).
-    const remainingIn    = sales
-      .filter(s => s.order_status === 'تم الصرف')
-      .reduce((s, sale) => s + sale.shipping_collected, 0);
-    const clientPayIn    = paymentLogs
-      .filter(p => p.type === 'client_payment')
-      .reduce((s, p) => s + p.amount, 0);
-    const debtOut        = paymentLogs
-      .filter(p => p.type === 'debt_payment')
-      .reduce((s, p) => s + p.amount, 0);
-    const refundOut      = returns_.reduce((s, r) => s + r.refund_amount, 0);
-
-    const totalIn  = expenses.reduce((s, e) => s + e.amount_in, 0) + depositIn + remainingIn + clientPayIn;
-    const totalOut = expenses.reduce((s, e) => s + e.amount_out, 0) + debtOut + refundOut;
-    const netProfit = totalIn - totalOut;
+    // Shared with the /breakdown endpoints so cards and drill-downs always reconcile.
+    const { totalIn, totalOut, netProfit, refundOut } = computeDashboardCashFlow({ sales, expenses, returns_, paymentLogs });
 
     const remainingDebts = debts.reduce((s, d) => s + d.remaining, 0);
     const dispatchedUncollected = sales

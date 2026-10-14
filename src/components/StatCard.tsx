@@ -1,3 +1,5 @@
+import { ChevronDown } from 'lucide-react';
+
 interface StatCardProps {
   title: string;
   value: number | string;
@@ -5,6 +7,8 @@ interface StatCardProps {
   icon: React.ReactNode;
   color: 'blue' | 'green' | 'red' | 'yellow' | 'purple' | 'orange';
   alert?: boolean;
+  /** When set, a small ⌄ button beside the amount opens a details breakdown. */
+  onDetails?: () => void;
 }
 
 const colorMap = {
@@ -25,13 +29,26 @@ const iconColorMap = {
   orange: 'bg-orange-100 text-orange-600',
 };
 
-export default function StatCard({ title, value, subtitle, icon, color, alert }: StatCardProps) {
+export default function StatCard({ title, value, subtitle, icon, color, alert, onDetails }: StatCardProps) {
   return (
     <div className={`relative rounded-xl border p-5 ${colorMap[color]} ${alert ? 'ring-2 ring-red-400 ring-offset-2' : ''} transition-shadow hover:shadow-md`}>
       <div className="flex items-start justify-between">
         <div className="flex-1">
           <p className="text-xs font-medium opacity-70 mb-1">{title}</p>
-          <p className="text-2xl font-bold">{typeof value === 'number' ? value.toLocaleString('ar-EG') : value}</p>
+          <div className="flex items-center gap-1">
+            <p className="text-2xl font-bold">{typeof value === 'number' ? value.toLocaleString('ar-EG') : value}</p>
+            {onDetails && (
+              <button
+                type="button"
+                onClick={onDetails}
+                aria-label={`عرض تفاصيل ${title}`}
+                title="عرض التفاصيل"
+                className="p-1 rounded-md opacity-60 hover:opacity-100 hover:bg-black/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-current transition"
+              >
+                <ChevronDown size={18} />
+              </button>
+            )}
+          </div>
           {subtitle && <p className="text-xs mt-1 opacity-60">{subtitle}</p>}
         </div>
         <div className={`p-2.5 rounded-xl ${iconColorMap[color]}`}>
