@@ -310,6 +310,8 @@ export interface DashboardMetrics {
   advances_on_open_reservations?: number;
   advances_on_canceled_orders?: number;
   reserved_orders_count?: number;
+  receivable_overlap_orders?: number;
+  receivable_overlap_amount?: number;
   fabric_items: FabricAssetItem[];
   stock_items: StockAssetItem[];
   accessories_items: AccessoriesAssetItem[];

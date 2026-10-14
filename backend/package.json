@@ -12,6 +12,7 @@
     "seed": "npx prisma db seed",
     "test": "ts-node --transpile-only tests/run.ts",
     "typecheck:tests": "tsc -p tests",
+    "audit:receivables": "ts-node --transpile-only scripts/audit-receivables.ts",
     "postinstall": "prisma generate"
   },
   "prisma": {

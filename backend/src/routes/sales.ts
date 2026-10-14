@@ -10,6 +10,7 @@ import {
 } from '../services/readyStockPositions';
 import { ledgerTotal } from '../services/shippingCollections';
 import { collectionDate, loadStockContext, syncCollections, syncShipMovements } from '../services/orderLedgers';
+import { outstandingShippingReceivable } from '../services/receivablesAudit';
 
 const router = Router();
 router.use(authenticate);
@@ -131,6 +132,17 @@ function resolvePayoutDate(status: string, providedRaw: unknown, wasDispatched: 
   return { value: cairoToday() };
 }
 
+// An order that is owed by the shipping company must not ALSO be a client-account invoice
+// (both feed "money owed to us"). Checked when an order starts carrying a receivable.
+async function clientInvoiceOverlap(seasonId: number, orderNumber: string): Promise<string | null> {
+  const inv = await prisma.clientAccountInvoice.findFirst({
+    where: { season_id: seasonId, order_number: { equals: orderNumber.trim(), mode: 'insensitive' } },
+  });
+  return inv
+    ? `الأوردر ${orderNumber} مسجّل بالفعل كفاتورة في حساب عميل — جعله مستحقًا على شركة الشحن يعدّ نفس المبلغ مرتين. استخدم حالة «حساب عميل» أو احذف الفاتورة من الحساب أولًا.`
+    : null;
+}
+
 // ─── routes ─────────────────────────────────────────────────────────────────
 
 // GET /api/sales
@@ -163,6 +175,11 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
 
     const payoutDate = resolvePayoutDate(status, data.shipping_collected_date, false, null);
     if ('error' in payoutDate) return res.status(400).json({ message: payoutDate.error });
+
+    if (outstandingShippingReceivable({ order_status: status, remaining, shipping_collected: resolved.value }) > 0) {
+      const overlap = await clientInvoiceOverlap(seasonId, String(data.order_number ?? ''));
+      if (overlap) return res.status(400).json({ message: overlap });
+    }
 
     const { season: _season, id: _id, season_id: _seasonId, ...saleData } = data as Omit<Prisma.SaleUncheckedCreateInput, 'season_id' | 'remaining'> & Record<string, unknown>;
 
@@ -244,6 +261,14 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
       return res.status(400).json({ message: resolved.error });
     }
     data.shipping_collected = resolved.value;
+    const newOrderNumber = String(data.order_number ?? oldSale.order_number);
+    const newOutstanding = outstandingShippingReceivable({ order_status: newStatus, remaining, shipping_collected: resolved.value });
+    const startsOwing = newOutstanding > 0 && (outstandingShippingReceivable(oldSale) === 0 || newOrderNumber !== oldSale.order_number);
+    if (startsOwing) {
+      const overlap = await clientInvoiceOverlap(seasonId, newOrderNumber);
+      if (overlap) return res.status(400).json({ message: overlap });
+    }
+
     const explicitCollectionDate = data.shipping_collected_date;
     const payoutDate = resolvePayoutDate(newStatus, data.shipping_collected_date, wasDispatched, oldSale.shipping_collected_date);
     if ('error' in payoutDate) return res.status(400).json({ message: payoutDate.error });

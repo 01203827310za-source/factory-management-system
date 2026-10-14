@@ -14,6 +14,7 @@ import {
 import ProfitByPeriod from '../components/ProfitByPeriod';
 import DashboardBreakdownModal, { type BreakdownKind } from '../components/DashboardBreakdownModal';
 import CharitySection from '../components/CharitySection';
+import ReceivablesAuditModal from '../components/ReceivablesAuditModal';
 import { useAuth } from '../contexts/AuthContext';
 
 const PIE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
@@ -39,6 +40,7 @@ export default function Dashboard() {
   const [cardBreakdown, setCardBreakdown] = useState<BreakdownKind | null>(null);
   const { can } = useAuth();
   const canDetails = can('dashboard.view');
+  const [auditOpen, setAuditOpen] = useState(false);
   const [breakdownOpen, setBreakdownOpen] = useState(false);
   const [detailCategory, setDetailCategory] = useState<CategoryKey | null>(null);
   const [search, setSearch] = useState('');
@@ -183,6 +185,14 @@ export default function Dashboard() {
           </div>
           {(metrics.uncosted_shipped_orders ?? 0) > 0 && (
             <p className="text-xs text-amber-700 mt-3">{(metrics.uncosted_shipped_orders ?? 0).toLocaleString('ar-EG')} أوردر مشحون لا توجد له تكلفة مسجّلة (قبل تفعيل سجل التكلفة) — لا يدخل في التكلفة والهامش أعلاه.</p>
+          )}
+          {(metrics.receivable_overlap_orders ?? 0) > 0 && (
+            <p className="text-xs text-red-700 mt-3">
+              تنبيه: {(metrics.receivable_overlap_orders ?? 0).toLocaleString('ar-EG')} أوردر ({fmt(metrics.receivable_overlap_amount ?? 0)} ج.م) مسجّل كمستحق على شركة الشحن وكفاتورة في حساب عميل معًا — يُحسب مرتين في «الفلوس اللي لنا برا».
+            </p>
+          )}
+          {can('sales.view') && (
+            <button onClick={() => setAuditOpen(true)} className="mt-3 text-xs text-blue-700 hover:underline">تدقيق الأوردرات «لم يتم الصرف» والمستحقات ←</button>
           )}
           <p className="text-xs text-gray-400 mt-2">الحجوزات ({(metrics.reserved_orders_count ?? 0).toLocaleString('ar-EG')} أوردر) تُعرض كقسم تشغيلي منفصل ولا تُحسب ضمن الأصول.</p>
         </div>
@@ -527,6 +537,7 @@ export default function Dashboard() {
           )}
         </Modal>
 
+        <ReceivablesAuditModal isOpen={auditOpen} onClose={() => setAuditOpen(false)} />
         <DashboardBreakdownModal kind={cardBreakdown} onClose={() => setCardBreakdown(null)} />
 
         {/* Monthly charity — a payment creates a real expense, so refresh the totals above after any change */}

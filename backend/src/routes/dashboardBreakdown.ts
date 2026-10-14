@@ -13,6 +13,8 @@ import prisma from '../lib/prisma';
 import { authenticate } from '../middleware/auth';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
 import { computeDashboardCashFlow } from '../services/financialMetrics';
+import { buildReceivablesAudit } from '../services/receivablesAudit';
+import { ledgerTotal } from '../services/shippingCollections';
 
 const router = Router();
 router.use(authenticate);
@@ -184,7 +186,7 @@ router.get('/sales', async (req: Request, res: Response) => {
     const shippingCollected = sales.filter(s => s.order_status === STATUS_DISPATCHED).reduce((s, x) => s + x.shipping_collected, 0);
     // Sales part of "الفلوس اللي لنا برا" (same rule as the dashboard).
     const outstanding =
-      sales.filter(s => s.order_status === STATUS_NOT_DISPATCHED).reduce((s, x) => s + x.remaining, 0) +
+      sales.filter(s => s.order_status === STATUS_NOT_DISPATCHED).reduce((s, x) => s + Math.max(0, x.remaining), 0) +
       sales.filter(s => s.order_status === STATUS_DISPATCHED).reduce((s, x) => s + Math.max(0, x.remaining - x.shipping_collected), 0);
 
     const build = (pick: (s: typeof sales[number]) => string) => {
@@ -254,6 +256,37 @@ router.get('/sales/records', async (req: Request, res: Response) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: 'خطأ في جلب سجلات المبيعات' });
+  }
+});
+
+// ---------- Receivables audit (read-only) ----------
+// Per-order proof behind "الفلوس اللي لنا برا": what shipped, what left stock, what was collected,
+// what is still owed, and whether the same debt is counted twice. Needs order-level access.
+router.get('/receivables-audit', async (req: Request, res: Response) => {
+  try {
+    if (!can(req, 'sales.view')) return forbid(res, 'sales.view');
+    const seasonId = await getSeasonId(req);
+    const where = seasonWhere(seasonId);
+    const [sales, readyStock, modelProds, returns_, clientAccts, clientInvoices, movements, collections] = await Promise.all([
+      prisma.sale.findMany({ where, orderBy: { id: 'asc' } }),
+      prisma.readyStock.findMany({ where, orderBy: { id: 'asc' } }),
+      prisma.modelProduction.findMany({ where }),
+      prisma.returnItem.findMany({ where }),
+      prisma.clientAccount.findMany({ where }),
+      prisma.clientAccountInvoice.findMany({ where }),
+      prisma.inventoryMovement.findMany({ where }),
+      prisma.shippingCollection.findMany({ where }),
+    ]);
+    const bySale = new Map<number, { amount: number }[]>();
+    collections.forEach(c => bySale.set(c.sale_id, [...(bySale.get(c.sale_id) ?? []), c]));
+    const collectedBySale = new Map([...bySale.entries()].map(([id, rows]) => [id, ledgerTotal(rows)]));
+    return res.json({
+      season_id: seasonId,
+      ...buildReceivablesAudit({ sales, readyStock, modelProds, returns_, clientAccts, clientInvoices, movements, collectedBySale }),
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'خطأ في تدقيق المستحقات' });
   }
 });
 

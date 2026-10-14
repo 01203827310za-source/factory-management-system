@@ -82,8 +82,8 @@ function computeCapitalSnapshot(db: AllData, upToDate: string) {
     accValue += Math.max(0, a.qty_in - a.qty_consumed) * a.cost;
   });
 
-  const clientBalance  = clientAccts.filter(ca => ca.date <= upToDate).reduce((s, ca) => s + ca.remaining, 0);
-  const salesRemaining = sales.filter(s => sd(s) <= upToDate && s.order_status === 'لم يتم الصرف').reduce((s, x) => s + x.remaining, 0);
+  const clientBalance  = clientAccts.filter(ca => ca.date <= upToDate).reduce((s, ca) => s + Math.max(0, ca.remaining), 0);
+  const salesRemaining = sales.filter(s => sd(s) <= upToDate && s.order_status === 'لم يتم الصرف').reduce((s, x) => s + Math.max(0, x.remaining), 0);
   // Dispatched orders where the shipping company paid less than the remaining balance
   // still leave that gap owed by the customer — it must not vanish from the books.
   const dispatchedUncollected = sales
@@ -205,7 +205,7 @@ router.get('/', async (req: Request, res: Response) => {
     const dispatchedUncollectedTotal = sales
       .filter(s => s.order_status === 'تم الصرف')
       .reduce((s, x) => s + Math.max(0, x.remaining - x.shipping_collected), 0);
-    const totalOutstanding = sales.filter(s => s.order_status === 'لم يتم الصرف').reduce((s, x) => s + x.remaining, 0) + dispatchedUncollectedTotal + clientAccts.reduce((s, ca) => s + ca.remaining, 0);
+    const totalOutstanding = sales.filter(s => s.order_status === 'لم يتم الصرف').reduce((s, x) => s + Math.max(0, x.remaining), 0) + dispatchedUncollectedTotal + clientAccts.reduce((s, ca) => s + Math.max(0, ca.remaining), 0);
     const debtsList       = debts.filter(d => d.remaining > 0).map(d => ({ name: d.name, remaining: d.remaining }));
 
     const reservSales = sales.filter(s => s.order_status === 'تم الحجز');

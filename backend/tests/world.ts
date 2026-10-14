@@ -69,7 +69,7 @@ export class World {
     const existing = input.id ? this.sales.find(s => s.id === input.id) : undefined;
     const deposit = input.deposit ?? 0;
     const collected = input.status === 'تم الصرف' ? (input.collected ?? 0) : 0;
-    if (collected < 0 || collected > input.invoice - deposit + 0.005) throw new Error('invalid collected amount');
+    if (input.status === 'تم الصرف' && (collected < 0 || collected > input.invoice - deposit + 0.005)) throw new Error('invalid collected amount');
     if (existing && input.status === 'تم الإلغاء' && isStockDeducting(existing.order_status)) {
       throw new Error('لا يمكن إلغاء أوردر تم شحنه');
     }

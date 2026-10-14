@@ -495,6 +495,7 @@ export const dashboardApi = {
   getExpensesBreakdown: () => get<ExpensesBreakdown>('/dashboard/breakdown/expenses'),
   getExpenseRecords: (category: string) =>
     get<ExpenseRecordsResult>(`/dashboard/breakdown/expenses/records?category=${encodeURIComponent(category)}`),
+  getReceivablesAudit: () => get<ReceivablesAudit>('/dashboard/breakdown/receivables-audit'),
   getSalesBreakdown: () => get<SalesBreakdown>('/dashboard/breakdown/sales'),
   getSalesRecords: (group: string, value: string) =>
     get<SalesRecordsResult>(`/dashboard/breakdown/sales/records?group=${encodeURIComponent(group)}&value=${encodeURIComponent(value)}`),
@@ -560,6 +561,8 @@ export interface DashboardMetrics {
   advances_on_open_reservations?: number;
   advances_on_canceled_orders?: number;
   reserved_orders_count?: number;
+  receivable_overlap_orders?: number;
+  receivable_overlap_amount?: number;
   fabric_items: { material_type: string; color: string; available_qty: number; unit_cost: number; total: number }[];
   stock_items: { model_code: string; product_name: string; color: string; actual_qty: number; reserved_qty: number; available_qty: number; unit_cost: number; total: number; reserved_value?: number; available_value?: number }[];
   accessories_items: { item_name: string; qty: number; unit_cost: number; total: number }[];
@@ -941,4 +944,26 @@ export interface SaleLedger {
   collections: { id: number; amount: number; kind: string; collected_date: string; date_estimated: boolean; reference: string; created_by: string }[];
   collected_total: number;
   movements: { id: number; movement_type: string; model_code: string; color: string; qty: number; unit_cost: number; total_cost: number; created_at: string }[];
+}
+
+
+// Read-only per-order audit of «الفلوس اللي لنا برا» (see backend/src/services/receivablesAudit.ts).
+export interface ReceivablesAuditOrder {
+  sale_id: number; order_number: string; client: string; invoice_value: number; deposit_paid: number;
+  shipped_qty: number; inventory_qty_deducted: number; inventory_cost_deducted_card: number;
+  inventory_cost_deducted_recorded: number | null; collected_amount: number; outstanding_receivable: number;
+  stock_status: 'removed' | 'partly_removed' | 'no_stock_card' | 'possible_mismatch'; inventory_still_in_stock: boolean;
+  also_in_client_account: { account_id: number; client_name: string; amount: number } | null;
+  notes: string[];
+}
+export interface ReceivablesAudit {
+  season_id: number;
+  orders: ReceivablesAuditOrder[];
+  totals: { orders: number; invoice_value: number; shipped_qty: number; inventory_qty_deducted: number; inventory_cost_deducted_card: number; collected_amount: number; outstanding_receivable: number };
+  reconciliation: {
+    shipping_receivable_not_paid_out: number; shipping_receivable_paid_out_gap: number; client_accounts_receivable: number;
+    money_owed_to_us: number; double_counted_amount: number; double_counted_orders: number;
+    on_account_orders_without_client_invoice: { sale_id: number; order_number: string; remaining: number }[];
+    uncosted_orders: number;
+  };
 }

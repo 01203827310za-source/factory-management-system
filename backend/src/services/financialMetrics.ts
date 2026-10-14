@@ -88,7 +88,7 @@ export function computeRemainingDebts(input: Pick<BalanceInput, 'debts'>, range?
 export function computeMoneyOwedToUs(input: Pick<BalanceInput, 'sales' | 'clientAccts'>, range?: DateRange) {
   const salesRemaining = input.sales
     .filter(s => isInRange(saleDate(s), range) && s.order_status === STATUS_NOT_DISPATCHED)
-    .reduce((s, sale) => s + sale.remaining, 0);
+    .reduce((s, sale) => s + Math.max(0, sale.remaining), 0); // a negative balance is a customer credit, not a receivable
   // A dispatched order whose shipping company paid less than the remaining balance
   // still leaves that gap owed by the customer — it must not vanish from the books.
   const dispatchedUncollected = input.sales
@@ -96,7 +96,7 @@ export function computeMoneyOwedToUs(input: Pick<BalanceInput, 'sales' | 'client
     .reduce((s, sale) => s + Math.max(0, sale.remaining - sale.shipping_collected), 0);
   const clientBalance = input.clientAccts
     .filter(ca => isInRange(ca.date, range))
-    .reduce((s, ca) => s + ca.remaining, 0);
+    .reduce((s, ca) => s + Math.max(0, ca.remaining), 0);
   return salesRemaining + dispatchedUncollected + clientBalance;
 }
 

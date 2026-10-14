@@ -65,6 +65,10 @@ export type StockPosition = {
   key: string;
   /** First stock row for its model+color key — the one reservations are written to. */
   primary: boolean;
+  /** opening + produced + returned — what the card could supply before shipments. */
+  supply: number;
+  /** Pieces shipped against this card (orders that left the factory). */
+  sold: number;
   actual: number;
   reserved: number;
   available: number;
@@ -120,9 +124,11 @@ export function computeStockPositions(
     const key = rowKeys[i];
     const primary = !seen.has(key);
     seen.add(key);
-    const actual = Math.max(0, rs.opening_balance + (produced.get(key) || 0) - (sold.get(key) || 0) + (returned.get(key) || 0));
+    const supply = rs.opening_balance + (produced.get(key) || 0) + (returned.get(key) || 0);
+    const soldQty = sold.get(key) || 0;
+    const actual = Math.max(0, supply - soldQty);
     const reserved = primary ? (reservedByKey.get(key) || 0) : 0;
-    return { row: rs, key, primary, actual, reserved, available: Math.max(0, actual - reserved) };
+    return { row: rs, key, primary, supply: primary ? supply : 0, sold: primary ? soldQty : 0, actual, reserved, available: Math.max(0, actual - reserved) };
   });
 
   return { positions, keyOf, reservedByKey };

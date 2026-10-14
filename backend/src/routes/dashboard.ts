@@ -6,6 +6,7 @@ import { getSeasonId, seasonWhere } from '../services/seasonContext';
 import { computeDashboardCashFlow } from '../services/financialMetrics';
 import { isStockDeducting, STATUS_CANCELED, STATUS_RESERVED, valueStockRow } from '../services/readyStockPositions';
 import { costOfGoodsShipped, returnsCostCredit, type MovementRow } from '../services/inventoryMovements';
+import { findReceivableOverlap } from '../services/receivablesAudit';
 
 const router = Router();
 router.use(authenticate);
@@ -38,9 +39,9 @@ router.get('/', async (req: Request, res: Response) => {
       .filter(s => s.order_status === 'تم الصرف')
       .reduce((s, sale) => s + Math.max(0, sale.remaining - sale.shipping_collected), 0);
     const moneyOwedToUs =
-      sales.filter(s => s.order_status === 'لم يتم الصرف').reduce((s, sale) => s + sale.remaining, 0) +
+      sales.filter(s => s.order_status === 'لم يتم الصرف').reduce((s, sale) => s + Math.max(0, sale.remaining), 0) +
       dispatchedUncollected +
-      clientAccts.reduce((s, ca) => s + ca.remaining, 0);
+      clientAccts.reduce((s, ca) => s + Math.max(0, ca.remaining), 0);
     const cashAvailable = totalIn - totalOut - remainingDebts;
 
     const salesByMarketer: Record<string, number> = {};
@@ -170,7 +171,7 @@ router.get('/', async (req: Request, res: Response) => {
 
     const receivableItems: Array<{ source: 'sale' | 'sale_shipping_gap' | 'client_account'; name: string; reference: string; invoice_total: number; paid: number; remaining: number }> = [];
     sales
-      .filter(s => s.order_status === 'لم يتم الصرف' && s.remaining !== 0)
+      .filter(s => s.order_status === 'لم يتم الصرف' && s.remaining > 0)
       .forEach(s => {
         receivableItems.push({
           source: 'sale', name: s.client, reference: s.order_number,
@@ -189,7 +190,7 @@ router.get('/', async (req: Request, res: Response) => {
         });
       });
     clientAccts
-      .filter(ca => ca.remaining !== 0)
+      .filter(ca => ca.remaining > 0)
       .forEach(ca => {
         receivableItems.push({
           source: 'client_account', name: ca.client_name, reference: ca.model_name,
@@ -238,6 +239,10 @@ router.get('/', async (req: Request, res: Response) => {
     const advancesOnOpenReservations = sales.filter(s => s.order_status === STATUS_RESERVED).reduce((n, s) => n + s.deposit_paid, 0);
     const advancesOnCanceledOrders = sales.filter(s => s.order_status === STATUS_CANCELED).reduce((n, s) => n + s.deposit_paid, 0);
     const reservedOrdersCount = sales.filter(s => s.order_status === STATUS_RESERVED).length;
+
+    // Debt entered both as a shipped-order receivable and as a client-account invoice (same order number).
+    const clientInvoices = await prisma.clientAccountInvoice.findMany({ where: seasonWhere(seasonId) });
+    const receivableOverlap = findReceivableOverlap(sales, clientInvoices);
     // Total current assets = warehouses + remaining cutting pieces + WIP + receivables.
     // Deliberately excludes cash/net-profit/debts and Fixed Assets — those live in the Financial Center, not here.
     const totalCurrentAssets = fabricValue + stockValue + accessoriesValue + cuttingInventoryValue + wipValue + moneyOwedToUs;
@@ -290,6 +295,8 @@ router.get('/', async (req: Request, res: Response) => {
       advances_on_open_reservations: advancesOnOpenReservations,
       advances_on_canceled_orders: advancesOnCanceledOrders,
       reserved_orders_count: reservedOrdersCount,
+      receivable_overlap_orders: receivableOverlap.orders,
+      receivable_overlap_amount: receivableOverlap.amount,
     });
   } catch (err) {
     console.error(err);

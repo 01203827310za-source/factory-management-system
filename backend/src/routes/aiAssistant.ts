@@ -158,7 +158,7 @@ async function gatherSnapshot(seasonId: number) {
   const dispatchedUncollected = sales
     .filter(x => x.order_status === 'تم الصرف')
     .reduce((s, x) => s + Math.max(0, x.remaining - x.shipping_collected), 0);
-  const totalRemaining    = sales.filter(x => x.order_status === 'لم يتم الصرف').reduce((s, x) => s + x.remaining, 0) + dispatchedUncollected;
+  const totalRemaining    = sales.filter(x => x.order_status === 'لم يتم الصرف').reduce((s, x) => s + Math.max(0, x.remaining), 0) + dispatchedUncollected;
   const reservationsCount = sales.filter(x => x.order_status === 'تم الحجز').length;
   const reservationsValue = sales.filter(x => x.order_status === 'تم الحجز').reduce((s, x) => s + x.invoice_value, 0);
   const dispatchedCount   = sales.filter(x => x.order_status === 'تم الصرف').length;
@@ -191,7 +191,7 @@ async function gatherSnapshot(seasonId: number) {
     .sort((a, b) => b.remaining - a.remaining);
 
   // ── Client accounts ────────────────────────────────────────────────────────
-  const clientAccountsRemaining = clientAccts.reduce((s, c) => s + c.remaining, 0);
+  const clientAccountsRemaining = clientAccts.reduce((s, c) => s + Math.max(0, c.remaining), 0);
   const clientAccountsList = clientAccts
     .filter(c => c.remaining > 0)
     .map(c => ({ client: c.client_name, model: c.model_name, total: c.total_amount, paid: c.amount_paid, remaining: c.remaining }))

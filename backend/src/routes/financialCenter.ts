@@ -45,9 +45,9 @@ router.get('/', async (req: Request, res: Response) => {
       .filter(s => s.order_status === 'تم الصرف')
       .reduce((s, sale) => s + Math.max(0, sale.remaining - sale.shipping_collected), 0);
     const moneyOwedToUs  =
-      sales.filter(s => s.order_status === 'لم يتم الصرف').reduce((s, sale) => s + sale.remaining, 0) +
+      sales.filter(s => s.order_status === 'لم يتم الصرف').reduce((s, sale) => s + Math.max(0, sale.remaining), 0) +
       dispatchedUncollected +
-      clientAccts.reduce((s, ca) => s + ca.remaining, 0);
+      clientAccts.reduce((s, ca) => s + Math.max(0, ca.remaining), 0);
 
     const cashAvailable = totalIn - totalOut;
 

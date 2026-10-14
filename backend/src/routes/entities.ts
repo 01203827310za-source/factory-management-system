@@ -10,6 +10,7 @@ import { authenticate, requireManager } from '../middleware/auth';
 import { logAudit } from '../services/auditHelper';
 import { textsMatch, findBestMatch } from '../utils/textMatch';
 import { getSeasonId, seasonWhere, withSeason } from '../services/seasonContext';
+import { outstandingShippingReceivable } from '../services/receivablesAudit';
 
 // Remove PaymentLog entries when a debt/client-account paid amount is reduced.
 // Deletes from newest first; if a single log exceeds the remaining delta, trims it.
@@ -856,6 +857,18 @@ clientAccountsRouter.post('/:id/invoices', requireManager, async (req: Request, 
 
     const account = await prisma.clientAccount.findFirst({ where: { id, season_id: seasonId } });
     if (!account) return res.status(404).json({ message: 'الحساب غير موجود' });
+
+    // The same order must not be a receivable twice: an order that is still owed by the shipping
+    // company (لم يتم الصرف / unpaid balance) is already counted in "money owed to us".
+    const sameOrder = await prisma.sale.findMany({
+      where: { season_id: seasonId, order_number: { equals: String(order_number).trim(), mode: 'insensitive' } },
+    });
+    const alreadyOwed = sameOrder.find(s => outstandingShippingReceivable(s) > 0);
+    if (alreadyOwed) {
+      return res.status(400).json({
+        message: `الأوردر ${alreadyOwed.order_number} مسجّل كأوردر مشحون ومستحق على شركة الشحن (${outstandingShippingReceivable(alreadyOwed)} ج.م) — إضافته كفاتورة في حساب عميل تعدّ نفس المبلغ مرتين. غيّر حالة الأوردر إلى «حساب عميل» أولًا.`,
+      });
+    }
 
     const invDate = date || new Date().toISOString().split('T')[0];
     const invoice = await prisma.clientAccountInvoice.create({
