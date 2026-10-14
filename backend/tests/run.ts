@@ -4,5 +4,6 @@ import './accounting.test';
 import './receivables.test';
 import './dashboard.test';
 import './statusLabel.test';
+import './guards.test';
 
 runAll();

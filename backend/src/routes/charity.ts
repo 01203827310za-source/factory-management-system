@@ -157,7 +157,7 @@ router.post('/payments', async (req: Request, res: Response) => {
     try {
       result = await prisma.$transaction(async (tx) => {
         // Serialise concurrent payments for the same season+month so the outstanding check can't race.
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(${seasonId}::int, hashtext(${month}))`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(${seasonId}::int, hashtext(${month}))`;
 
         const [ledger, existing] = await Promise.all([
           tx.shippingCollection.findMany({ where: seasonWhere(seasonId) }),
@@ -243,7 +243,7 @@ router.delete('/payments/:id', async (req: Request, res: Response) => {
 
     // Reverse both halves of the single payment atomically.
     await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(${seasonId}::int, hashtext(${existing.charity_month}))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${seasonId}::int, hashtext(${existing.charity_month}))`;
       await tx.charityPayment.delete({ where: { id } });
       if (existing.expense_id) await tx.expenseRevenue.delete({ where: { id: existing.expense_id } });
     });

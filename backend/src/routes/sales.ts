@@ -36,8 +36,10 @@ class StockError extends Error {}
 
 // Serialises every write that can change stock availability or reservations within a season,
 // so two orders can never reserve (or ship) the same units at the same time.
+// NOTE: $executeRaw, not $queryRaw — pg_advisory_xact_lock returns `void`, which $queryRaw cannot deserialize
+// ("Failed to deserialize column of type 'void'") and would fail every order write with a 500.
 async function lockStock(tx: Tx, seasonId: number) {
-  await tx.$queryRaw`SELECT pg_advisory_xact_lock(${seasonId}::int, hashtext('ready_stock'))`;
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${seasonId}::int, hashtext('ready_stock'))`;
 }
 
 // Brings ready_stock.reserved_quantity in line with the reservation ORDERS for the stock rows
