@@ -217,6 +217,9 @@ readyStock.forEach((s: any) => {
       const result = editSale ? await salesApi.update(editSale.id, data as any) : await salesApi.add(data as any);
       if (form.order_status === 'تم الصرف' && result.collection_difference > 0) {
         toast('success', `تم الحفظ — المستلم فعليًا ${form.shipping_collected.toLocaleString('ar-EG')} ج، الفرق غير المحصل ${result.collection_difference.toLocaleString('ar-EG')} ج`);
+      } else if (form.order_status === RESERVED_STATUS && result.fulfillment && result.fulfillment.pending > 0) {
+        // Accepted even though stock is short: say exactly what is held and what is waiting.
+        toast('success', `تم الحفظ بحالة «${statusLabel(RESERVED_STATUS)}» — محجوز ${result.fulfillment.reserved.toLocaleString('ar-EG')} من ${result.fulfillment.requested.toLocaleString('ar-EG')} والناقص ${result.fulfillment.pending.toLocaleString('ar-EG')} في انتظار الإنتاج/الشراء`);
       } else if (editSale) {
         toast('success', 'تم تعديل الأوردر بنجاح');
       } else {
@@ -461,6 +464,11 @@ await loadData();(returnForm);
                       sale.order_status === 'لم يتم الصرف' ? 'bg-yellow-100 text-yellow-700' :
                       'bg-amber-100 text-amber-700'
                     }`}>{statusLabel(sale.order_status)}</span>
+                    {sale.fulfillment && sale.fulfillment.pending > 0 && (
+                      <span className="block mt-1 text-xs text-red-600 font-semibold" title="كمية ناقصة في انتظار الإنتاج/الشراء">
+                        ناقص {sale.fulfillment.pending.toLocaleString('ar-EG')} من {sale.fulfillment.requested.toLocaleString('ar-EG')}
+                      </span>
+                    )}
                   </td>
                   <td className="px-2 py-3 text-center">
                     <div className="flex items-center justify-center gap-1 flex-wrap">
@@ -706,13 +714,17 @@ await loadData();(returnForm);
               // Derived from the order's status — the same rule the stock engine uses:
               // reserved = still in the factory; shipped = goods left (any status except reservation/cancelled).
               const ordered = (invoiceSale.model1_qty || 0) + (invoiceSale.model2_qty || 0) + (invoiceSale.model3_qty || 0) + (invoiceSale.model4_qty || 0) + (invoiceSale.model5_qty || 0);
-              const reserved = invoiceSale.order_status === 'تم الحجز' ? ordered : 0;
+              // «يتم التجهيز»: only what really exists in stock is held (the server allocates it); the rest is pending.
+              const prepared = invoiceSale.order_status === 'تم الحجز';
+              const reserved = prepared ? (invoiceSale.fulfillment?.reserved ?? ordered) : 0;
+              const pending = prepared ? (invoiceSale.fulfillment?.pending ?? 0) : 0;
               const shipped = invoiceSale.order_status === 'تم الحجز' || invoiceSale.order_status === 'تم الإلغاء' ? 0 : ordered;
               const remainingToFulfill = invoiceSale.order_status === 'تم الإلغاء' ? 0 : ordered - shipped;
               return (
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 bg-blue-50 border border-blue-100 rounded-lg p-4 text-sm mb-4">
+                <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 bg-blue-50 border border-blue-100 rounded-lg p-4 text-sm mb-4">
                   <div><p className="text-xs text-gray-500">الكمية المطلوبة</p><strong>{ordered.toLocaleString('ar-EG')}</strong></div>
-                  <div><p className="text-xs text-gray-500">الكمية المحجوزة</p><strong className="text-orange-700">{reserved.toLocaleString('ar-EG')}</strong></div>
+                  <div><p className="text-xs text-gray-500">الكمية المحجوزة (موجودة فعلًا)</p><strong className="text-orange-700">{reserved.toLocaleString('ar-EG')}</strong></div>
+                  <div><p className="text-xs text-gray-500">ناقص (إنتاج/شراء)</p><strong className={pending > 0 ? 'text-red-600' : 'text-gray-500'}>{pending.toLocaleString('ar-EG')}</strong></div>
                   <div><p className="text-xs text-gray-500">الكمية المشحونة</p><strong className="text-emerald-700">{shipped.toLocaleString('ar-EG')}</strong></div>
                   <div><p className="text-xs text-gray-500">المتبقي للتنفيذ</p><strong>{remainingToFulfill.toLocaleString('ar-EG')}</strong></div>
                   <div><p className="text-xs text-gray-500">حالة الأوردر</p><strong>{statusLabel(invoiceSale.order_status)}</strong></div>

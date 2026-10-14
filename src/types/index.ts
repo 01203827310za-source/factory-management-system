@@ -18,6 +18,11 @@ export interface Sale {
   shipping_number: string;
   // Stored values. 'تم الحجز' is DISPLAYED as «يتم التجهيز» — use statusLabel() from utils/orderStatus.ts to show it.
   order_status: 'تم الصرف' | 'لم يتم الصرف' | 'حساب عميل' | 'تم الحجز' | 'تم الإلغاء';
+  /** «يتم التجهيز» orders only: units really held in stock vs still to be produced / purchased. */
+  fulfillment?: {
+    requested: number; reserved: number; pending: number;
+    slots: { code: string; color: string; requested: number; reserved: number; pending: number; has_card: boolean }[];
+  } | null;
   delivery_method: string;
   mobile: string;
   warehouse: string;
@@ -55,6 +60,8 @@ export interface ComputedReadyStock extends ReadyStock {
   total_returns: number;
   reserved_quantity: number;
   available_quantity: number;
+  /** Units prepared orders still need produced/purchased for this model+colour. */
+  pending_quantity?: number;
 }
 
 export interface FabricWarehouse {
@@ -237,6 +244,8 @@ export interface StockAssetItem {
   available_qty: number;
   unit_cost: number;
   total: number;
+  /** Units still needed by «يتم التجهيز» orders for this model+colour (not in stock yet). */
+  pending_qty?: number;
 }
 
 export interface AccessoriesAssetItem {
@@ -322,6 +331,12 @@ export interface DashboardMetrics {
     differences: Record<'fabric' | 'stock' | 'accessories' | 'cutting' | 'wip' | 'receivables', number>;
     reconciled: boolean;
   };
+  pending_orders?: {
+    sale_id: number; order_number: string; client: string; invoice_value: number; deposit_paid: number;
+    requested: number; reserved: number; pending: number;
+    slots: { code: string; color: string; requested: number; reserved: number; pending: number; has_card: boolean }[];
+  }[];
+  pending_units?: number;
   receivable_overlap_orders?: number;
   receivable_overlap_amount?: number;
   fabric_items: FabricAssetItem[];

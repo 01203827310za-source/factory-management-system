@@ -193,11 +193,11 @@ export default function ReadyStock() {
         <div className="overflow-x-auto">
           <table className="w-full text-sm whitespace-nowrap">
             <thead><tr className="bg-[#1e3a5f] text-white">
-              {['#','كود الموديل','اسم الصنف','اللون','رصيد أول','إنتاج جديد 🔄','إجمالي مبيعات 🔄','المرتجعات 🔄','الرصيد الفعلي 🔄','محجوز 🔒','المتاح ✅','تكلفة القطعة','قيمة المخزون (الفعلي)','المكان','إجراءات'].map(h => <th key={h} className="px-3 py-3 text-center font-semibold">{h}</th>)}
+              {['#','كود الموديل','اسم الصنف','اللون','رصيد أول','إنتاج جديد 🔄','إجمالي مبيعات 🔄','المرتجعات 🔄','الرصيد الفعلي 🔄','محجوز 🔒','المتاح ✅','ناقص (مطلوب لأوردرات)','تكلفة القطعة','قيمة المخزون (الفعلي)','المكان','إجراءات'].map(h => <th key={h} className="px-3 py-3 text-center font-semibold">{h}</th>)}
             </tr></thead>
             <tbody>
-              {loading && <tr><td colSpan={15} className="text-center py-8 text-gray-400"><RefreshCw size={16} className="animate-spin inline mr-2" />جارٍ التحميل...</td></tr>}
-              {!loading && filtered.length === 0 && <tr><td colSpan={15} className="text-center py-8 text-gray-400">لا توجد بيانات</td></tr>}
+              {loading && <tr><td colSpan={16} className="text-center py-8 text-gray-400"><RefreshCw size={16} className="animate-spin inline mr-2" />جارٍ التحميل...</td></tr>}
+              {!loading && filtered.length === 0 && <tr><td colSpan={16} className="text-center py-8 text-gray-400">لا توجد بيانات</td></tr>}
               {filtered.map((item, idx) => (
                 <tr key={item.id} className={`border-t border-gray-100 hover:bg-blue-50/40 transition ${item.available_quantity < 0 ? 'bg-red-100' : item.available_quantity < 3 ? 'bg-red-50' : item.available_quantity <= 10 ? 'bg-amber-50' : ''}`}>
                   <td className="px-3 py-3 text-center text-gray-500">{idx + 1}</td>
@@ -216,6 +216,11 @@ export default function ReadyStock() {
                   </td>
                   <td className={`px-3 py-3 text-center font-bold ${item.available_quantity < 0 ? 'text-red-700 font-extrabold' : item.available_quantity < 3 ? 'text-red-600' : item.available_quantity <= 10 ? 'text-amber-700' : 'text-emerald-700'}`}>
                     {item.available_quantity.toLocaleString('ar-EG')}
+                  </td>
+                  <td className="px-3 py-3 text-center">
+                    {(item.pending_quantity ?? 0) > 0
+                      ? <span className="inline-block bg-red-100 text-red-700 text-xs font-semibold px-2 py-0.5 rounded-full">{(item.pending_quantity ?? 0).toLocaleString('ar-EG')}</span>
+                      : <span className="text-gray-300">—</span>}
                   </td>
                   <td className="px-3 py-3 text-center">{item.cost_per_piece.toLocaleString('ar-EG')}</td>
                   {/* Physical (available + reserved) × recorded cost — reserved goods are still owned. */}

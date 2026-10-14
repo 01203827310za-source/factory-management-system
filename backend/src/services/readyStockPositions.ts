@@ -71,20 +71,54 @@ export type StockPosition = {
   sold: number;
   actual: number;
   reserved: number;
+  /** Units still needed by «يتم التجهيز» orders for this model+colour (not yet produced/purchased). */
+  pending: number;
   available: number;
+};
+
+export type SlotAllocation = {
+  code: string;
+  color: string;
+  requested: number;
+  /** Units of REAL stock held for this order (never more than physically exists). */
+  reserved: number;
+  /** requested − reserved: still to be produced / purchased. */
+  pending: number;
+  /** false when no ready-stock card exists for this model+colour (nothing can be reserved yet). */
+  has_card: boolean;
+};
+
+export type OrderAllocation = {
+  sale_id: number;
+  slots: SlotAllocation[];
+  requested: number;
+  reserved: number;
+  pending: number;
 };
 
 export type StockContext = {
   positions: StockPosition[];
   keyOf: (code: string, color: string) => string;
+  /** Σ allocated (real) reservations per key. */
   reservedByKey: Map<string, number>;
+  /** Σ units still needed by «يتم التجهيز» orders per key (includes keys with no stock card). */
+  pendingByKey: Map<string, number>;
+  /** Per prepared order: requested / reserved / pending, by slot. */
+  allocations: Map<number, OrderAllocation>;
 };
 
 /**
- * Builds positions with the same fuzzy model/colour linking the Dashboard uses. Reservations
- * are derived from the reservation ORDERS themselves (not from the stored counter), so every
- * reserved unit is tied to a specific order. `excludeSaleId` leaves one order out — used when
- * validating that order's own edit.
+ * Builds positions with the same fuzzy model/colour linking the Dashboard uses.
+ *
+ * Reservations are ALLOCATED, not assumed: «يتم التجهيز» orders (status stored as 'تم الحجز') are
+ * served first-come-first-served (by order id) from the stock that physically exists after
+ * shipments. An order asking for 10 when 4 exist holds 4 and is left with 6 pending. Because the
+ * allocation is derived from the orders and the stock every time, it is idempotent: re-saving an
+ * order, recording production or recording a return simply re-derives it — units are never held
+ * twice and reserved can never exceed physical stock.
+ *
+ * `excludeSaleId` leaves one order out entirely (its shipments and its reservation) — used to ask
+ * "what could THIS order get / ship?" independently of itself.
  */
 export function computeStockPositions(
   input: { readyStock: ReadyStock[]; modelProds: ModelProduction[]; sales: Sale[]; returns_: ReturnItem[] },
@@ -92,6 +126,7 @@ export function computeStockPositions(
 ): StockContext {
   const index = new FuzzyKeyIndex(['model', 'color']);
   const keyOf = (code: string, color: string) => index.resolve([code, color || '']);
+  const counted = (s: Sale) => s.id !== opts.excludeSaleId;
 
   const produced = new Map<string, number>();
   input.modelProds.forEach(mp => {
@@ -100,7 +135,7 @@ export function computeStockPositions(
   });
 
   const sold = new Map<string, number>();
-  input.sales.filter(s => isStockDeducting(s.order_status)).forEach(s => {
+  input.sales.filter(s => counted(s) && isStockDeducting(s.order_status)).forEach(s => {
     saleSlots(s).forEach(m => { const k = keyOf(m.code, m.color); sold.set(k, (sold.get(k) || 0) + m.qty); });
   });
 
@@ -113,32 +148,77 @@ export function computeStockPositions(
 
   const rowKeys = input.readyStock.map(rs => keyOf(rs.model_code, rs.color || ''));
 
-  // Reservations are resolved last so they link to existing stock buckets without altering them.
-  const reservedByKey = new Map<string, number>();
-  input.sales
-    .filter(s => s.order_status === STATUS_RESERVED && s.id !== opts.excludeSaleId)
-    .forEach(s => saleSlots(s).forEach(m => { const k = keyOf(m.code, m.color); reservedByKey.set(k, (reservedByKey.get(k) || 0) + m.qty); }));
-
-  const seen = new Set<string>();
-  const positions: StockPosition[] = input.readyStock.map((rs, i) => {
+  // Physical stock per key (first card of a key is the one that holds it).
+  const physical = new Map<string, number>();
+  const supplyByKey = new Map<string, number>();
+  const firstRowOfKey = new Map<string, number>();
+  input.readyStock.forEach((rs, i) => {
     const key = rowKeys[i];
-    const primary = !seen.has(key);
-    seen.add(key);
+    if (firstRowOfKey.has(key)) return;
+    firstRowOfKey.set(key, i);
     const supply = rs.opening_balance + (produced.get(key) || 0) + (returned.get(key) || 0);
-    const soldQty = sold.get(key) || 0;
-    const actual = Math.max(0, supply - soldQty);
-    const reserved = primary ? (reservedByKey.get(key) || 0) : 0;
-    return { row: rs, key, primary, supply: primary ? supply : 0, sold: primary ? soldQty : 0, actual, reserved, available: Math.max(0, actual - reserved) };
+    supplyByKey.set(key, supply);
+    physical.set(key, Math.max(0, supply - (sold.get(key) || 0)));
   });
 
-  return { positions, keyOf, reservedByKey };
+  // First-come-first-served allocation of that physical stock to the prepared orders.
+  const pool = new Map(physical);
+  const reservedByKey = new Map<string, number>();
+  const pendingByKey = new Map<string, number>();
+  const allocations = new Map<number, OrderAllocation>();
+  input.sales
+    .filter(s => counted(s) && s.order_status === STATUS_RESERVED)
+    .sort((a, b) => a.id - b.id)
+    .forEach(s => {
+      const slots: SlotAllocation[] = saleSlots(s).map(m => {
+        const key = keyOf(m.code, m.color);
+        const hasCard = firstRowOfKey.has(key);
+        const take = hasCard ? Math.min(m.qty, pool.get(key) || 0) : 0;
+        if (hasCard) pool.set(key, (pool.get(key) || 0) - take);
+        reservedByKey.set(key, (reservedByKey.get(key) || 0) + take);
+        pendingByKey.set(key, (pendingByKey.get(key) || 0) + (m.qty - take));
+        return { code: m.code, color: m.color, requested: m.qty, reserved: take, pending: m.qty - take, has_card: hasCard };
+      });
+      allocations.set(s.id, {
+        sale_id: s.id, slots,
+        requested: slots.reduce((n, x) => n + x.requested, 0),
+        reserved: slots.reduce((n, x) => n + x.reserved, 0),
+        pending: slots.reduce((n, x) => n + x.pending, 0),
+      });
+    });
+
+  const positions: StockPosition[] = input.readyStock.map((rs, i) => {
+    const key = rowKeys[i];
+    const primary = firstRowOfKey.get(key) === i;
+    const actual = primary ? (physical.get(key) || 0) : Math.max(0, rs.opening_balance);
+    const reserved = primary ? (reservedByKey.get(key) || 0) : 0;
+    return {
+      row: rs, key, primary,
+      supply: primary ? (supplyByKey.get(key) || 0) : 0,
+      sold: primary ? (sold.get(key) || 0) : 0,
+      actual: primary ? actual : 0,
+      reserved,
+      pending: primary ? (pendingByKey.get(key) || 0) : 0,
+      available: Math.max(0, (primary ? actual : 0) - reserved),
+    };
+  });
+
+  return { positions, keyOf, reservedByKey, pendingByKey, allocations };
 }
 
-/** Arabic error for the first slot that cannot be reserved, or null when everything fits. */
-export function validateReservation(ctx: StockContext, slots: Slot[]): string | null {
+/**
+ * Shipping check. Goods may only leave the factory if they physically exist AND are not held for
+ * other prepared orders. Partial shipment is not supported, so any shortfall rejects the shipment
+ * with an Arabic explanation. Pass a context built with `excludeSaleId = this order` so the order
+ * is judged against stock minus everyone ELSE's shipments and reservations.
+ * `only` limits the check to model+colour keys whose shipped quantity is actually increasing, so
+ * unrelated edits to an order that already shipped are never blocked.
+ */
+export function validateShipment(ctx: StockContext, slots: Slot[], only?: Set<string>): string | null {
   const demand = new Map<string, { qty: number; code: string; color: string }>();
   for (const m of slots) {
     const k = ctx.keyOf(m.code, m.color);
+    if (only && !only.has(k)) continue;
     const cur = demand.get(k) ?? { qty: 0, code: m.code, color: m.color };
     cur.qty += m.qty;
     demand.set(k, cur);
@@ -146,12 +226,25 @@ export function validateReservation(ctx: StockContext, slots: Slot[]): string | 
   for (const [key, need] of demand) {
     const label = `${need.code}${need.color ? ` (${need.color})` : ''}`;
     const pos = ctx.positions.find(p => p.key === key && p.primary);
-    if (!pos) return `الموديل ${label} غير موجود في المخزن الجاهز بنفس الكود واللون`;
+    if (!pos) return `لا يمكن شحن ${label}: لا يوجد كارت مخزون بهذا الكود واللون — سجّل الإنتاج/الشراء أولًا`;
     if (need.qty > pos.available) {
-      return `الكمية المطلوبة من ${label} (${need.qty}) أكبر من المتاح للبيع (${pos.available}) — الفعلي ${pos.actual} والمحجوز لأوردرات أخرى ${pos.reserved}`;
+      return `لا يمكن شحن ${label}: المطلوب ${need.qty} والمتاح فعليًا ${pos.available} (الفعلي ${pos.actual}، المحجوز لأوردرات أخرى ${pos.reserved}) — الناقص ${need.qty - pos.available}. سجّل الإنتاج/الشراء أولًا (الشحن الجزئي غير مدعوم)`;
     }
   }
   return null;
+}
+
+/** Model+colour keys whose shipped quantity goes UP between two versions of an order. */
+export function increasingKeys(ctx: StockContext, oldShipped: Slot[], newShipped: Slot[]): Set<string> {
+  const sum = (slots: Slot[]) => {
+    const m = new Map<string, number>();
+    slots.forEach(s => { const k = ctx.keyOf(s.code, s.color); m.set(k, (m.get(k) || 0) + s.qty); });
+    return m;
+  };
+  const before = sum(oldShipped);
+  const out = new Set<string>();
+  sum(newShipped).forEach((qty, k) => { if (qty > (before.get(k) || 0)) out.add(k); });
+  return out;
 }
 
 /** Stock rows whose stored reserved_quantity must change to match the reservation orders. */

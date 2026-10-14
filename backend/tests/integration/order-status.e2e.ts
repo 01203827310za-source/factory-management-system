@@ -56,6 +56,8 @@ async function main() {
     console.error('Refusing to run: DATABASE_URL is not a localhost database.');
     process.exit(2);
   }
+  await prisma.cuttingOrder.deleteMany({});
+  await prisma.modelProduction.deleteMany({});
   await prisma.charityPayment.deleteMany({});
   await prisma.expenseRevenue.deleteMany({});
   await prisma.sale.deleteMany({});       // cascades to its collection / movement ledgers
@@ -105,8 +107,12 @@ async function main() {
   const rid = reservedOrder.body.id as number;
   const stockAfterReserve = await prisma.readyStock.findFirst({ where: { model_code: 'M1' } });
   check('reserved_quantity includes the new reservation (5)', stockAfterReserve?.reserved_quantity === 5, stockAfterReserve);
-  const tooMany = await api('POST', '/sales', modalPayload({ order_number: 'E2E-3', order_status: 'تم الحجز', model1_qty: 9999 }));
-  check('over-reserving is refused with an Arabic message (400)', tooMany.status === 400 && /أكبر من المتاح/.test(String(tooMany.body.message)), tooMany);
+  const overAsk = await api('POST', '/sales', modalPayload({ order_number: 'E2E-3', order_status: 'تم الحجز', model1_qty: 9999 }));
+  check('asking for more than exists is ACCEPTED (201); only what exists is held, the rest is pending',
+    overAsk.status === 201 && overAsk.body.fulfillment?.requested === 9999 && overAsk.body.fulfillment?.reserved <= 90 && overAsk.body.fulfillment?.pending === 9999 - overAsk.body.fulfillment?.reserved, overAsk);
+  const stockOver = await prisma.readyStock.findFirst({ where: { model_code: 'M1' } });
+  check('stored reserved_quantity never exceeds physical stock', (stockOver?.reserved_quantity ?? 0) <= 90, stockOver);
+  await api('DELETE', `/sales/${overAsk.body.id}`);   // keep the rest of the run's numbers simple
   const cancelPrepared = await api('PUT', `/sales/${rid}`, modalPayload({ order_number: 'E2E-2', order_status: 'تم الإلغاء', model1_qty: 5 }));
   const stockAfterCancel = await prisma.readyStock.findFirst({ where: { model_code: 'M1' } });
   check('cancelling a prepared order releases the reservation', cancelPrepared.status === 200 && stockAfterCancel?.reserved_quantity === 0, { cancelPrepared: cancelPrepared.status, reserved: stockAfterCancel?.reserved_quantity });
@@ -149,6 +155,49 @@ async function main() {
   check('charity: paying more than the outstanding is refused (400)', overpay.status === 400, overpay);
   const rev = await api('DELETE', `/charity/payments/${pay.body.payment?.id}`);
   check('charity: reversal removes the payment and its expense', rev.status === 200 && (await prisma.expenseRevenue.count({ where: { operation_type: 'صدقة' } })) === 0, rev);
+
+  // 3g) accept an order for goods that do not exist yet, then produce them
+  const seasonId = created.body.season_id as number;
+  await prisma.cuttingOrder.create({ data: { season_id: seasonId, date: '2026-10-01', cut_number: 1, cut_description: 'قصة', material_type: 'قطن', color: 'أسود', total_pieces: 100 } });
+  const prep = await api('POST', '/sales', modalPayload({ order_number: 'P-9', model1_code: 'M9', model1_qty: 10, model1_color: 'أسود', invoice_value: 5000, deposit_paid: 500, order_status: 'تم الحجز' }));
+  check('«يتم التجهيز» accepted for a model with NO stock card (all pending)', prep.status === 201 && prep.body.fulfillment?.reserved === 0 && prep.body.fulfillment?.pending === 10 && prep.body.fulfillment?.slots?.[0]?.has_card === false, prep);
+  const pid = prep.body.id as number;
+  const shipEarly = await api('PUT', `/sales/${pid}`, modalPayload({ order_number: 'P-9', model1_code: 'M9', model1_qty: 10, model1_color: 'أسود', invoice_value: 5000, deposit_paid: 500, order_status: 'لم يتم الصرف' }));
+  check('shipping goods that were never produced is refused with an Arabic explanation (400)', shipEarly.status === 400 && /لا يمكن شحن/.test(String(shipEarly.body.message)), shipEarly);
+  check('the refused shipment changed nothing', (await counts(pid)).status === 'تم الحجز' && (await counts(pid)).movements === 0);
+  const dashPending = await api('GET', '/dashboard');
+  const po = (dashPending.body.pending_orders as { order_number: string; pending: number }[] | undefined)?.find(o => o.order_number === 'P-9');
+  check('Dashboard lists the order as pending (10) and not as an asset', po?.pending === 10 && dashPending.body.assets_reconciliation?.reconciled === true, po);
+
+  const prod = (qty: number) => api('POST', '/model-prod', {
+    date: '2026-10-10', cut_number: 1, model_code: 'M9', qty_from_cutting: qty, model_description: 'M9', color: 'أسود', sizes: '',
+    status: 'تام', wastage: 0, qty_received: qty, cost_per_piece: 100, warehouse_entry_date: '2026-10-10',
+    parts: [{ part_type: '', cut_number: 1, color: 'أسود' }],
+  });
+  const p1 = await prod(6);
+  check('record production of 6 (201)', p1.status === 201, p1);
+  const afterP1 = await api('GET', '/sales');
+  const f1 = (afterP1.body as unknown as { id: number; fulfillment?: { reserved: number; pending: number } }[]).find(x => x.id === pid)?.fulfillment;
+  check('production fulfils part of the order: reserved 6, pending 4', f1?.reserved === 6 && f1?.pending === 4, f1);
+  const card = await prisma.readyStock.findFirst({ where: { model_code: 'M9' } });
+  check('stock card cache: reserved_quantity = 6 (not more than exists)', card?.reserved_quantity === 6, card);
+  const rsList = await api('GET', '/ready-stock');
+  const m9 = (rsList.body as unknown as { model_code: string; reserved_quantity: number; pending_quantity: number }[]).find(r => r.model_code === 'M9');
+  check('GET /ready-stock reports reserved 6 and pending 4', m9?.reserved_quantity === 6 && m9?.pending_quantity === 4, m9);
+
+  const p2 = await prod(4);
+  check('record production of 4 more (201)', p2.status === 201, p2);
+  for (let i = 0; i < 3; i++) await api('PUT', `/sales/${pid}`, modalPayload({ order_number: 'P-9', model1_code: 'M9', model1_qty: 10, model1_color: 'أسود', invoice_value: 5000, deposit_paid: 500, order_status: 'تم الحجز' }));
+  const cardFull = await prisma.readyStock.findFirst({ where: { model_code: 'M9' } });
+  const afterP2 = await api('GET', '/sales');
+  const f2 = (afterP2.body as unknown as { id: number; order_status: string; fulfillment?: { reserved: number; pending: number } }[]).find(x => x.id === pid);
+  check('fully fulfilled (reserved 10, pending 0) — reserved not duplicated by repeated saves / production', f2?.fulfillment?.reserved === 10 && f2?.fulfillment?.pending === 0 && cardFull?.reserved_quantity === 10, { f2: f2?.fulfillment, cache: cardFull?.reserved_quantity });
+  check('the order was NOT shipped automatically', f2?.order_status === 'تم الحجز' && (await counts(pid)).movements === 0);
+  const shipNow = await api('PUT', `/sales/${pid}`, modalPayload({ order_number: 'P-9', model1_code: 'M9', model1_qty: 10, model1_color: 'أسود', invoice_value: 5000, deposit_paid: 500, order_status: 'لم يتم الصرف' }));
+  const cardShipped = await prisma.readyStock.findFirst({ where: { model_code: 'M9' } });
+  check('now that the goods exist, shipping succeeds; reservation released; cost logged once', shipNow.status === 200 && cardShipped?.reserved_quantity === 0 && (await counts(pid)).movements === 1, { status: shipNow.status, reserved: cardShipped?.reserved_quantity });
+  const dashAfter = await api('GET', '/dashboard');
+  check('Dashboard still reconciles after production and shipping', dashAfter.body.assets_reconciliation?.reconciled === true, dashAfter.body.assets_reconciliation);
 
   // 3f) Dashboard-related endpoints respond (no hidden 500s)
   for (const path of ['/dashboard/breakdown/net-profit', '/dashboard/breakdown/expenses', '/dashboard/breakdown/sales', '/dashboard/breakdown/receivables-audit', '/financial-center', '/charity/history', `/sales/${id}/ledger`]) {

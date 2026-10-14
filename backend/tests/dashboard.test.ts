@@ -13,7 +13,9 @@ type Json = Record<string, unknown> & {
   receivable_overlap_orders: number; receivable_overlap_amount: number;
   assets_reconciliation: { reconciled: boolean; components_sum: number; differences: Record<string, number> };
   receivable_items: { source: string; reference: string; remaining: number; stock_status?: string; inventory_still_in_stock?: boolean; duplicate_in_client_account?: boolean }[];
-  stock_items: { actual_qty: number; reserved_qty: number; available_qty: number; total: number }[];
+  stock_items: { actual_qty: number; reserved_qty: number; available_qty: number; total: number; pending_qty: number }[];
+  pending_orders: { order_number: string; requested: number; reserved: number; pending: number }[];
+  pending_units: number; advances_on_open_reservations: number;
   shipping_receivable: number; client_accounts_receivable: number;
 };
 
@@ -134,7 +136,7 @@ test('Dashboard: shipping removes cost from stock and adds only the valid receiv
 test('Dashboard: a colour mismatch (shipped goods still valued in stock) is surfaced on the receivable row', async () => {
   const w = new World();
   w.addStock('M1', 'أسود', 50, 600);
-  await w.saveOrder({ order_number: 'SO-9', status: NOT_PAID_OUT, slots: [{ code: 'M1', qty: 10, color: 'ازرق' }], invoice: 7000 });
+  await w.saveOrder({ legacy: true, order_number: 'SO-9', status: NOT_PAID_OUT, slots: [{ code: 'M1', qty: 10, color: 'ازرق' }], invoice: 7000 });
   const d = await callDashboard(dataOf(w), 1);
   const row = d.receivable_items.find(i => i.reference === 'SO-9');
   assert.equal(row?.remaining, 7000);
@@ -157,4 +159,30 @@ test('Dashboard: season isolation — each season sees only its own stock, recei
   assert.deepEqual([s1.stock_value, s1.money_owed_to_us], [90 * 600, 8500]);
   assert.deepEqual([s2.stock_value, s2.money_owed_to_us], [35 * 800, 4000 + 777]);
   assert.equal(s1.assets_reconciliation.reconciled && s2.assets_reconciliation.reconciled, true);
+});
+
+test('Dashboard: an under-stocked «يتم التجهيز» order — only real stock is an asset; the shortage is a pending list', async () => {
+  const w = new World();
+  w.addStock('M1', 'أسود', 4, 600);
+  await w.saveOrder({ order_number: 'P-1', status: PREPARED, slots: [{ ...M1, qty: 10 }], invoice: 8500, deposit: 1000 });
+  const d = await callDashboard(dataOf(w), 1);
+  assert.equal(d.stock_value, 4 * 600);                         // the 6 missing pieces are NOT assets
+  assert.equal(d.total_current_assets, 4 * 600);
+  assert.equal(d.money_owed_to_us, 0);                          // a prepared order is not a receivable
+  assert.equal(d.total_in, 1000);                               // only the deposit is real cash…
+  assert.equal(d.advances_on_open_reservations, 1000);          // …and it is shown as an obligation
+  assert.deepEqual(d.stock_items.map(i => [i.actual_qty, i.reserved_qty, i.available_qty, i.pending_qty]), [[4, 4, 0, 6]]);
+  assert.deepEqual(d.pending_orders.map(o => [o.order_number, o.requested, o.reserved, o.pending]), [['P-1', 10, 4, 6]]);
+  assert.equal(d.pending_units, 6);
+  assert.equal(d.assets_reconciliation.reconciled, true);
+});
+
+test('Dashboard: zero stock — order accepted, nothing reserved, nothing invented', async () => {
+  const w = new World();
+  w.addStock('M1', 'أسود', 0, 600);
+  await w.saveOrder({ order_number: 'P-2', status: PREPARED, slots: [{ ...M1, qty: 10 }], invoice: 8500 });
+  const d = await callDashboard(dataOf(w), 1);
+  assert.equal(d.total_current_assets, 0);
+  assert.deepEqual(d.pending_orders.map(o => [o.reserved, o.pending]), [[0, 10]]);
+  assert.equal(d.assets_reconciliation.reconciled, true);
 });

@@ -3,7 +3,7 @@ import { assert, test } from './harness';
 import { planCollectionChange, collectionsByMonthFromLedger } from '../src/services/shippingCollections';
 import { planMovements } from '../src/services/inventoryMovements';
 import { charityDue, charityRate, charityStatus, isValidDate } from '../src/services/charity';
-import { computeStockPositions, validateReservation, valueStockRow, STATUS_RESERVED } from '../src/services/readyStockPositions';
+import { valueStockRow } from '../src/services/readyStockPositions';
 
 test('charity: cases A–F (150k/200k/350k/400k/800k/900k) and edge rates', () => {
   assert.deepEqual([150000, 200000, 350000, 400000, 800000, 900000].map(t => charityDue(t).due), [1500, 3000, 5250, 8000, 16000, 27000]);
@@ -53,18 +53,8 @@ test('movement planner: only differences are recorded; reversals use the recorde
   assert.deepEqual([noCard[0].unit_cost, noCard[0].stock_id], [0, null]);                         // unknown cost is explicit, not guessed
 });
 
-test('stock: reservation validation + valuation invariants (available + reserved = physical)', () => {
-  const row = { id: 1, season_id: 1, model_code: 'M1', product_name: 'M1', color: 'اسود', opening_balance: 10, cost_per_piece: 100, location: '', reserved_quantity: 0 };
-  const sale = (id: number, qty: number) => ({
-    id, season_id: 1, order_status: STATUS_RESERVED, model1_code: 'M1', model1_qty: qty, model1_color: 'اسود',
-    model2_code: '', model2_qty: 0, model2_color: '', model3_code: '', model3_qty: 0, model3_color: '', model4_code: '', model4_qty: 0, model4_color: '', model5_code: '', model5_qty: 0, model5_color: '',
-  });
-  const ctx = (sales: ReturnType<typeof sale>[]) => computeStockPositions({ readyStock: [row], modelProds: [], sales: sales as never[], returns_: [] });
-  // 10 in stock, 7 already reserved by order 1: 3 more fit, 4 more do not (no overselling)
-  assert.equal(validateReservation(ctx([sale(1, 7)]), [{ code: 'M1', color: 'اسود', qty: 3 }]), null);
-  const err = validateReservation(ctx([sale(1, 7)]), [{ code: 'M1', color: 'اسود', qty: 4 }]);
-  assert.ok(typeof err === 'string' && err.includes('أكبر من المتاح'), 'reserving beyond what is left must be rejected');
-  assert.ok((validateReservation(ctx([]), [{ code: 'M1', color: 'احمر', qty: 1 }]) ?? '').includes('غير موجود'));
+test('stock: valuation invariant (available + reserved = physical)', () => {
   const v = valueStockRow(100, 10, 1000);
   assert.deepEqual([v.availableValue, v.reservedValue, v.physicalValue], [90000, 10000, 100000]);
+  assert.equal(valueStockRow(5, 9, 10).reservedQty, 5);   // never reserved above what exists
 });

@@ -6,8 +6,9 @@ import { logAudit } from '../services/auditHelper';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
 import { cairoToday, isValidDate } from '../services/charity';
 import {
-  STATUS_CANCELED, STATUS_RESERVED, isStockDeducting, reservedSyncUpdates, validateReservation,
+  STATUS_CANCELED, STATUS_RESERVED, computeStockPositions, increasingKeys, isStockDeducting, reservedSyncUpdates, validateShipment,
 } from '../services/readyStockPositions';
+import { lockStock } from '../services/reservationSync';
 import { ledgerTotal } from '../services/shippingCollections';
 import { collectionDate, loadStockContext, syncCollections, syncShipMovements } from '../services/orderLedgers';
 import { outstandingShippingReceivable } from '../services/receivablesAudit';
@@ -33,14 +34,6 @@ type Tx = Prisma.TransactionClient;
 
 // Raised inside a transaction to roll everything back and answer 400 with an Arabic message.
 class StockError extends Error {}
-
-// Serialises every write that can change stock availability or reservations within a season,
-// so two orders can never reserve (or ship) the same units at the same time.
-// NOTE: $executeRaw, not $queryRaw — pg_advisory_xact_lock returns `void`, which $queryRaw cannot deserialize
-// ("Failed to deserialize column of type 'void'") and would fail every order write with a 500.
-async function lockStock(tx: Tx, seasonId: number) {
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${seasonId}::int, hashtext('ready_stock'))`;
-}
 
 // Brings ready_stock.reserved_quantity in line with the reservation ORDERS for the stock rows
 // the given slots map to. Recomputing (instead of +/- deltas) means a reservation is applied or
@@ -147,11 +140,28 @@ async function clientInvoiceOverlap(seasonId: number, orderNumber: string): Prom
 
 // ─── routes ─────────────────────────────────────────────────────────────────
 
+// How much of a «يتم التجهيز» order is really held in stock vs still to be produced / purchased.
+async function fulfillmentOf(seasonId: number, saleId?: number) {
+  const [sales, readyStock, modelProds, returns_] = await Promise.all([
+    prisma.sale.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'asc' } }),
+    prisma.readyStock.findMany({ where: seasonWhere(seasonId) }),
+    prisma.modelProduction.findMany({ where: seasonWhere(seasonId) }),
+    prisma.returnItem.findMany({ where: seasonWhere(seasonId) }),
+  ]);
+  const { allocations } = computeStockPositions({ readyStock, modelProds, sales, returns_ });
+  const shape = (a: { requested: number; reserved: number; pending: number; slots: unknown }) => ({ requested: a.requested, reserved: a.reserved, pending: a.pending, slots: a.slots });
+  return { sales, allocations, one: saleId !== undefined && allocations.get(saleId) ? shape(allocations.get(saleId)!) : null, shape };
+}
+
 // GET /api/sales
 router.get('/', async (req: Request, res: Response) => {
   try {
     const seasonId = await getSeasonId(req);
-    return res.json(await prisma.sale.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'asc' } }));
+    const { sales, allocations, shape } = await fulfillmentOf(seasonId);
+    return res.json(sales.map(s => {
+      const a = allocations.get(s.id);
+      return a ? { ...s, fulfillment: shape(a) } : s;
+    }));
   } catch {
     return res.status(500).json({ message: 'خطأ في جلب المبيعات' });
   }
@@ -189,9 +199,10 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
     const explicitDate = data.shipping_collected_date;
     const sale = await prisma.$transaction(async (tx) => {
       await lockStock(tx, seasonId);
-      if (isReservation) {
-        // Reserving requires the goods to physically exist and be unallocated (model + colour).
-        const problem = validateReservation(await loadStockContext(tx, seasonId), newSlots);
+      // «يتم التجهيز» is always accepted — whatever is not in stock is simply left pending.
+      // Goods that physically leave the factory must exist and not be held for other orders.
+      if (isStockDeducting(status)) {
+        const problem = validateShipment(await loadStockContext(tx, seasonId), newSlots);
         if (problem) throw new StockError(problem);
       }
       const created = await tx.sale.create({
@@ -221,7 +232,7 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
         ? `إضافة عملية بيع (تم الصرف مباشرة): ${sale.client} - ${sale.order_number} — المتبقي: ${remaining} — المستلم فعليًا: ${resolved.value} — الفرق غير المحصل: ${collection_difference}`
         : `إضافة عملية بيع: ${sale.client} - ${sale.order_number}`,
     });
-    return res.status(201).json({ ...sale, collection_difference });
+    return res.status(201).json({ ...sale, collection_difference, fulfillment: (await fulfillmentOf(seasonId, sale.id)).one });
   } catch (err) {
     if (err instanceof StockError) return res.status(400).json({ message: err.message });
     console.error(err);
@@ -295,10 +306,13 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
         throw new StockError('تم تعديل هذا الأوردر من مستخدم آخر — أعد تحميل الصفحة وحاول مرة أخرى');
       }
 
-      // Validate the NEW reservation against stock minus every OTHER order's reservation
-      // (this order's own old reservation is excluded, i.e. released first).
-      if (willBeReservation && (!wasReservation || slotsChanged)) {
-        const problem = validateReservation(await loadStockContext(tx, seasonId, id), newSlots);
+      // «يتم التجهيز» is always accepted (the shortage is tracked as pending). Shipping is not: when
+      // the quantity leaving the factory goes up, it must physically exist and not be held for other
+      // orders. Edits that don't increase what was already shipped are never blocked.
+      if (isStockDeducting(newStatus)) {
+        const ctx = await loadStockContext(tx, seasonId, id);
+        const oldShipped = isStockDeducting(oldSale.order_status) ? oldSlots : [];
+        const problem = validateShipment(ctx, newSlots, increasingKeys(ctx, oldShipped, newSlots));
         if (problem) throw new StockError(problem);
       }
 
@@ -333,7 +347,7 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
 
     logAudit({ user: req.user, module: 'Sales', action, record_id: id,
       before_data: oldSale, after_data: { ...sale, collection_difference }, description });
-    return res.json({ ...sale, collection_difference });
+    return res.json({ ...sale, collection_difference, fulfillment: (await fulfillmentOf(seasonId, id)).one });
   } catch (err) {
     if (err instanceof StockError) return res.status(400).json({ message: err.message });
     console.error(err);
@@ -407,6 +421,8 @@ router.post('/:id/convert-reservation', requireManager, async (req: Request, res
       await lockStock(tx, seasonId);
       const current = await tx.sale.findFirst({ where: { id, season_id: seasonId } });
       if (!current || current.order_status !== STATUS_RESERVED) throw new StockError('هذا الطلب ليس حجزاً');
+      const shipProblem = validateShipment(await loadStockContext(tx, seasonId, id), slots);
+      if (shipProblem) throw new StockError(shipProblem);
       // Physical stock drops once status leaves the reservation state; the reservation is released with it.
       const upd = await tx.sale.update({
         where: { id },

@@ -186,6 +186,40 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* Operational: accepted orders still waiting for goods to be produced / purchased (NOT assets) */}
+        {(metrics.pending_orders?.length ?? 0) > 0 && (
+          <div className="bg-red-50 border border-red-200 rounded-xl p-5">
+            <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+              <h2 className="text-base font-bold text-red-800">⏳ أوردرات «يتم التجهيز» في انتظار الإنتاج / الشراء</h2>
+              <span className="text-sm font-semibold text-red-700">إجمالي الناقص: {(metrics.pending_units ?? 0).toLocaleString('ar-EG')} قطعة</span>
+            </div>
+            <div className="overflow-x-auto bg-white rounded-lg border border-red-100">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-red-50 text-red-900">
+                    {['الأوردر', 'العميل', 'المطلوب', 'محجوز (موجود)', 'ناقص', 'الأصناف الناقصة'].map(h => <th key={h} className="text-right px-3 py-2 font-semibold">{h}</th>)}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-red-50">
+                  {(metrics.pending_orders ?? []).map(o => (
+                    <tr key={o.sale_id}>
+                      <td className="px-3 py-2 font-medium text-gray-800">#{o.sale_id} · {o.order_number}</td>
+                      <td className="px-3 py-2 text-gray-600">{o.client}</td>
+                      <td className="px-3 py-2">{o.requested.toLocaleString('ar-EG')}</td>
+                      <td className="px-3 py-2 text-orange-700">{o.reserved.toLocaleString('ar-EG')}</td>
+                      <td className="px-3 py-2 font-bold text-red-700">{o.pending.toLocaleString('ar-EG')}</td>
+                      <td className="px-3 py-2 text-gray-600 text-xs">
+                        {o.slots.map(x => `${x.code}${x.color ? ` (${x.color})` : ''}: ناقص ${x.pending}${x.has_card ? '' : ' — لا يوجد كارت مخزون'}`).join('، ')}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-xs text-red-700/70 mt-2">هذه الكميات لم تُنتج أو تُشترَ بعد، فلا تدخل في المخزون ولا في الأصول، ولا يمكن شحنها حتى تتوفر فعليًا.</p>
+          </div>
+        )}
+
         {/* Sales recognition, cost, receivables and advances — separate metrics, none of them added to cash */}
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
           <h2 className="text-base font-bold text-gray-800 mb-1">المبيعات والتكلفة والمستحقات</h2>
@@ -390,6 +424,7 @@ export default function Dashboard() {
                         <th className="text-right px-3 py-2 font-semibold">الفعلي</th>
                         <th className="text-right px-3 py-2 font-semibold">المحجوز</th>
                         <th className="text-right px-3 py-2 font-semibold">المتاح</th>
+                        <th className="text-right px-3 py-2 font-semibold">ناقص (مطلوب)</th>
                         <th className="text-right px-3 py-2 font-semibold">تكلفة الوحدة</th>
                         <th className="text-right px-3 py-2 font-semibold">الإجمالي</th>
                       </tr>
@@ -403,6 +438,7 @@ export default function Dashboard() {
                           <td className="px-3 py-2 text-gray-600">{fmt(it.actual_qty)}</td>
                           <td className="px-3 py-2 text-gray-600">{fmt(it.reserved_qty)}</td>
                           <td className="px-3 py-2 text-gray-600">{fmt(it.available_qty)}</td>
+                          <td className={`px-3 py-2 ${(it.pending_qty ?? 0) > 0 ? 'text-red-600 font-semibold' : 'text-gray-400'}`}>{(it.pending_qty ?? 0) > 0 ? fmt(it.pending_qty ?? 0) : '—'}</td>
                           <td className="px-3 py-2 text-gray-600">{fmt(it.unit_cost)}</td>
                           <td className="px-3 py-2 font-bold text-blue-700">{fmt(it.total)}</td>
                         </tr>
@@ -560,7 +596,7 @@ export default function Dashboard() {
                 <div className="space-y-1.5 text-sm">
                   <div className="flex items-center justify-between px-4 py-2 bg-gray-50 rounded-lg"><span className="text-gray-600">متاح للبيع</span><span className="font-bold">{fmt(metrics.stock_available_value ?? 0)} ج.م</span></div>
                   <div className="flex items-center justify-between px-4 py-2 bg-gray-50 rounded-lg"><span className="text-gray-600">محجوز لأوردرات لم تُشحن (ما زال في المصنع)</span><span className="font-bold">{fmt(metrics.stock_reserved_value ?? 0)} ج.م</span></div>
-                  <p className="text-xs text-gray-400">الإجمالي = الكمية الفعلية × التكلفة (متاح + محجوز). الحجز لا يغيّر إجمالي الأصول، والبضاعة المشحونة خرجت من هذا الرقم.</p>
+                  <p className="text-xs text-gray-400">الإجمالي = الكمية الفعلية × التكلفة (متاح + محجوز). الحجز لا يغيّر إجمالي الأصول، والبضاعة المشحونة خرجت من هذا الرقم، والكميات الناقصة (لم تُنتج/تُشترَ بعد) لا تدخل فيه.</p>
                 </div>
               )}
 

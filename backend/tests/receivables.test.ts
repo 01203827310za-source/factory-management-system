@@ -76,9 +76,9 @@ test('stock: shipped goods are removed once; reserved goods stay in stock value'
 test('audit: shipped goods still valued in stock are detected (colour mismatch / short card)', async () => {
   const w = new World();
   w.addStock('M1', 'أسود', 50, 600);
-  const typo = await w.saveOrder({ order_number: 'SO-9', status: NOT_PAID_OUT, slots: [{ code: 'M1', qty: 10, color: 'ازرق' }], invoice: 7000 });
-  const short = await w.saveOrder({ order_number: 'SO-10', status: NOT_PAID_OUT, slots: [{ code: 'M1', qty: 60, color: 'أسود' }], invoice: 9000 });
-  const none = await w.saveOrder({ order_number: 'SO-11', status: NOT_PAID_OUT, slots: [{ code: 'ZZ', qty: 1, color: '' }], invoice: 100 });
+  const typo = await w.saveOrder({ legacy: true, order_number: 'SO-9', status: NOT_PAID_OUT, slots: [{ code: 'M1', qty: 10, color: 'ازرق' }], invoice: 7000 });
+  const short = await w.saveOrder({ legacy: true, order_number: 'SO-10', status: NOT_PAID_OUT, slots: [{ code: 'M1', qty: 60, color: 'أسود' }], invoice: 9000 });
+  const none = await w.saveOrder({ legacy: true, order_number: 'SO-11', status: NOT_PAID_OUT, slots: [{ code: 'ZZ', qty: 1, color: '' }], invoice: 100 });
   const audit = buildReceivablesAudit({ sales: w.sales, readyStock: w.readyStock, modelProds: [], returns_: [], clientAccts: [], clientInvoices: [], movements: w.movements });
   const by = (n: string) => audit.orders.find(o => o.order_number === n)!;
   assert.equal(by('SO-9').stock_status, 'possible_mismatch');

@@ -190,6 +190,11 @@ export type SaleRecord = {
   remaining: number;
   shipping_number: string;
   order_status: 'تم الصرف' | 'لم يتم الصرف' | 'حساب عميل' | 'تم الحجز' | 'تم الإلغاء';
+  /** «يتم التجهيز» orders only: units really held in stock vs still to be produced / purchased. */
+  fulfillment?: {
+    requested: number; reserved: number; pending: number;
+    slots: { code: string; color: string; requested: number; reserved: number; pending: number; has_card: boolean }[];
+  } | null;
   delivery_method: string;
   mobile: string;
   warehouse: string;
@@ -566,10 +571,16 @@ export interface DashboardMetrics {
     differences: Record<'fabric' | 'stock' | 'accessories' | 'cutting' | 'wip' | 'receivables', number>;
     reconciled: boolean;
   };
+  pending_orders?: {
+    sale_id: number; order_number: string; client: string; invoice_value: number; deposit_paid: number;
+    requested: number; reserved: number; pending: number;
+    slots: { code: string; color: string; requested: number; reserved: number; pending: number; has_card: boolean }[];
+  }[];
+  pending_units?: number;
   receivable_overlap_orders?: number;
   receivable_overlap_amount?: number;
   fabric_items: { material_type: string; color: string; available_qty: number; unit_cost: number; total: number }[];
-  stock_items: { model_code: string; product_name: string; color: string; actual_qty: number; reserved_qty: number; available_qty: number; unit_cost: number; total: number; reserved_value?: number; available_value?: number }[];
+  stock_items: { model_code: string; product_name: string; color: string; actual_qty: number; reserved_qty: number; available_qty: number; unit_cost: number; total: number; reserved_value?: number; available_value?: number; pending_qty?: number }[];
   accessories_items: { item_name: string; qty: number; unit_cost: number; total: number }[];
   cutting_items: { cut_number: number; cut_description: string; material_type: string; color: string; total_pieces: number; used_pieces: number; remaining_pieces: number; cost_per_meter: number; total: number }[];
   wip_items: { model_code: string; model_description: string; color: string; qty_received: number; cost_per_piece: number; total: number; status: string }[];

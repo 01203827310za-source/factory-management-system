@@ -10,6 +10,8 @@ import { authenticate, requireManager } from '../middleware/auth';
 import { logAudit } from '../services/auditHelper';
 import { textsMatch, findBestMatch } from '../utils/textMatch';
 import { getSeasonId, seasonWhere, withSeason } from '../services/seasonContext';
+import { resyncReservations } from '../services/reservationSync';
+import { computeStockPositions } from '../services/readyStockPositions';
 import { outstandingShippingReceivable } from '../services/receivablesAudit';
 
 // Remove PaymentLog entries when a debt/client-account paid amount is reduced.
@@ -95,7 +97,16 @@ readyStockRouter.use(authenticate);
 readyStockRouter.get('/', async (req, res) => {
   try {
     const seasonId = await getSeasonId(req);
-    return res.json(await prisma.readyStock.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'asc' } }));
+    const [rows, modelProds, sales, returns_] = await Promise.all([
+      prisma.readyStock.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'asc' } }),
+      prisma.modelProduction.findMany({ where: seasonWhere(seasonId) }),
+      prisma.sale.findMany({ where: seasonWhere(seasonId) }),
+      prisma.returnItem.findMany({ where: seasonWhere(seasonId) }),
+    ]);
+    // reserved_quantity is the DERIVED allocation (never above physical stock); pending_quantity is
+    // what prepared orders still need produced/purchased for this model+colour.
+    const { positions } = computeStockPositions({ readyStock: rows, modelProds, sales, returns_ });
+    return res.json(rows.map((r, i) => ({ ...r, reserved_quantity: positions[i].reserved, pending_quantity: positions[i].pending })));
   }
   catch { return res.status(500).json({ message: 'خطأ' }); }
 });
@@ -105,6 +116,8 @@ readyStockRouter.post('/', requireManager, async (req, res) => {
     const rec = await prisma.readyStock.create({ data: withSeason(req.body, seasonId) });
     logAudit({ user: req.user, module: 'ReadyStock', action: 'CREATE', record_id: rec.id,
       after_data: rec, description: `إضافة منتج جاهز: ${rec.model_code} - ${rec.product_name}` });
+    // Physical stock changed → re-derive which prepared orders now hold how many units.
+    await resyncReservations(seasonId);
     return res.status(201).json(rec);
   } catch { return res.status(500).json({ message: 'خطأ' }); }
 });
@@ -119,6 +132,8 @@ readyStockRouter.put('/:id', requireManager, async (req, res) => {
     const rec = await prisma.readyStock.update({ where: { id }, data: { ...safeData, season_id: seasonId } });
     logAudit({ user: req.user, module: 'ReadyStock', action: 'UPDATE', record_id: id,
       before_data: before, after_data: rec, description: `تعديل منتج جاهز: ${rec.model_code} - ${rec.product_name}` });
+    // Physical stock changed → re-derive which prepared orders now hold how many units.
+    await resyncReservations(seasonId);
     return res.json(rec);
   } catch { return res.status(500).json({ message: 'خطأ' }); }
 });
@@ -131,6 +146,8 @@ readyStockRouter.delete('/:id', requireManager, async (req, res) => {
     await prisma.readyStock.delete({ where: { id } });
     logAudit({ user: req.user, module: 'ReadyStock', action: 'DELETE', record_id: id,
       before_data: before, description: `حذف منتج جاهز: ${before?.model_code} - ${before?.product_name}` });
+    // Physical stock changed → re-derive which prepared orders now hold how many units.
+    await resyncReservations(seasonId);
     return res.json({ message: 'تم' });
   } catch { return res.status(500).json({ message: 'خطأ' }); }
 });
@@ -498,6 +515,8 @@ modelProdRouter.post('/', requireManager, async (req, res) => {
 
     logAudit({ user: req.user, module: 'ModelProduction', action: 'CREATE', record_id: createdFresh?.id || 0,
       after_data: createdFresh, description: `إضافة إنتاج موديل: ${createdFresh?.model_code} - ${createdFresh?.model_description}` });
+    // Physical stock changed → re-derive which prepared orders now hold how many units.
+    await resyncReservations(seasonId);
     return res.status(201).json(createdFresh);
   } catch (err) { return modelProductionError(res, err); }
 });
@@ -536,6 +555,8 @@ modelProdRouter.put('/:id', requireManager, async (req, res) => {
     logAudit({ user: req.user, module: 'ModelProduction', action: 'UPDATE', record_id: id,
       before_data: before, after_data: updatedFresh,
       description: `تعديل إنتاج موديل: ${updatedFresh?.model_code} - ${updatedFresh?.model_description}` });
+    // Physical stock changed → re-derive which prepared orders now hold how many units.
+    await resyncReservations(seasonId);
     return res.json(updatedFresh);
   } catch (err) { return modelProductionError(res, err); }
 });
@@ -549,6 +570,8 @@ modelProdRouter.delete('/:id', requireManager, async (req, res) => {
     await prisma.modelProduction.delete({ where: { id } }); // parts cascade via FK
     logAudit({ user: req.user, module: 'ModelProduction', action: 'DELETE', record_id: id,
       before_data: before, description: `حذف إنتاج موديل: ${before?.model_code} - ${before?.model_description}` });
+    // Physical stock changed → re-derive which prepared orders now hold how many units.
+    await resyncReservations(seasonId);
     return res.json({ message: 'تم' });
   } catch { return res.status(500).json({ message: 'خطأ' }); }
 });
@@ -901,6 +924,8 @@ returnsRouter.post('/', requireManager, async (req, res) => {
     const rec = await prisma.returnItem.create({ data: withSeason(req.body, seasonId) });
     logAudit({ user: req.user, module: 'Returns', action: 'CREATE', record_id: rec.id,
       after_data: rec, description: `إضافة مرتجع: ${rec.client_name} - ${rec.model_code}` });
+    // Physical stock changed → re-derive which prepared orders now hold how many units.
+    await resyncReservations(seasonId);
     return res.status(201).json(rec);
   } catch { return res.status(500).json({ message: 'خطأ' }); }
 });
@@ -913,6 +938,8 @@ returnsRouter.put('/:id', requireManager, async (req, res) => {
     const rec = await prisma.returnItem.update({ where: { id }, data: { ...req.body, season_id: seasonId } });
     logAudit({ user: req.user, module: 'Returns', action: 'UPDATE', record_id: id,
       before_data: before, after_data: rec, description: `تعديل مرتجع: ${rec.client_name} - ${rec.model_code}` });
+    // Physical stock changed → re-derive which prepared orders now hold how many units.
+    await resyncReservations(seasonId);
     return res.json(rec);
   } catch { return res.status(500).json({ message: 'خطأ' }); }
 });
@@ -925,6 +952,8 @@ returnsRouter.delete('/:id', requireManager, async (req, res) => {
     await prisma.returnItem.delete({ where: { id } });
     logAudit({ user: req.user, module: 'Returns', action: 'DELETE', record_id: id,
       before_data: before, description: `حذف مرتجع: ${before?.client_name} - ${before?.model_code}` });
+    // Physical stock changed → re-derive which prepared orders now hold how many units.
+    await resyncReservations(seasonId);
     return res.json({ message: 'تم' });
   } catch { return res.status(500).json({ message: 'خطأ' }); }
 });
@@ -1464,6 +1493,8 @@ printOrdersRouter.post('/', requireManager, async (req: Request, res: Response) 
       after_data: result.po,
       description: `أمر طباعة ${order_number}: ${source.model_code} → ${new_model_code} (${qty} قطعة)` });
 
+    // Physical stock changed → re-derive which prepared orders now hold how many units.
+    await resyncReservations(seasonId);
     return res.status(201).json(result.po);
   } catch (e) {
     console.error('Print order error:', e);

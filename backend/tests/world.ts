@@ -4,7 +4,7 @@
 import type { Prisma } from '@prisma/client';
 import type { InventoryMovement, ModelProduction, ReadyStock, ReturnItem, Sale, ShippingCollection } from '@prisma/client';
 import { collectionDate, loadStockContext, syncCollections, syncShipMovements } from '../src/services/orderLedgers';
-import { computeStockPositions, isStockDeducting, reservedSyncUpdates, saleSlots, valueStockRow, type Slot } from '../src/services/readyStockPositions';
+import { computeStockPositions, increasingKeys, isStockDeducting, reservedSyncUpdates, saleSlots, validateShipment, valueStockRow, type Slot } from '../src/services/readyStockPositions';
 import { computeDashboardCashFlow, computeMoneyOwedToUs } from '../src/services/financialMetrics';
 import { costOfGoodsShipped, returnsCostCredit, type MovementRow } from '../src/services/inventoryMovements';
 import { FuzzyKeyIndex } from '../src/utils/textMatch';
@@ -51,6 +51,29 @@ export class World {
     this.tx = fake as unknown as Tx;
   }
 
+  /** Records finished goods coming in (production or purchase) — like a model-production entry. */
+  addProduction(code: string, color: string, qty: number, season = 1): void {
+    this.modelProds.push({
+      id: this.modelProds.length + 1, season_id: season, date: '2026-10-10', cut_number: 1, model_code: code, qty_from_cutting: qty,
+      model_description: code, color, sizes: '', status: 'تام', wastage: 0, qty_received: qty, cost_per_piece: 0,
+      warehouse_entry_date: '', created_at: new Date(),
+    });
+  }
+  /** Re-derive and store reserved_quantity, as resyncReservations() does after production / returns. */
+  async resync(season = 1): Promise<void> {
+    const ctx = await loadStockContext(this.tx, season);
+    reservedSyncUpdates(ctx, new Set(ctx.positions.map(p => p.key))).forEach(u => {
+      const r = this.readyStock.find(x => x.id === u.id);
+      if (r) r.reserved_quantity = u.to;
+    });
+  }
+  allocation(saleId: number, season = 1) {
+    const ctx = computeStockPositions({
+      readyStock: this.readyStock.filter(r => r.season_id === season), modelProds: this.modelProds.filter(r => r.season_id === season),
+      sales: this.sales.filter(s => s.season_id === season), returns_: this.returns.filter(r => r.season_id === season),
+    });
+    return ctx.allocations.get(saleId);
+  }
   addStock(code: string, color: string, opening: number, cost: number, season = 1): ReadyStock {
     const row: ReadyStock = {
       id: this.readyStock.length + 1, season_id: season, model_code: code, product_name: code, color,
@@ -64,6 +87,8 @@ export class World {
   async saveOrder(input: {
     id?: number; season?: number; order_number?: string; status: string; slots: Slot[];
     invoice: number; deposit?: number; collected?: number; date?: string; user?: string;
+    /** Model data that predates the shipping check (e.g. goods shipped before it existed). */
+    legacy?: boolean;
   }): Promise<Sale> {
     const season = input.season ?? 1;
     const existing = input.id ? this.sales.find(s => s.id === input.id) : undefined;
@@ -81,6 +106,14 @@ export class World {
       model1_code: '', model1_qty: 0, model1_color: '', model2_code: '', model2_qty: 0, model2_color: '', model3_code: '', model3_qty: 0, model3_color: '',
       model4_code: '', model4_qty: 0, model4_color: '', model5_code: '', model5_qty: 0, model5_color: '',
     });
+    // Same rule as the routes: «يتم التجهيز» is always accepted; goods leaving the factory must exist
+    // and not be held for other orders (only checked where the shipped quantity goes UP).
+    if (!input.legacy && isStockDeducting(input.status)) {
+      const ctx = await loadStockContext(this.tx, season, existing?.id);
+      const oldShipped = existing && isStockDeducting(existing.order_status) ? saleSlots(existing) : [];
+      const problem = validateShipment(ctx, input.slots, increasingKeys(ctx, oldShipped, input.slots));
+      if (problem) throw new Error(problem);
+    }
     const previousCached = row.shipping_collected;
     const storedDate = row.shipping_collected_date;
 
@@ -125,13 +158,13 @@ export class World {
       readyStock: this.readyStock.filter(r => r.season_id === season), modelProds: this.modelProds.filter(r => r.season_id === season),
       sales: this.sales.filter(s => s.season_id === season), returns_: this.returns.filter(r => r.season_id === season),
     });
-    let physical = 0, reserved = 0, available = 0, physicalQty = 0, availableQty = 0, reservedQty = 0;
+    let physical = 0, reserved = 0, available = 0, physicalQty = 0, availableQty = 0, reservedQty = 0, pendingQty = 0;
     ctx.positions.forEach(p => {
       const v = valueStockRow(p.actual, p.reserved, p.row.cost_per_piece);
       physical += v.physicalValue; reserved += v.reservedValue; available += v.availableValue;
-      physicalQty += v.physicalQty; reservedQty += v.reservedQty; availableQty += v.availableQty;
+      physicalQty += v.physicalQty; reservedQty += v.reservedQty; availableQty += v.availableQty; pendingQty += p.pending;
     });
-    return { physical, reserved, available, physicalQty, reservedQty, availableQty };
+    return { physical, reserved, available, physicalQty, reservedQty, availableQty, pendingQty };
   }
   cogs(season = 1) {
     const saleIds = new Set(this.sales.filter(s => s.season_id === season).map(s => s.id));

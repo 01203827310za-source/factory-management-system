@@ -4,7 +4,7 @@ import { authenticate } from '../middleware/auth';
 import { FuzzyKeyIndex } from '../utils/textMatch';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
 import { computeDashboardCashFlow } from '../services/financialMetrics';
-import { isStockDeducting, STATUS_CANCELED, STATUS_RESERVED, valueStockRow } from '../services/readyStockPositions';
+import { computeStockPositions, isStockDeducting, STATUS_CANCELED, STATUS_RESERVED, valueStockRow } from '../services/readyStockPositions';
 import { costOfGoodsShipped, returnsCostCredit, type MovementRow } from '../services/inventoryMovements';
 import { analyseShipments, findReceivableOverlap } from '../services/receivablesAudit';
 
@@ -136,7 +136,11 @@ router.get('/', async (req: Request, res: Response) => {
     });
 
     let stockValue = 0;
-    const stockItems: Array<{ model_code: string; product_name: string; color: string; actual_qty: number; reserved_qty: number; available_qty: number; unit_cost: number; total: number; reserved_value: number; available_value: number }> = [];
+    const stockItems: Array<{ model_code: string; product_name: string; color: string; actual_qty: number; reserved_qty: number; available_qty: number; unit_cost: number; total: number; reserved_value: number; available_value: number; pending_qty: number }> = [];
+    // Reservations are ALLOCATED from stock that really exists (see computeStockPositions): an order that
+    // asks for more than is available holds only what exists; the rest is pending, never an asset.
+    const stockCtx = computeStockPositions({ readyStock, modelProds, sales, returns_ });
+    const positionOf = new Map(stockCtx.positions.map(p => [p.row.id, p]));
     let stockReservedValue = 0;
     let stockAvailableValue = 0;
     readyStock.forEach(rs => {
@@ -147,7 +151,8 @@ router.get('/', async (req: Request, res: Response) => {
       const actual = Math.max(0, rs.opening_balance + prod - sold + returned);
       // Stock is valued at PHYSICAL quantity (available + reserved): reserved goods are still in
       // the factory, so reserving only moves value from "available" to "reserved".
-      const v = valueStockRow(actual, rs.reserved_quantity, rs.cost_per_piece);
+      const pos = positionOf.get(rs.id);
+      const v = valueStockRow(actual, pos?.reserved ?? 0, rs.cost_per_piece);
       const total = v.physicalValue;
       stockValue += total;
       stockReservedValue += v.reservedValue;
@@ -157,6 +162,7 @@ router.get('/', async (req: Request, res: Response) => {
           model_code: rs.model_code, product_name: rs.product_name, color: rs.color,
           actual_qty: v.physicalQty, reserved_qty: v.reservedQty, available_qty: v.availableQty,
           unit_cost: rs.cost_per_piece, total, reserved_value: v.reservedValue, available_value: v.availableValue,
+          pending_qty: pos?.pending ?? 0,
         });
       }
     });
@@ -244,6 +250,20 @@ router.get('/', async (req: Request, res: Response) => {
     const advancesOnCanceledOrders = sales.filter(s => s.order_status === STATUS_CANCELED).reduce((n, s) => n + s.deposit_paid, 0);
     const reservedOrdersCount = sales.filter(s => s.order_status === STATUS_RESERVED).length;
 
+    // Orders accepted as «يتم التجهيز» whose goods are not (fully) in stock yet — an operational list for
+    // production / purchasing. Their pending quantities are NOT inventory and NOT assets.
+    const pendingOrders = [...stockCtx.allocations.values()]
+      .filter(a => a.pending > 0)
+      .map(a => {
+        const sale = saleById.get(a.sale_id);
+        return {
+          sale_id: a.sale_id, order_number: sale?.order_number ?? '', client: sale?.client ?? '',
+          invoice_value: sale?.invoice_value ?? 0, deposit_paid: sale?.deposit_paid ?? 0,
+          requested: a.requested, reserved: a.reserved, pending: a.pending,
+          slots: a.slots.filter(x => x.pending > 0).map(x => ({ code: x.code, color: x.color, requested: x.requested, reserved: x.reserved, pending: x.pending, has_card: x.has_card })),
+        };
+      });
+
     // Debt entered both as a shipped-order receivable and as a client-account invoice (same order number).
     const clientInvoices = await prisma.clientAccountInvoice.findMany({ where: seasonWhere(seasonId) });
     const receivableOverlap = findReceivableOverlap(sales, clientInvoices);
@@ -329,6 +349,8 @@ router.get('/', async (req: Request, res: Response) => {
       advances_on_open_reservations: advancesOnOpenReservations,
       advances_on_canceled_orders: advancesOnCanceledOrders,
       reserved_orders_count: reservedOrdersCount,
+      pending_orders: pendingOrders,
+      pending_units: pendingOrders.reduce((n, o) => n + o.pending, 0),
       assets_reconciliation: assetsReconciliation,
       receivable_overlap_orders: receivableOverlap.orders,
       receivable_overlap_amount: receivableOverlap.amount,
