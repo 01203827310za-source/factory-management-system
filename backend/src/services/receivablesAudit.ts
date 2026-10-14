@@ -99,36 +99,26 @@ export type ReceivablesAudit = {
   };
 };
 
-export function buildReceivablesAudit(input: {
+export type ShipmentAnalysis = { removedQty: number; removedCard: number; status: StockStatus; notes: string[]; slotsQty: number };
+
+/**
+ * For EVERY order whose goods left the factory: how much of it was really removed from ready-stock
+ * value, and whether it is still (partly) valued in stock. Shared by the audit screen and by the
+ * Dashboard's receivable rows so both always show the same verdict.
+ */
+export function analyseShipments(input: {
   sales: Sale[];
   readyStock: ReadyStock[];
   modelProds: ModelProduction[];
   returns_: ReturnItem[];
-  clientAccts: ClientAccount[];
-  clientInvoices: ClientAccountInvoice[];
-  movements: InventoryMovement[];
-  collectedBySale?: Map<number, number>; // ledger totals; falls back to sales.shipping_collected
-}): ReceivablesAudit {
+}): { perOrder: Map<number, ShipmentAnalysis> } {
   const ctx = computeStockPositions({ readyStock: input.readyStock, modelProds: input.modelProds, sales: input.sales, returns_: input.returns_ });
   const primaryByKey = new Map(ctx.positions.filter(p => p.primary).map(p => [p.key, p]));
 
   const consumed = new Map<string, number>();
-  const movementsBySale = new Map<number, InventoryMovement[]>();
-  input.movements.forEach(m => movementsBySale.set(m.sale_id, [...(movementsBySale.get(m.sale_id) ?? []), m]));
-
-  const invoicesByOrder = new Map<string, { account_id: number; client_name: string; amount: number }>();
-  const acctName = new Map(input.clientAccts.map(a => [a.id, a.client_name]));
-  input.clientInvoices.forEach(i => {
-    const k = norm(i.order_number);
-    if (!k) return;
-    const cur = invoicesByOrder.get(k);
-    invoicesByOrder.set(k, { account_id: i.account_id, client_name: acctName.get(i.account_id) ?? '', amount: (cur?.amount ?? 0) + i.amount });
-  });
-
-  // Walk ALL shipped orders in id order so consumption of a card is attributed correctly,
-  // but only report the unpaid ones.
+  // Walk ALL shipped orders in id order so consumption of a card is attributed correctly.
   const shipped = input.sales.filter(s => isStockDeducting(s.order_status)).sort((a, b) => a.id - b.id);
-  const perOrder = new Map<number, { removedQty: number; removedCard: number; status: StockStatus; notes: string[]; slotsQty: number }>();
+  const perOrder = new Map<number, ShipmentAnalysis>();
 
   for (const s of shipped) {
     const slots: Slot[] = saleSlots(s);
@@ -168,6 +158,33 @@ export function buildReceivablesAudit(input: {
     }
     perOrder.set(s.id, { removedQty, removedCard, status, notes, slotsQty });
   }
+
+  return { perOrder };
+}
+
+export function buildReceivablesAudit(input: {
+  sales: Sale[];
+  readyStock: ReadyStock[];
+  modelProds: ModelProduction[];
+  returns_: ReturnItem[];
+  clientAccts: ClientAccount[];
+  clientInvoices: ClientAccountInvoice[];
+  movements: InventoryMovement[];
+  collectedBySale?: Map<number, number>; // ledger totals; falls back to sales.shipping_collected
+}): ReceivablesAudit {
+  const movementsBySale = new Map<number, InventoryMovement[]>();
+  input.movements.forEach(m => movementsBySale.set(m.sale_id, [...(movementsBySale.get(m.sale_id) ?? []), m]));
+
+  const invoicesByOrder = new Map<string, { account_id: number; client_name: string; amount: number }>();
+  const acctName = new Map(input.clientAccts.map(a => [a.id, a.client_name]));
+  input.clientInvoices.forEach(i => {
+    const k = norm(i.order_number);
+    if (!k) return;
+    const cur = invoicesByOrder.get(k);
+    invoicesByOrder.set(k, { account_id: i.account_id, client_name: acctName.get(i.account_id) ?? '', amount: (cur?.amount ?? 0) + i.amount });
+  });
+
+  const { perOrder } = analyseShipments(input);
 
   const orders: OrderAudit[] = input.sales
     .filter(s => s.order_status === STATUS_NOT_PAID_OUT)

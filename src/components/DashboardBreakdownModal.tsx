@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
 import Modal from './Modal';
+import { statusLabel } from '../utils/orderStatus';
 import {
   dashboardApi,
   type NetProfitBreakdown, type ExpensesBreakdown, type ExpenseCategoryRow, type ExpenseRecordsResult,
@@ -245,11 +246,11 @@ function SalesView() {
               <button
                 key={g.value}
                 disabled={!data.can_view_records}
-                onClick={() => setOpen({ group: key, value: g.value, label: `${GROUP_LABELS[key]}: ${g.value}` })}
+                onClick={() => setOpen({ group: key, value: g.value, label: `${GROUP_LABELS[key]}: ${key === 'status' ? statusLabel(g.value) : g.value}` })}
                 className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-50 hover:bg-blue-50 disabled:hover:bg-gray-50 disabled:cursor-default rounded-lg transition text-right"
               >
                 <span className="text-sm text-gray-700 flex items-center gap-1.5">
-                  {g.value} <span className="text-xs text-gray-400">({g.count.toLocaleString('ar-EG')})</span>
+                  {key === 'status' ? statusLabel(g.value) : g.value} <span className="text-xs text-gray-400">({g.count.toLocaleString('ar-EG')})</span>
                   {data.can_view_records && <ChevronLeft size={14} className="text-gray-400" />}
                 </span>
                 <span className="text-left">
@@ -295,7 +296,7 @@ function SalesRecordsView({ group, value, label, onBack }: { group: string; valu
                     <td className="px-3 py-2 font-medium text-gray-800">{r.order_number}</td>
                     <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{r.date}</td>
                     <td className="px-3 py-2 text-gray-600">{r.client}</td>
-                    <td className="px-3 py-2 text-gray-600">{r.order_status}</td>
+                    <td className="px-3 py-2 text-gray-600">{statusLabel(r.order_status)}</td>
                     <td className="px-3 py-2 font-bold text-blue-700 whitespace-nowrap">{egp(r.invoice_value)}</td>
                     <td className="px-3 py-2 text-emerald-700 whitespace-nowrap">{egp(r.deposit_paid + r.shipping_collected)}</td>
                     <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{egp(r.remaining)}</td>

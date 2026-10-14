@@ -14,6 +14,7 @@ import {
 import ProfitByPeriod from '../components/ProfitByPeriod';
 import DashboardBreakdownModal, { type BreakdownKind } from '../components/DashboardBreakdownModal';
 import CharitySection from '../components/CharitySection';
+import { statusLabel } from '../utils/orderStatus';
 import ReceivablesAuditModal from '../components/ReceivablesAuditModal';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -60,7 +61,7 @@ export default function Dashboard() {
   useEffect(() => { loadData(); }, []);
 
   const pieData = Object.entries(metrics.sales_by_marketer).map(([name, value]) => ({ name, value }));
-  const barData = Object.entries(metrics.order_status_counts).map(([name, value]) => ({ name, value }));
+  const barData = Object.entries(metrics.order_status_counts).map(([name, value]) => ({ name: statusLabel(name), value }));
 
   const assetBreakdown: { key: CategoryKey; label: string; val: number }[] = [
     { key: 'fabric', label: 'القماش المتاح × التكلفة', val: metrics.fabric_value },
@@ -128,6 +129,20 @@ export default function Dashboard() {
     }
     return { rows: [] as never[], total: 0 };
   }, [detailCategory, metrics, search, sortDesc]);
+
+  // Split of «الفلوس اللي لنا برا»: owed by the shipping company vs client accounts — different debts,
+  // each counted once. Flags show shipped goods still valued in stock, or the same debt entered twice.
+  const receivableSplit = useMemo(() => {
+    const rows = metrics.receivable_items;
+    return {
+      shipping: rows.filter(i => i.source !== 'client_account').reduce((n, i) => n + i.remaining, 0),
+      clients: rows.filter(i => i.source === 'client_account').reduce((n, i) => n + i.remaining, 0),
+      stillInStock: rows.filter(i => i.inventory_still_in_stock).length,
+      duplicates: rows.filter(i => i.duplicate_in_client_account).length,
+    };
+  }, [metrics.receivable_items]);
+  const recon = metrics.assets_reconciliation;
+  const reconDiffs = recon ? Object.entries(recon.differences).filter(([, d]) => Math.abs(d) >= 0.01) : [];
 
   const totalPages = Math.max(1, Math.ceil(detailData.rows.length / PAGE_SIZE));
   const pagedRows = detailData.rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -297,6 +312,15 @@ export default function Dashboard() {
                 <span className="text-sm font-semibold text-blue-800">المجموع الكلي</span>
                 <span className="text-lg font-bold text-blue-800">{fmt(metrics.total_current_assets)} ج.م</span>
               </div>
+              {recon && (
+                recon.reconciled ? (
+                  <p className="text-xs text-emerald-700 pt-2">✓ مجموع البنود ومجموع تفاصيل كل بند يطابقان الإجمالي.</p>
+                ) : (
+                  <p className="text-xs text-red-700 pt-2">
+                    ⚠ عدم تطابق بين الإجمالي وتفاصيله ({reconDiffs.map(([k, d]) => `${k}: ${fmt(d)}`).join('، ') || 'مجموع البنود'}).
+                  </p>
+                )
+              )}
               <p className="text-xs text-gray-400 pt-2">
                 الأصول الثابتة غير مشمولة في هذا الإجمالي — راجع صفحة المركز المالي لعرضها بشكل منفصل.
               </p>
@@ -480,17 +504,27 @@ export default function Dashboard() {
                         <th className="text-right px-3 py-2 font-semibold">إجمالي الفاتورة</th>
                         <th className="text-right px-3 py-2 font-semibold">المدفوع</th>
                         <th className="text-right px-3 py-2 font-semibold">المتبقي</th>
+                        <th className="text-right px-3 py-2 font-semibold">البضاعة في المخزون؟</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50">
                       {(pagedRows as DashboardMetrics['receivable_items']).map((it, idx) => (
-                        <tr key={idx}>
+                        <tr key={idx} className={it.inventory_still_in_stock || it.duplicate_in_client_account ? 'bg-amber-50/60' : ''}>
                           <td className="px-3 py-2 font-medium text-gray-800">{it.name}</td>
-                          <td className="px-3 py-2 text-gray-600">{it.source === 'sale' ? 'أوردر مبيعات' : 'حساب عميل'}</td>
+                          <td className="px-3 py-2 text-gray-600">
+                            {it.source === 'sale' ? 'مشحون — مستحق على شركة الشحن' : it.source === 'sale_shipping_gap' ? 'فرق تحصيل أوردر مصروف' : 'حساب عميل'}
+                            {it.duplicate_in_client_account && <span className="block text-xs text-red-600">⚠ مسجّل أيضًا في حساب عميل (يُعدّ مرتين)</span>}
+                          </td>
                           <td className="px-3 py-2 text-gray-600">{it.reference || '—'}</td>
                           <td className="px-3 py-2 text-gray-600">{fmt(it.invoice_total)}</td>
                           <td className="px-3 py-2 text-gray-600">{fmt(it.paid)}</td>
                           <td className="px-3 py-2 font-bold text-blue-700">{fmt(it.remaining)}</td>
+                          <td className={`px-3 py-2 text-xs ${it.inventory_still_in_stock ? 'text-red-700 font-semibold' : 'text-gray-500'}`}>
+                            {it.source === 'client_account' ? '—'
+                              : it.inventory_still_in_stock ? 'نعم — ما زالت مُقيَّمة في المخزون'
+                              : it.stock_status === 'no_stock_card' ? 'لا — لا يوجد كارت مخزون'
+                              : 'لا — خُصمت من المخزون'}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -519,6 +553,24 @@ export default function Dashboard() {
                   >
                     التالي <ChevronLeft size={13} />
                   </button>
+                </div>
+              )}
+
+              {detailCategory === 'stock' && (
+                <div className="space-y-1.5 text-sm">
+                  <div className="flex items-center justify-between px-4 py-2 bg-gray-50 rounded-lg"><span className="text-gray-600">متاح للبيع</span><span className="font-bold">{fmt(metrics.stock_available_value ?? 0)} ج.م</span></div>
+                  <div className="flex items-center justify-between px-4 py-2 bg-gray-50 rounded-lg"><span className="text-gray-600">محجوز لأوردرات لم تُشحن (ما زال في المصنع)</span><span className="font-bold">{fmt(metrics.stock_reserved_value ?? 0)} ج.م</span></div>
+                  <p className="text-xs text-gray-400">الإجمالي = الكمية الفعلية × التكلفة (متاح + محجوز). الحجز لا يغيّر إجمالي الأصول، والبضاعة المشحونة خرجت من هذا الرقم.</p>
+                </div>
+              )}
+
+              {detailCategory === 'receivables' && (
+                <div className="space-y-1.5 text-sm">
+                  <div className="flex items-center justify-between px-4 py-2 bg-gray-50 rounded-lg"><span className="text-gray-600">مستحق على شركة الشحن (مشحون ولم يُحصَّل)</span><span className="font-bold">{fmt(receivableSplit.shipping)} ج.م</span></div>
+                  <div className="flex items-center justify-between px-4 py-2 bg-gray-50 rounded-lg"><span className="text-gray-600">حسابات العملاء</span><span className="font-bold">{fmt(receivableSplit.clients)} ج.م</span></div>
+                  <p className="text-xs text-gray-400">البضاعة المشحونة تخرج من المخزون والمستحق يُحسب بقيمته فقط — لا تُخصم التكلفة من المستحق. الحجوزات غير المشحونة تبقى في المخزون ولا تظهر هنا.</p>
+                  {receivableSplit.stillInStock > 0 && <p className="text-xs text-red-700">⚠ {receivableSplit.stillInStock.toLocaleString('ar-EG')} أوردر مشحون ما زالت بضاعته مُقيَّمة في المخزون (اللون لا يطابق كارت المخزون أو رصيد الكارت أقل من المشحون) — يُحسب أصلًا مرتين.</p>}
+                  {receivableSplit.duplicates > 0 && <p className="text-xs text-red-700">⚠ {receivableSplit.duplicates.toLocaleString('ar-EG')} أوردر مسجّل كمستحق على شركة الشحن وكفاتورة في حساب عميل — يُحسب مرتين.</p>}
                 </div>
               )}
 

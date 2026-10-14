@@ -16,6 +16,7 @@ export interface Sale {
   deposit_receiver: string;
   remaining: number;
   shipping_number: string;
+  // Stored values. 'تم الحجز' is DISPLAYED as «يتم التجهيز» — use statusLabel() from utils/orderStatus.ts to show it.
   order_status: 'تم الصرف' | 'لم يتم الصرف' | 'حساب عميل' | 'تم الحجز' | 'تم الإلغاء';
   delivery_method: string;
   mobile: string;
@@ -268,7 +269,13 @@ export interface WipAssetItem {
 }
 
 export interface ReceivableAssetItem {
-  source: 'sale' | 'client_account';
+  source: 'sale' | 'sale_shipping_gap' | 'client_account';
+  sale_id?: number;
+  stock_status?: 'removed' | 'partly_removed' | 'no_stock_card' | 'possible_mismatch';
+  /** Shipped goods that are still (partly) valued in ready stock → counted as inventory AND receivable. */
+  inventory_still_in_stock?: boolean;
+  /** Same order number also entered as a client-account invoice → debt counted twice. */
+  duplicate_in_client_account?: boolean;
   name: string;
   reference: string;
   invoice_total: number;
@@ -310,6 +317,11 @@ export interface DashboardMetrics {
   advances_on_open_reservations?: number;
   advances_on_canceled_orders?: number;
   reserved_orders_count?: number;
+  assets_reconciliation?: {
+    components_sum: number;
+    differences: Record<'fabric' | 'stock' | 'accessories' | 'cutting' | 'wip' | 'receivables', number>;
+    reconciled: boolean;
+  };
   receivable_overlap_orders?: number;
   receivable_overlap_amount?: number;
   fabric_items: FabricAssetItem[];

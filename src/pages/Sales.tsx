@@ -11,8 +11,10 @@ import Modal from '../components/Modal';
 import { useToast } from '../components/Toast';
 import { Plus, Edit2, Trash2, Filter, Download, Search, UserPlus, Printer, ArrowLeftRight, RefreshCw, CheckSquare, XCircle, BookmarkPlus } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { RESERVED_STATUS, statusLabel } from '../utils/orderStatus';
 
-const ORDER_STATUSES: Sale['order_status'][] = ['تم الصرف', 'لم يتم الصرف', 'حساب عميل', 'تم الحجز', 'تم الإلغاء'];
+// Stored values. The reservation status is stored as 'تم الحجز' but shown as «يتم التجهيز» (see utils/orderStatus.ts).
+const ORDER_STATUSES: Sale['order_status'][] = ['تم الصرف', 'لم يتم الصرف', 'حساب عميل', RESERVED_STATUS, 'تم الإلغاء'];
 const DELIVERY_METHODS = ['ايرجنت', 'مصنع', 'البريد', 'شحن موقف'];
 
 export default function Sales() {
@@ -218,7 +220,7 @@ readyStock.forEach((s: any) => {
       } else if (editSale) {
         toast('success', 'تم تعديل الأوردر بنجاح');
       } else {
-        toast('success', form.order_status === 'تم الحجز' ? 'تم إضافة الحجز بنجاح' : 'تم إضافة الأوردر بنجاح');
+        toast('success', form.order_status === RESERVED_STATUS ? `تم إضافة الأوردر بحالة «${statusLabel(RESERVED_STATUS)}» بنجاح` : 'تم إضافة الأوردر بنجاح');
       }
       await loadData();
       setModalOpen(false);
@@ -257,7 +259,7 @@ await loadData();; setDeleteConfirm(null); toast('success', 'تم حذف الأ�
     <tr><td><strong>المسوق:</strong> ${s.marketer}</td><td><strong>العميل:</strong> ${s.client}</td></tr>
     <tr><td><strong>الموبايل:</strong> ${s.mobile}</td><td><strong>طريقة التسليم:</strong> ${s.delivery_method}</td></tr>
     ${s.shipping_number ? `<tr><td colspan="2"><strong>رقم البوليصة:</strong> ${s.shipping_number}</td></tr>` : ''}
-    <tr><td><strong>المخزن:</strong> ${s.warehouse}</td><td><strong>الحالة:</strong> ${s.order_status}</td></tr></table>
+    <tr><td><strong>المخزن:</strong> ${s.warehouse}</td><td><strong>الحالة:</strong> ${statusLabel(s.order_status)}</td></tr></table>
     <h3 style="margin-top:25px">تفاصيل الموديلات:</h3>
     <table><tr><th>#</th><th>كود الموديل</th><th>العدد</th><th>اللون</th></tr>
     ${[[s.model1_code,s.model1_qty,s.model1_color],[s.model2_code,s.model2_qty,s.model2_color],[s.model3_code,s.model3_qty,s.model3_color],[s.model4_code,s.model4_qty,s.model4_color],[s.model5_code,s.model5_qty,s.model5_color]]
@@ -306,7 +308,7 @@ await loadData();(returnForm);
       'موديل 4': s.model4_code, 'عدد 4': s.model4_qty, 'لون 4': s.model4_color,
       'موديل 5': s.model5_code, 'عدد 5': s.model5_qty, 'لون 5': s.model5_color,
       'قيمة الفاتورة': s.invoice_value, 'العربون': s.deposit_paid, 'مستلم العربون': s.deposit_receiver, 'المتبقي': s.remaining,
-      'الحالة': s.order_status, 'التسليم': s.delivery_method,
+      'الحالة': statusLabel(s.order_status), 'التسليم': s.delivery_method,
       'المخزن': s.warehouse,
       'المستلم فعليًا من الشحن': s.order_status === 'تم الصرف' ? s.shipping_collected : '',
       'الفرق غير المحصل': s.order_status === 'تم الصرف' ? Math.max(0, s.remaining - s.shipping_collected) : '',
@@ -384,7 +386,7 @@ await loadData();(returnForm);
           <Filter size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="pr-10 appearance-none bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
             <option value="">جميع الحالات</option>
-            {ORDER_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+            {ORDER_STATUSES.map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}
           </select>
         </div>
       </div>
@@ -458,7 +460,7 @@ await loadData();(returnForm);
                       sale.order_status === 'تم الإلغاء' ? 'bg-red-100 text-red-700' :
                       sale.order_status === 'لم يتم الصرف' ? 'bg-yellow-100 text-yellow-700' :
                       'bg-amber-100 text-amber-700'
-                    }`}>{sale.order_status}</span>
+                    }`}>{statusLabel(sale.order_status)}</span>
                   </td>
                   <td className="px-2 py-3 text-center">
                     <div className="flex items-center justify-center gap-1 flex-wrap">
@@ -607,7 +609,7 @@ await loadData();(returnForm);
                 }
               }}
             >
-              {ORDER_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+              {ORDER_STATUSES.map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}
             </select>
 
             {/* Shown only while حالة الأوردر = تم الصرف — the amount actually received
@@ -713,7 +715,7 @@ await loadData();(returnForm);
                   <div><p className="text-xs text-gray-500">الكمية المحجوزة</p><strong className="text-orange-700">{reserved.toLocaleString('ar-EG')}</strong></div>
                   <div><p className="text-xs text-gray-500">الكمية المشحونة</p><strong className="text-emerald-700">{shipped.toLocaleString('ar-EG')}</strong></div>
                   <div><p className="text-xs text-gray-500">المتبقي للتنفيذ</p><strong>{remainingToFulfill.toLocaleString('ar-EG')}</strong></div>
-                  <div><p className="text-xs text-gray-500">حالة الأوردر</p><strong>{invoiceSale.order_status}</strong></div>
+                  <div><p className="text-xs text-gray-500">حالة الأوردر</p><strong>{statusLabel(invoiceSale.order_status)}</strong></div>
                 </div>
               );
             })()}

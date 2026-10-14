@@ -166,7 +166,7 @@ export const salesApi = {
   add: (data: Omit<SaleRecord, 'id' | 'created_at'>) => post<SaleRecord & { collection_difference: number }>('/sales', data),
   update: (id: number, data: Partial<SaleRecord>) => put<SaleRecord & { collection_difference: number }>(`/sales/${id}`, data),
   remove: (id: number) => del<{ message: string }>(`/sales/${id}`),
-  // Kept for any non-UI caller; the Edit Order modal now drives "تم الحجز" → "تم الصرف"
+  // Kept for any non-UI caller; the Edit Order modal now drives "تم الحجز" (shown as «يتم التجهيز») → "تم الصرف"
   // through update() (status + received amount saved together via حفظ).
   convertReservation: (id: number, received_amount: number) =>
     post<SaleRecord & { collection_difference: number }>(`/sales/${id}/convert-reservation`, { received_amount }),
@@ -561,6 +561,11 @@ export interface DashboardMetrics {
   advances_on_open_reservations?: number;
   advances_on_canceled_orders?: number;
   reserved_orders_count?: number;
+  assets_reconciliation?: {
+    components_sum: number;
+    differences: Record<'fabric' | 'stock' | 'accessories' | 'cutting' | 'wip' | 'receivables', number>;
+    reconciled: boolean;
+  };
   receivable_overlap_orders?: number;
   receivable_overlap_amount?: number;
   fabric_items: { material_type: string; color: string; available_qty: number; unit_cost: number; total: number }[];
@@ -568,7 +573,7 @@ export interface DashboardMetrics {
   accessories_items: { item_name: string; qty: number; unit_cost: number; total: number }[];
   cutting_items: { cut_number: number; cut_description: string; material_type: string; color: string; total_pieces: number; used_pieces: number; remaining_pieces: number; cost_per_meter: number; total: number }[];
   wip_items: { model_code: string; model_description: string; color: string; qty_received: number; cost_per_piece: number; total: number; status: string }[];
-  receivable_items: { source: 'sale' | 'client_account'; name: string; reference: string; invoice_total: number; paid: number; remaining: number }[];
+  receivable_items: { source: 'sale' | 'sale_shipping_gap' | 'client_account'; name: string; reference: string; invoice_total: number; paid: number; remaining: number; sale_id?: number; stock_status?: 'removed' | 'partly_removed' | 'no_stock_card' | 'possible_mismatch'; inventory_still_in_stock?: boolean; duplicate_in_client_account?: boolean }[];
 }
 // ===== FIXED ASSETS =====
 export const fixedAssetsApi = {
