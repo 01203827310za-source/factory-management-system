@@ -16,6 +16,7 @@ type Json = Record<string, unknown> & {
   stock_items: { actual_qty: number; reserved_qty: number; available_qty: number; total: number; pending_qty: number }[];
   pending_orders: { order_number: string; requested: number; reserved: number; pending: number }[];
   pending_units: number; advances_on_open_reservations: number;
+  missing_stock: { total_missing_units: number; total_rows: number; rows: { model_code: string; color: string; required: number; reserved: number; missing: number; orders: { order_number: string; missing: number }[] }[] };
   shipping_receivable: number; client_accounts_receivable: number;
 };
 
@@ -185,4 +186,33 @@ test('Dashboard: zero stock — order accepted, nothing reserved, nothing invent
   assert.equal(d.total_current_assets, 0);
   assert.deepEqual(d.pending_orders.map(o => [o.reserved, o.pending]), [[0, 10]]);
   assert.equal(d.assets_reconciliation.reconciled, true);
+});
+
+test('Dashboard: «ملخص النواقص» groups shortages by model + colour, deducts reservations, and is stable across requests', async () => {
+  const w = new World();
+  w.addStock('1001', 'أسود', 6, 100); w.addStock('1001', 'نبيتي', 0, 100); w.addStock('1002', 'أبيض', 0, 100);
+  await w.saveOrder({ order_number: 'A', status: PREPARED, slots: [{ code: '1001', qty: 10, color: 'أسود' }], invoice: 1 });   // 6 held, 4 missing
+  await w.saveOrder({ order_number: 'B', status: PREPARED, slots: [{ code: '1001', qty: 8, color: 'أسود' }], invoice: 1 });    // 8 missing
+  await w.saveOrder({ order_number: 'C', status: PREPARED, slots: [{ code: '1001', qty: 18, color: 'نبيتي' }], invoice: 1 });
+  await w.saveOrder({ order_number: 'D', status: PREPARED, slots: [{ code: '1002', qty: 12, color: 'أبيض' }], invoice: 1 });
+  const d1 = await callDashboard(dataOf(w), 1);
+  const d2 = await callDashboard(dataOf(w), 1);
+  assert.deepEqual(d1.missing_stock, d2.missing_stock);                                       // repeated requests: identical
+  assert.deepEqual(d1.missing_stock.rows.map(r => [r.model_code, r.color, r.required, r.reserved, r.missing]),
+    [['1001', 'نبيتي', 18, 0, 18], ['1001', 'أسود', 18, 6, 12], ['1002', 'أبيض', 12, 0, 12]]);
+  assert.equal(d1.missing_stock.total_missing_units, 42);
+  assert.deepEqual(d1.missing_stock.rows[1].orders.map(o => [o.order_number, o.missing]), [['A', 4], ['B', 8]]);
+  // consistent with the existing per-order list on the same Dashboard
+  assert.equal(d1.pending_units, d1.missing_stock.total_missing_units);
+  assert.equal(d1.stock_value, 6 * 100);                                                      // only the 6 that exist are assets
+});
+
+test('Dashboard: «ملخص النواقص» is per season', async () => {
+  const w = new World();
+  w.addStock('1001', 'أسود', 0, 100, 1); w.addStock('1001', 'أسود', 0, 100, 2);
+  await w.saveOrder({ season: 1, order_number: 'S1', status: PREPARED, slots: [{ code: '1001', qty: 9, color: 'أسود' }], invoice: 1 });
+  await w.saveOrder({ season: 2, order_number: 'W1', status: PREPARED, slots: [{ code: '1001', qty: 5, color: 'أسود' }], invoice: 1 });
+  const data = dataOf(w);
+  assert.deepEqual((await callDashboard(data, 1)).missing_stock.rows.map(r => r.missing), [9]);
+  assert.deepEqual((await callDashboard(data, 2)).missing_stock.rows.map(r => r.missing), [5]);
 });

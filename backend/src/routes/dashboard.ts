@@ -7,6 +7,7 @@ import { computeDashboardCashFlow } from '../services/financialMetrics';
 import { computeStockPositions, isStockDeducting, STATUS_CANCELED, STATUS_RESERVED, valueStockRow } from '../services/readyStockPositions';
 import { costOfGoodsShipped, returnsCostCredit, type MovementRow } from '../services/inventoryMovements';
 import { analyseShipments, findReceivableOverlap } from '../services/receivablesAudit';
+import { summarizeMissingStock } from '../services/missingStock';
 
 const router = Router();
 router.use(authenticate);
@@ -351,6 +352,8 @@ router.get('/', async (req: Request, res: Response) => {
       reserved_orders_count: reservedOrdersCount,
       pending_orders: pendingOrders,
       pending_units: pendingOrders.reduce((n, o) => n + o.pending, 0),
+      // Same allocation, grouped by model code + colour for the production / purchasing team.
+      missing_stock: summarizeMissingStock({ ctx: stockCtx, sales, modelProds }),
       assets_reconciliation: assetsReconciliation,
       receivable_overlap_orders: receivableOverlap.orders,
       receivable_overlap_amount: receivableOverlap.amount,

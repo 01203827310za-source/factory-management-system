@@ -16,6 +16,7 @@ import DashboardBreakdownModal, { type BreakdownKind } from '../components/Dashb
 import CharitySection from '../components/CharitySection';
 import { statusLabel } from '../utils/orderStatus';
 import ReceivablesAuditModal from '../components/ReceivablesAuditModal';
+import MissingStockSummary from '../components/MissingStockSummary';
 import { useAuth } from '../contexts/AuthContext';
 
 const PIE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
@@ -185,6 +186,9 @@ export default function Dashboard() {
             <span className="text-lg font-bold text-orange-700">إجمالي الحجوزات: {metrics.total_reservations.toLocaleString('ar-EG')}</span>
           </div>
         )}
+
+        {/* Consolidated shortage per model + colour for the production / purchasing team */}
+        {metrics.missing_stock && metrics.missing_stock.rows.length > 0 && <MissingStockSummary summary={metrics.missing_stock} />}
 
         {/* Operational: accepted orders still waiting for goods to be produced / purchased (NOT assets) */}
         {(metrics.pending_orders?.length ?? 0) > 0 && (

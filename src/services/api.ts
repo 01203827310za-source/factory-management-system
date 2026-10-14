@@ -494,6 +494,8 @@ export const marketersApi = {
 };
 
 // ===== DASHBOARD =====
+import type { MissingStockSummaryData } from '../types';
+
 export const dashboardApi = {
   getMetrics: () => get<DashboardMetrics>('/dashboard'),
   getNetProfitBreakdown: () => get<NetProfitBreakdown>('/dashboard/breakdown/net-profit'),
@@ -577,6 +579,7 @@ export interface DashboardMetrics {
     slots: { code: string; color: string; requested: number; reserved: number; pending: number; has_card: boolean }[];
   }[];
   pending_units?: number;
+  missing_stock?: MissingStockSummaryData;
   receivable_overlap_orders?: number;
   receivable_overlap_amount?: number;
   fabric_items: { material_type: string; color: string; available_qty: number; unit_cost: number; total: number }[];

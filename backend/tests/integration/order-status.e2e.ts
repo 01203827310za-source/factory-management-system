@@ -29,6 +29,14 @@ async function api(method: string, path: string, body?: unknown) {
   return { status: res.status, body: json as Record<string, any> };
 }
 
+
+type MissingRow = { model_code: string; color: string; required: number; reserved: number; missing: number; orders: { order_number: string }[] };
+async function missingRow(code: string, color: string) {
+  const d = await api('GET', '/dashboard');
+  const ms = d.body.missing_stock as { rows: MissingRow[]; total_missing_units: number };
+  return { row: ms.rows.find(r => r.model_code === code && r.color === color), total: ms.total_missing_units, body: d.body };
+}
+
 // The exact payload shape the Edit Order modal (Sales.tsx handleSubmit) sends.
 const modalPayload = (o: Record<string, unknown>) => ({
   order_number: 'E2E-1', marketer: 'm', client: 'عميل', mobile: '',
@@ -169,6 +177,11 @@ async function main() {
   const po = (dashPending.body.pending_orders as { order_number: string; pending: number }[] | undefined)?.find(o => o.order_number === 'P-9');
   check('Dashboard lists the order as pending (10) and not as an asset', po?.pending === 10 && dashPending.body.assets_reconciliation?.reconciled === true, po);
 
+  const m0 = await missingRow('M9', 'أسود');
+  check('«ملخص النواقص»: M9 / أسود shows 10 missing from order P-9', m0.row?.missing === 10 && m0.row?.required === 10 && m0.row?.reserved === 0 && m0.row?.orders.some(o => o.order_number === 'P-9') === true, m0.row);
+  const m0b = await missingRow('M9', 'أسود');
+  check('«ملخص النواقص»: a repeated request returns the same numbers', JSON.stringify(m0b.row) === JSON.stringify(m0.row) && m0b.total === m0.total);
+
   const prod = (qty: number) => api('POST', '/model-prod', {
     date: '2026-10-10', cut_number: 1, model_code: 'M9', qty_from_cutting: qty, model_description: 'M9', color: 'أسود', sizes: '',
     status: 'تام', wastage: 0, qty_received: qty, cost_per_piece: 100, warehouse_entry_date: '2026-10-10',
@@ -179,6 +192,8 @@ async function main() {
   const afterP1 = await api('GET', '/sales');
   const f1 = (afterP1.body as unknown as { id: number; fulfillment?: { reserved: number; pending: number } }[]).find(x => x.id === pid)?.fulfillment;
   check('production fulfils part of the order: reserved 6, pending 4', f1?.reserved === 6 && f1?.pending === 4, f1);
+  const m1 = await missingRow('M9', 'أسود');
+  check('«ملخص النواقص»: after producing 6 → required 10, reserved 6, missing 4', m1.row?.required === 10 && m1.row?.reserved === 6 && m1.row?.missing === 4, m1.row);
   const card = await prisma.readyStock.findFirst({ where: { model_code: 'M9' } });
   check('stock card cache: reserved_quantity = 6 (not more than exists)', card?.reserved_quantity === 6, card);
   const rsList = await api('GET', '/ready-stock');
@@ -188,6 +203,8 @@ async function main() {
   const p2 = await prod(4);
   check('record production of 4 more (201)', p2.status === 201, p2);
   for (let i = 0; i < 3; i++) await api('PUT', `/sales/${pid}`, modalPayload({ order_number: 'P-9', model1_code: 'M9', model1_qty: 10, model1_color: 'أسود', invoice_value: 5000, deposit_paid: 500, order_status: 'تم الحجز' }));
+  const m2 = await missingRow('M9', 'أسود');
+  check('«ملخص النواقص»: fully produced → the M9 / أسود row disappears', m2.row === undefined, m2.row);
   const cardFull = await prisma.readyStock.findFirst({ where: { model_code: 'M9' } });
   const afterP2 = await api('GET', '/sales');
   const f2 = (afterP2.body as unknown as { id: number; order_status: string; fulfillment?: { reserved: number; pending: number } }[]).find(x => x.id === pid);

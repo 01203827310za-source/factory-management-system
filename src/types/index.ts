@@ -292,6 +292,18 @@ export interface ReceivableAssetItem {
   remaining: number;
 }
 
+export interface MissingStockSummaryData {
+  rows: {
+    model_code: string; model_name: string; color: string;
+    required: number; reserved: number; missing: number;
+    has_card: boolean; physical_stock: number; reserved_for_covered_orders: number; free_stock: number;
+    orders: { sale_id: number; order_number: string; client: string; requested: number; reserved: number; missing: number }[];
+  }[];
+  total_missing_units: number;
+  total_rows: number;
+  total_orders: number;
+}
+
 export interface DashboardMetrics {
   total_sales: number;
   total_expenses: number;
@@ -337,6 +349,8 @@ export interface DashboardMetrics {
     slots: { code: string; color: string; requested: number; reserved: number; pending: number; has_card: boolean }[];
   }[];
   pending_units?: number;
+  /** Shortages grouped by model code + colour (same allocation as pending_orders). */
+  missing_stock?: MissingStockSummaryData;
   receivable_overlap_orders?: number;
   receivable_overlap_amount?: number;
   fabric_items: FabricAssetItem[];

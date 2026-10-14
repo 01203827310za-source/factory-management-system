@@ -9,6 +9,7 @@ import { computeDashboardCashFlow, computeMoneyOwedToUs } from '../src/services/
 import { costOfGoodsShipped, returnsCostCredit, type MovementRow } from '../src/services/inventoryMovements';
 import { FuzzyKeyIndex } from '../src/utils/textMatch';
 import { ledgerTotal } from '../src/services/shippingCollections';
+import { summarizeMissingStock } from '../src/services/missingStock';
 
 type Tx = Prisma.TransactionClient;
 
@@ -66,6 +67,15 @@ export class World {
       const r = this.readyStock.find(x => x.id === u.id);
       if (r) r.reserved_quantity = u.to;
     });
+  }
+  /** The consolidated «ملخص النواقص» for a season, built exactly as the Dashboard builds it. */
+  missingSummary(season = 1) {
+    const sales = this.sales.filter(s => s.season_id === season);
+    const modelProds = this.modelProds.filter(r => r.season_id === season);
+    const ctx = computeStockPositions({
+      readyStock: this.readyStock.filter(r => r.season_id === season), modelProds, sales, returns_: this.returns.filter(r => r.season_id === season),
+    });
+    return summarizeMissingStock({ ctx, sales, modelProds });
   }
   allocation(saleId: number, season = 1) {
     const ctx = computeStockPositions({
