@@ -48,7 +48,7 @@ const payload = (o: Json & { lines?: Line[] }) => {
 };
 
 async function reset() {
-  await prisma.charityPayment.deleteMany({}); await prisma.expenseRevenue.deleteMany({});
+  await prisma.charityPayment.deleteMany({}); await prisma.expenseRevenue.deleteMany({}); await prisma.paymentLog.deleteMany({});
   await prisma.sale.deleteMany({});            // cascades to collections / movements / cancellations
   await prisma.returnItem.deleteMany({});
   await prisma.readyStock.deleteMany({});

@@ -16,6 +16,7 @@ import DashboardBreakdownModal, { type BreakdownKind } from '../components/Dashb
 import CharitySection from '../components/CharitySection';
 import { statusLabel } from '../utils/orderStatus';
 import ReceivablesAuditModal from '../components/ReceivablesAuditModal';
+import CashReconciliationModal from '../components/CashReconciliationModal';
 import MissingStockSummary from '../components/MissingStockSummary';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -43,6 +44,7 @@ export default function Dashboard() {
   const { can } = useAuth();
   const canDetails = can('dashboard.view');
   const [auditOpen, setAuditOpen] = useState(false);
+  const [cashOpen, setCashOpen] = useState(false);
   const [breakdownOpen, setBreakdownOpen] = useState(false);
   const [detailCategory, setDetailCategory] = useState<CategoryKey | null>(null);
   const [search, setSearch] = useState('');
@@ -283,7 +285,11 @@ export default function Dashboard() {
                   <td className="px-6 py-4 text-center text-emerald-700 font-bold text-lg">{metrics.total_in.toLocaleString('ar-EG')}</td>
                   <td className="px-6 py-4 text-center text-red-700 font-bold text-lg">{metrics.total_out.toLocaleString('ar-EG')}</td>
                   <td className={`px-6 py-4 text-center font-bold text-lg ${metrics.net_profit >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
-                    {metrics.net_profit.toLocaleString('ar-EG')}
+                    {canDetails ? (
+                      <button type="button" onClick={() => setCashOpen(true)} title="عرض تقرير مطابقة الكاش" className="underline decoration-dotted underline-offset-4 hover:opacity-80">
+                        {metrics.net_profit.toLocaleString('ar-EG')}
+                      </button>
+                    ) : metrics.net_profit.toLocaleString('ar-EG')}
                   </td>
                 </tr>
               </tbody>
@@ -670,6 +676,7 @@ export default function Dashboard() {
         </Modal>
 
         <ReceivablesAuditModal isOpen={auditOpen} onClose={() => setAuditOpen(false)} />
+        <CashReconciliationModal isOpen={cashOpen} onClose={() => setCashOpen(false)} />
         <DashboardBreakdownModal kind={cardBreakdown} onClose={() => setCardBreakdown(null)} />
 
         {/* Monthly charity — a payment creates a real expense, so refresh the totals above after any change */}

@@ -11,7 +11,7 @@ export async function logAudit(opts: {
   user?: AuthPayload;
   module: string;
   action: 'CREATE' | 'UPDATE' | 'DELETE' | 'SHIPPING_PAYOUT_CONFIRMED' | 'SHIPPING_PAYOUT_CORRECTED' | 'SHIPPING_PAYOUT_REVERSED' | 'STOCK_RESERVED' | 'STOCK_RELEASED' | 'STOCK_SHIPPED'
-    | 'ORDER_CANCELLED' | 'ORDER_REOPENED' | 'CANCEL_DISPOSITION_CHANGED' | 'ORDER_REFUND_RECORDED';
+    | 'ORDER_CANCELLED' | 'ORDER_REOPENED' | 'CANCEL_DISPOSITION_CHANGED' | 'ORDER_REFUND_RECORDED' | 'CASH_COUNT' | 'CASH_OPENING_SET' | 'CASH_ADJUSTMENT';
   record_id: string | number;
   before_data?: unknown;
   after_data?: unknown;

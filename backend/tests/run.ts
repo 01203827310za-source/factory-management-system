@@ -8,5 +8,6 @@ import './guards.test';
 import './allocation.test';
 import './missingStock.test';
 import './cancellation.test';
+import './cashLedger.test';
 
 runAll();

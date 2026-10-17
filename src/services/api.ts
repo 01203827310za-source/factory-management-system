@@ -1031,3 +1031,48 @@ export interface CancellationPreview {
 }
 /** What a cancelled order still owes back: real cash that has not been refunded / repaid yet. */
 export interface CancelledObligations { customer_credit_due: number; customer_refunded: number; shipping_repayment_due: number }
+
+// ===== CASH RECONCILIATION (behind «الصافي») =====
+export interface CashLine {
+  key: string; date: string; time: string; category: string; label: string; description: string;
+  order_id: number | null; order_number: string; party: string; in: number; out: number; balance: number;
+  source: { table: string; id: number }; status: string; note: string; verified: boolean;
+}
+export interface CashReport {
+  season_id: number; from: string | null; to: string | null; today: string;
+  lines: CashLine[];
+  cards: {
+    opening_balance: number; recorded_opening_adjustment: number; total_in: number; total_out: number; net_movement: number; closing_balance: number;
+    shipping_receivable: number; deposits_received: number; deposits_reversed_on_cancel: number; customer_refunds_paid: number;
+    shipping_repayments_paid: number; capital_and_loans: number | null;
+  };
+  reconciliation: {
+    dashboard_net: number; ledger_operating_net: number; discrepancy: number; unverified_count: number; unverified_amount: number;
+    reversals_not_paid_out: number; fabric_purchases_not_in_cash: number;
+  };
+  categories: Record<string, string>;
+  known_gaps: string[];
+  counts: { id: number; count_date: string; counted_amount: number; calculated_amount: number; difference: number; note: string; created_by: string; created_at: string }[];
+  adjustments: { id: number; kind: string; amount: number; entry_date: string; reason: string; created_by: string }[];
+  multi_account: boolean;
+}
+export interface CashOrderReport {
+  order: { id: number; order_number: string; client: string; status: string; created_at: string };
+  invoice_amount: number; deposit_received: number; deposit_reversed_on_cancel: number; additional_customer_payments: number | null;
+  shipping_collected_gross: number; shipping_collected_net: number; shipping_deductions_or_fees: number | null;
+  customer_refunded: number; shipping_repaid: number; remaining_due: number;
+  lines: CashLine[];
+  cancellations: { id: number; at: string; by: string; reason: string; status_before: string; reopened_at: string | null; deposit_reversed: number; collected_reversed: number; goods_qty: number; goods_cost: number }[];
+  note: string;
+}
+export const cashReportApi = {
+  get: (from?: string, to?: string) => {
+    const q = [from ? `from=${from}` : '', to ? `to=${to}` : ''].filter(Boolean).join('&');
+    return get<CashReport>(`/cash-report${q ? `?${q}` : ''}`);
+  },
+  getOrder: (id: number) => get<CashOrderReport>(`/cash-report/order/${id}`),
+  recordCount: (input: { counted_amount: number; count_date?: string; note?: string; idempotency_key: string }) =>
+    post<{ duplicate: boolean }>('/cash-report/counts', input),
+  recordAdjustment: (input: { kind: 'opening' | 'adjustment'; amount: number; entry_date?: string; reason: string; idempotency_key: string }) =>
+    post<{ duplicate: boolean }>('/cash-report/adjustments', input),
+};

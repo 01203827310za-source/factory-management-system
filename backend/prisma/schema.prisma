@@ -79,6 +79,8 @@ model Season {
   shipping_collections   ShippingCollection[]
   inventory_movements    InventoryMovement[]
   order_cancellations    OrderCancellation[]
+  cash_counts            CashCount[]
+  cash_adjustments       CashAdjustment[]
   ready_stock            ReadyStock[]
   fabric_warehouse       FabricWarehouse[]
   fabric_purchases       FabricPurchase[]
@@ -734,4 +736,41 @@ model OrderCancellation {
   @@index([sale_id])
   @@index([season_id])
   @@map("order_cancellations")
+}
+
+
+// ===== CASH RECONCILIATION =====
+// The cash ledger itself is DERIVED from the existing records (deposits, collections, expenses, refunds, payments).
+// These two tables only hold what cannot be derived: a physical count, and explicit, reasoned adjustments / the opening balance.
+model CashCount {
+  id               Int      @id @default(autoincrement())
+  season_id        Int
+  season           Season   @relation(fields: [season_id], references: [id])
+  count_date       String
+  counted_amount   Float
+  calculated_amount Float
+  difference       Float
+  note             String   @default("")
+  idempotency_key  String   @unique
+  created_by       String   @default("")
+  created_at       DateTime @default(now())
+
+  @@index([season_id, count_date])
+  @@map("cash_counts")
+}
+
+model CashAdjustment {
+  id               Int      @id @default(autoincrement())
+  season_id        Int
+  season           Season   @relation(fields: [season_id], references: [id])
+  kind             String   // opening | adjustment
+  amount           Float    // signed: + adds cash, − removes cash
+  entry_date       String
+  reason           String
+  idempotency_key  String   @unique
+  created_by       String   @default("")
+  created_at       DateTime @default(now())
+
+  @@index([season_id, kind])
+  @@map("cash_adjustments")
 }

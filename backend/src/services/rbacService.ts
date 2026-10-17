@@ -150,6 +150,8 @@ const apiModuleBySegment: Record<string, string> = {
   expenses: 'expenses',
   // Charity payments ARE expenses (they create expenses_revenues rows), so they reuse its permissions.
   charity: 'expenses',
+  // Cash reconciliation behind «الصافي»: reading is a Dashboard view; counts / adjustments write financial records.
+  'cash-report': 'dashboard',
   'ready-stock': 'ready_stock',
   fabric: 'fabric',
   accessories: 'accessories',
@@ -180,6 +182,7 @@ export function permissionForRequest(method: string, path: string): string | nul
 
   if (segment === 'sales' && rest[1]?.includes('reservation')) return 'sales.edit';
   if (segment === 'sales' && rest[1] === 'refunds') return 'sales.edit';
+  if (segment === 'cash-report') return method === 'GET' ? 'dashboard.view' : 'expenses.create';
   if (segment === 'seasons' && rest[0] && rest[1] === 'activate') return 'seasons.activate';
   if ((segment === 'debts' || segment === 'client-accounts') && rest.includes('payments')) {
     const action = actionByMethod[method] ?? 'view';
