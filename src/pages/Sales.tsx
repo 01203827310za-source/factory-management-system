@@ -223,6 +223,8 @@ readyStock.forEach((s: any) => {
       if (!live) return;
       setPreview(p);
       setReturnedQty(prev => (prev.length ? prev : p.lines.map(l => (p.already_cancelled ? l.returned_qty : l.shipped_qty))));
+      // Default to refunding what is owed (server-computed); the user can lower or clear it if no money was actually paid back.
+      if (!p.already_cancelled) setRefundNow(r => (r.customer || r.shipping ? r : { customer: p.money.customer_credit_due, shipping: p.money.shipping_collected }));
     }).catch(() => { if (live) setPreview(null); });
     return () => { live = false; };
   }, [modalOpen, editSale?.id, form.order_status]);
@@ -755,7 +757,7 @@ await loadData();(returnForm);
                         <label className="text-xs text-gray-600">رد لشركة الشحن الآن (اختياري)
                           <input type="number" min={0} max={money.shipping_collected} className={inputClass} value={refundNow.shipping || ''} onChange={e => setRefundNow(r => ({ ...r, shipping: parseFloat(e.target.value) || 0 }))} />
                         </label>
-                        <p className="col-span-2 text-xs text-gray-400">اترك الحقلين فارغين إن لم يُدفع شيء فعليًا — لن يُسجَّل أي رد.</p>
+                        <p className="col-span-2 text-xs text-gray-400">القيم معبّأة بالمستحق رده — صفّرها إن لم يُدفع شيء فعليًا، ولن يُسجَّل أي رد.</p>
                       </div>
                     )}
                   </div>
