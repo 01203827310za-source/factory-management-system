@@ -15,7 +15,7 @@ import { authenticate } from '../middleware/auth';
 import { calcEmployeePayroll, round2 } from '../services/payrollCalc';
 import { FuzzyKeyIndex } from '../utils/textMatch';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
-import { valueStockRow } from '../services/readyStockPositions';
+import { holdsCollectedCash, leavesStock, valueStockRow } from '../services/readyStockPositions';
 
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
 
@@ -173,7 +173,7 @@ async function gatherSnapshot(seasonId: number) {
   const depositIn   = sales.reduce((s, x) => s + x.deposit_paid, 0);
   // Cash in from dispatched orders = only what the shipping company actually paid,
   // never the full remaining invoice balance (see confirm-payout in sales.ts).
-  const remainingIn = sales.filter(x => x.order_status === 'تم الصرف').reduce((s, x) => s + x.shipping_collected, 0);
+  const remainingIn = sales.filter(x => holdsCollectedCash(x.order_status)).reduce((s, x) => s + x.shipping_collected, 0);
   const clientPayIn = paymentLogs.filter(p => p.type === 'client_payment').reduce((s, p) => s + p.amount, 0);
   const debtOut     = paymentLogs.filter(p => p.type === 'debt_payment').reduce((s, p) => s + p.amount, 0);
   const refundOut   = returns_.reduce((s, r) => s + r.refund_amount, 0);
@@ -256,7 +256,7 @@ async function gatherSnapshot(seasonId: number) {
 
   const totalSalesQty: Record<string, number> = {};
   sales
-    .filter(s => s.order_status !== 'تم الحجز' && s.order_status !== 'تم الإلغاء')
+    .filter(s => leavesStock(s))
     .forEach(s => {
       [1, 2, 3, 4, 5].forEach(i => {
         const code  = s[`model${i}_code`  as keyof typeof s] as string;

@@ -4,7 +4,8 @@ import {
   returnsApi,
   readyStockApi,
   marketersApi,
-  type SaleLedger
+  type SaleLedger,
+  type CancelDisposition
 } from '../services/api';
 import type { Sale, ReturnItem } from '../types';
 import Modal from '../components/Modal';
@@ -43,6 +44,13 @@ export default function Sales() {
   // Invoice
   const [invoiceSale, setInvoiceSale] = useState<Sale | null>(null);
   const [ledger, setLedger] = useState<SaleLedger | null>(null);
+  // Cancelling a SHIPPED order: what happened to the goods (stock is only restored if they are back and resalable).
+  const [cancelDisposition, setCancelDisposition] = useState<CancelDisposition | ''>('');
+  const [cancelReason, setCancelReason] = useState('');
+  // Recording the real refund / repayment of a cancelled order.
+  const [refundForm, setRefundForm] = useState({ kind: 'customer_refund' as 'customer_refund' | 'shipping_repayment', amount: 0, date: '', note: '' });
+  const [refundKey, setRefundKey] = useState('');
+  const [refunding, setRefunding] = useState(false);
 
   // Returns
   const [returnsModalOpen, setReturnsModalOpen] = useState(false);
@@ -138,7 +146,14 @@ readyStock.forEach((s: any) => {
     setEditSale(sale);
     // Collection history of an already paid-out order (read-only; the amount field below edits the total).
     setLedger(null);
-    if (sale.order_status === 'تم الصرف') salesApi.getLedger(sale.id).then(setLedger).catch(() => setLedger(null));
+    setCancelDisposition((sale.cancel_disposition as CancelDisposition | null | undefined) ?? '');
+    setCancelReason('');
+    setRefundKey(crypto.randomUUID());
+    if (sale.order_status === 'تم الصرف' || sale.order_status === 'تم الإلغاء') salesApi.getLedger(sale.id).then(l => {
+      setLedger(l);
+      const o = l.obligations;
+      if (o) setRefundForm({ kind: o.customer_credit_due > 0 ? 'customer_refund' : 'shipping_repayment', amount: o.customer_credit_due > 0 ? o.customer_credit_due : o.shipping_repayment_due, date: '', note: '' });
+    }).catch(() => setLedger(null));
     // Already "تم الصرف"? Show its previously saved amount as-is (don't overwrite it).
     // Otherwise start in auto mode so switching the status to "تم الصرف" defaults it.
     setShippingCollectedAuto(sale.order_status !== 'تم الصرف');
@@ -189,6 +204,31 @@ readyStock.forEach((s: any) => {
     : form.shipping_collected > remainingNow ? 'المبلغ المستلم لا يمكن أن يكون أكبر من المبلغ المتبقي'
     : '';
 
+  // Cancelling an order that already shipped (or re-saving a cancelled one).
+  const SHIPPED_STATUSES = ['لم يتم الصرف', 'تم الصرف', 'حساب عميل'];
+  const cancellingShipped = !!editSale && form.order_status === 'تم الإلغاء' && SHIPPED_STATUSES.includes(editSale.order_status);
+  const alreadyCancelled = !!editSale && editSale.order_status === 'تم الإلغاء';
+  const obligations = alreadyCancelled ? ledger?.obligations ?? null : null;
+
+  const handleRecordRefund = async () => {
+    if (!editSale || refunding) return;
+    if (!(refundForm.amount > 0)) { toast('error', 'أدخل مبلغ الرد'); return; }
+    setRefunding(true);
+    try {
+      const r = await salesApi.recordRefund(editSale.id, { kind: refundForm.kind, amount: refundForm.amount, date: refundForm.date || undefined, note: refundForm.note || undefined, idempotency_key: refundKey });
+      toast('success', r.duplicate ? 'تم تسجيل هذا الرد مسبقًا' : 'تم تسجيل الرد الفعلي وخصمه من الكاش');
+      setRefundKey(crypto.randomUUID());
+      const l = await salesApi.getLedger(editSale.id);
+      setLedger(l);
+      if (l.obligations) setRefundForm(f => ({ ...f, amount: f.kind === 'customer_refund' ? l.obligations!.customer_credit_due : l.obligations!.shipping_repayment_due }));
+      await loadData();
+    } catch (e: unknown) {
+      toast('error', e instanceof Error ? e.message : 'خطأ في تسجيل الرد');
+    } finally {
+      setRefunding(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!form.order_number || !form.client) {
       toast('error', 'يرجى ملء رقم الأوردر واسم العميل');
@@ -197,6 +237,16 @@ readyStock.forEach((s: any) => {
     if (form.order_status === 'تم الصرف' && shippingCollectedError) {
       toast('error', shippingCollectedError);
       return;
+    }
+    if (cancellingShipped && !cancelDisposition) {
+      toast('error', 'حدّد حالة البضاعة المشحونة (رجعت وصالحة للبيع / لم ترجع / رجعت تالفة) قبل الإلغاء');
+      return;
+    }
+    if (form.order_status === 'تم الإلغاء' && editSale && editSale.order_status !== 'تم الإلغاء') {
+      const msg = cancellingShipped
+        ? 'سيتم إلغاء أوردر تم شحنه:\n• تُعكس حركات المخزون والتكلفة والإيراد والمستحق على شركة الشحن (مع بقاء السجل الأصلي).\n• المخزون يُضاف فقط إذا اخترت «رجعت وصالحة للبيع».\n• الفلوس التي استُلمت بالفعل (العربون / المحصّل من شركة الشحن) لن تُمحى من الكاش، وستبقى التزامًا حتى تسجّل رد فعلي.\n\nهل تريد المتابعة؟'
+        : 'سيتم إلغاء الأوردر وتحرير الكمية المحجوزة. أي عربون مستلم يبقى في الكاش حتى تسجّل رده فعليًا.\n\nهل تريد المتابعة؟';
+      if (!window.confirm(msg)) return;
     }
     const data = {
       order_number: form.order_number, marketer: form.marketer, client: form.client, mobile: form.mobile,
@@ -211,12 +261,18 @@ readyStock.forEach((s: any) => {
       delivery_method: form.delivery_method, warehouse: form.warehouse, shipping_collected: form.shipping_collected,
       // Blank → the server stamps today (new payout) or keeps the stored date (amount correction).
       shipping_collected_date: form.shipping_collected_date || undefined,
+      cancel_disposition: form.order_status === 'تم الإلغاء' ? (cancelDisposition || undefined) : undefined,
+      cancel_reason: form.order_status === 'تم الإلغاء' && cancelReason.trim() ? cancelReason.trim() : undefined,
       row_number: sales.length + 1,
     };
     try {
       const result = editSale ? await salesApi.update(editSale.id, data as any) : await salesApi.add(data as any);
       if (form.order_status === 'تم الصرف' && result.collection_difference > 0) {
         toast('success', `تم الحفظ — المستلم فعليًا ${form.shipping_collected.toLocaleString('ar-EG')} ج، الفرق غير المحصل ${result.collection_difference.toLocaleString('ar-EG')} ج`);
+      } else if (form.order_status === 'تم الإلغاء' && editSale && editSale.order_status !== 'تم الإلغاء' && result.cancellation) {
+        const c = result.cancellation;
+        const held = [c.deposit_held > 0 ? `عربون ${c.deposit_held.toLocaleString('ar-EG')} ج` : '', c.collected_held > 0 ? `محصّل من شركة الشحن ${c.collected_held.toLocaleString('ar-EG')} ج` : ''].filter(Boolean).join(' و');
+        toast('success', `تم إلغاء الأوردر وعكس حركاته${held ? ` — ${held} ما زال في الكاش: سجّل الرد الفعلي من نافذة الأوردر` : ''}`);
       } else if (form.order_status === RESERVED_STATUS && result.fulfillment && result.fulfillment.pending > 0) {
         // Accepted even though stock is short: say exactly what is held and what is waiting.
         toast('success', `تم الحفظ بحالة «${statusLabel(RESERVED_STATUS)}» — محجوز ${result.fulfillment.reserved.toLocaleString('ar-EG')} من ${result.fulfillment.requested.toLocaleString('ar-EG')} والناقص ${result.fulfillment.pending.toLocaleString('ar-EG')} في انتظار الإنتاج/الشراء`);
@@ -464,6 +520,11 @@ await loadData();(returnForm);
                       sale.order_status === 'لم يتم الصرف' ? 'bg-yellow-100 text-yellow-700' :
                       'bg-amber-100 text-amber-700'
                     }`}>{statusLabel(sale.order_status)}</span>
+                    {sale.order_status === 'تم الإلغاء' && sale.cancel_disposition && (
+                      <span className="block mt-1 text-xs text-gray-500" title="حالة البضاعة بعد إلغاء أوردر مشحون">
+                        {sale.cancel_disposition === 'returned_resalable' ? 'البضاعة رجعت' : sale.cancel_disposition === 'not_returned' ? 'البضاعة لم ترجع' : 'البضاعة تالفة'}
+                      </span>
+                    )}
                     {sale.fulfillment && sale.fulfillment.pending > 0 && (
                       <span className="block mt-1 text-xs text-red-600 font-semibold" title="كمية ناقصة في انتظار الإنتاج/الشراء">
                         ناقص {sale.fulfillment.pending.toLocaleString('ar-EG')} من {sale.fulfillment.requested.toLocaleString('ar-EG')}
@@ -619,6 +680,65 @@ await loadData();(returnForm);
             >
               {ORDER_STATUSES.map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}
             </select>
+
+            {/* Cancelling: shipped orders must say what happened to the goods; nothing is assumed to have come back. */}
+            {form.order_status === 'تم الإلغاء' && editSale && (
+              <div className="mt-2 space-y-2">
+                {(cancellingShipped || editSale.cancel_disposition) && (
+                  <div>
+                    <label className={labelClass}>حالة البضاعة المشحونة {cancellingShipped && <span className="text-red-600">*</span>}</label>
+                    <select className={inputClass} value={cancelDisposition} onChange={e => setCancelDisposition(e.target.value as CancelDisposition | '')}>
+                      <option value="">اختر...</option>
+                      <option value="returned_resalable">رجعت للمصنع وصالحة للبيع — تُضاف للمخزون بالتكلفة المسجلة وقت الشحن</option>
+                      <option value="not_returned">لم ترجع (عند العميل / شركة الشحن) — لا تُضاف للمخزون</option>
+                      <option value="returned_damaged">رجعت تالفة أو تحتاج فحصًا — لا تُضاف للمخزون الصالح للبيع</option>
+                    </select>
+                    {alreadyCancelled && <p className="text-xs text-gray-400 mt-1">عند وصول البضاعة فعليًا غيّر الحالة إلى «رجعت وصالحة للبيع» لتُضاف للمخزون (مرة واحدة).</p>}
+                  </div>
+                )}
+                {!alreadyCancelled && (
+                  <>
+                    <div>
+                      <label className={labelClass}>سبب الإلغاء (اختياري)</label>
+                      <input className={inputClass} value={cancelReason} onChange={e => setCancelReason(e.target.value)} maxLength={300} />
+                    </div>
+                    <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 space-y-1">
+                      <p className="font-semibold">عند الحفظ سيتم:</p>
+                      <p>• عكس حركات المخزون والتكلفة والإيراد والمستحق على شركة الشحن (السجل الأصلي يبقى كما هو).</p>
+                      {cancellingShipped && <p>• المخزون يُستعاد فقط إذا اخترت «رجعت وصالحة للبيع» — غير ذلك لا تُعتبر البضاعة في المخزن.</p>}
+                      <p className="font-semibold text-red-700">• الفلوس التي استُلمت بالفعل (العربون / المحصّل من شركة الشحن) لن تُمحى من الكاش، وتبقى التزامًا حتى تسجّل رد فعلي بعد الإلغاء.</p>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* A cancelled order: what is still owed back, and the form that records the REAL refund. */}
+            {alreadyCancelled && obligations && (
+              <div className="mt-2 rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-2 text-sm">
+                <p className="text-xs font-semibold text-gray-700">المستحق رده بعد الإلغاء (فلوس مستلمة فعلًا ولم تُرد بعد)</p>
+                <div className="flex justify-between"><span>عربون العميل المتبقي للرد</span><strong className="text-amber-700">{obligations.customer_credit_due.toLocaleString('ar-EG')} ج</strong></div>
+                {obligations.customer_refunded > 0 && <div className="flex justify-between text-xs text-gray-500"><span>تم رده فعليًا</span><span>{obligations.customer_refunded.toLocaleString('ar-EG')} ج</span></div>}
+                <div className="flex justify-between"><span>محصّل من شركة الشحن يجب رده لها</span><strong className="text-amber-700">{obligations.shipping_repayment_due.toLocaleString('ar-EG')} ج</strong></div>
+                {(obligations.customer_credit_due > 0 || obligations.shipping_repayment_due > 0) && (
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <select className={inputClass} value={refundForm.kind} onChange={e => {
+                      const kind = e.target.value as 'customer_refund' | 'shipping_repayment';
+                      setRefundForm({ ...refundForm, kind, amount: kind === 'customer_refund' ? obligations.customer_credit_due : obligations.shipping_repayment_due });
+                    }}>
+                      <option value="customer_refund">رد عربون للعميل</option>
+                      <option value="shipping_repayment">رد مبلغ لشركة الشحن</option>
+                    </select>
+                    <input type="number" min={0} className={inputClass} value={refundForm.amount || ''} onChange={e => setRefundForm({ ...refundForm, amount: parseFloat(e.target.value) || 0 })} placeholder="المبلغ" />
+                    <input type="date" className={inputClass} value={refundForm.date} onChange={e => setRefundForm({ ...refundForm, date: e.target.value })} />
+                    <input className={inputClass} value={refundForm.note} onChange={e => setRefundForm({ ...refundForm, note: e.target.value })} placeholder="ملاحظة (اختياري)" />
+                    <button type="button" onClick={handleRecordRefund} disabled={refunding} className="col-span-2 bg-amber-600 hover:bg-amber-700 disabled:bg-gray-300 text-white rounded-lg py-2 text-sm font-semibold">
+                      {refunding ? 'جارٍ التسجيل...' : 'تسجيل الرد الفعلي (يُخصم من الكاش)'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Shown only while حالة الأوردر = تم الصرف — the amount actually received
                 from the shipping company is what enters cash, never the full remaining

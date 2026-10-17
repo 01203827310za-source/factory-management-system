@@ -7,6 +7,7 @@ import type {
   ReturnItem,
   Sale,
 } from '@prisma/client';
+import { holdsCollectedCash } from './readyStockPositions';
 
 const CLIENT_PAYMENT    = 'client_payment';
 const DEBT_PAYMENT      = 'debt_payment';
@@ -52,7 +53,7 @@ export function computeFinancialSummary(input: FinancialInput, range?: DateRange
   // Only the amount actually confirmed as received from the shipping company enters
   // cash — never the full remaining invoice balance (see confirm-payout in sales.ts).
   const remainingIn    = sales
-    .filter(s => s.order_status === STATUS_DISPATCHED)
+    .filter(s => holdsCollectedCash(s.order_status))
     .reduce((s, x) => s + x.shipping_collected, 0);
   const clientPayIn    = paymentLogs
     .filter(p => p.type === CLIENT_PAYMENT)
@@ -128,7 +129,7 @@ export function computeDashboardCashFlow(input: FinancialInput): DashboardCashFl
   const { sales, expenses, returns_, paymentLogs } = input;
   const depositIn   = sales.reduce((s, x) => s + x.deposit_paid, 0);
   const remainingIn = sales
-    .filter(s => s.order_status === STATUS_DISPATCHED)
+    .filter(s => holdsCollectedCash(s.order_status))
     .reduce((s, x) => s + x.shipping_collected, 0);
   const clientPayIn = paymentLogs.filter(p => p.type === CLIENT_PAYMENT).reduce((s, p) => s + p.amount, 0);
   const debtOut     = paymentLogs.filter(p => p.type === DEBT_PAYMENT).reduce((s, p) => s + p.amount, 0);

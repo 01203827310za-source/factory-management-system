@@ -4,10 +4,11 @@ import { authenticate } from '../middleware/auth';
 import { FuzzyKeyIndex } from '../utils/textMatch';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
 import { computeDashboardCashFlow } from '../services/financialMetrics';
-import { computeStockPositions, isStockDeducting, STATUS_CANCELED, STATUS_RESERVED, valueStockRow } from '../services/readyStockPositions';
+import { STATUS_CANCELED, STATUS_RESERVED, computeStockPositions, holdsGoodsOutside, isStockDeducting, leavesStock, valueStockRow } from '../services/readyStockPositions';
 import { costOfGoodsShipped, returnsCostCredit, type MovementRow } from '../services/inventoryMovements';
 import { analyseShipments, findReceivableOverlap } from '../services/receivablesAudit';
 import { summarizeMissingStock } from '../services/missingStock';
+import { cancelledObligations, refundsByOrderNumber, refundsFor } from '../services/orderCancellation';
 
 const router = Router();
 router.use(authenticate);
@@ -120,7 +121,7 @@ router.get('/', async (req: Request, res: Response) => {
     });
     const totalSalesQty: Record<string, number> = {};
     sales
-      .filter(s => s.order_status !== 'تم الحجز' && s.order_status !== 'تم الإلغاء')
+      .filter(s => leavesStock(s))
       .forEach(s => {
         [
           { code: s.model1_code, qty: s.model1_qty, color: s.model1_color },
@@ -249,7 +250,24 @@ router.get('/', async (req: Request, res: Response) => {
     // Deposits are real cash, but on an order that has not shipped they are an obligation to
     // deliver (or refund) — not earned revenue. Surfaced so they are not mistaken for profit.
     const advancesOnOpenReservations = sales.filter(s => s.order_status === STATUS_RESERVED).reduce((n, s) => n + s.deposit_paid, 0);
-    const advancesOnCanceledOrders = sales.filter(s => s.order_status === STATUS_CANCELED).reduce((n, s) => n + s.deposit_paid, 0);
+    // Cancelled orders: the deposit and any shipping-company money STAY in cash until a real refund / repayment
+    // is recorded, so what is still owed back is shown here (never netted into cash or assets automatically).
+    const refundMap = refundsByOrderNumber(returns_);
+    const cancelledSales = sales.filter(s => s.order_status === STATUS_CANCELED);
+    const cancelledObl = cancelledSales.map(s => cancelledObligations(s, refundsFor(refundMap, s.order_number)));
+    const advancesOnCanceledOrders = cancelledObl.reduce((n, o) => n + o.customer_credit_due, 0);
+    const shippingRepaymentDue = cancelledObl.reduce((n, o) => n + o.shipping_repayment_due, 0);
+    // Shipped-then-cancelled orders whose goods are NOT back in sellable stock (with the customer / carrier, or damaged):
+    // valued at the historical cost recorded when they shipped; NOT part of stock value or current assets.
+    const openCancellations = await prisma.orderCancellation.findMany({ where: { ...seasonWhere(seasonId), reopened_at: null } });
+    const outside = { not_returned: { orders: 0, qty: 0, cost: 0 }, returned_damaged: { orders: 0, qty: 0, cost: 0 } };
+    openCancellations.forEach(c => {
+      const sale = saleById.get(c.sale_id);
+      if (!sale || !holdsGoodsOutside(sale) || !c.disposition) return;
+      const bucket = outside[c.disposition as 'not_returned' | 'returned_damaged'];
+      if (!bucket) return;
+      bucket.orders += 1; bucket.qty += c.goods_qty; bucket.cost += c.goods_cost;
+    });
     const reservedOrdersCount = sales.filter(s => s.order_status === STATUS_RESERVED).length;
 
     // Orders accepted as «يتم التجهيز» whose goods are not (fully) in stock yet — an operational list for
@@ -373,6 +391,19 @@ router.get('/', async (req: Request, res: Response) => {
       // Same allocation, grouped by model code + colour for the production / purchasing team.
       missing_stock: summarizeMissingStock({ ctx: stockCtx, sales, modelProds }),
       assets_reconciliation: assetsReconciliation,
+      shipping_repayment_due: shippingRepaymentDue,
+      cancelled_orders: {
+        count: cancelledSales.length,
+        customer_credit_due: advancesOnCanceledOrders,
+        shipping_repayment_due: shippingRepaymentDue,
+        goods_outside: {
+          orders: outside.not_returned.orders + outside.returned_damaged.orders,
+          qty: outside.not_returned.qty + outside.returned_damaged.qty,
+          cost: outside.not_returned.cost + outside.returned_damaged.cost,
+          not_returned: outside.not_returned,
+          returned_damaged: outside.returned_damaged,
+        },
+      },
       receivable_overlap_orders: receivableOverlap.orders,
       receivable_overlap_amount: receivableOverlap.amount,
     });

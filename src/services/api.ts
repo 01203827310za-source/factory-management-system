@@ -163,8 +163,12 @@ export interface RbacMetadata {
 export const salesApi = {
   getAll: () => get<SaleRecord[]>('/sales'),
   getLedger: (id: number) => get<SaleLedger>(`/sales/${id}/ledger`),
-  add: (data: Omit<SaleRecord, 'id' | 'created_at'>) => post<SaleRecord & { collection_difference: number }>('/sales', data),
-  update: (id: number, data: Partial<SaleRecord>) => put<SaleRecord & { collection_difference: number }>(`/sales/${id}`, data),
+  add: (data: Omit<SaleRecord, 'id' | 'created_at'>) => post<SaleRecord & { collection_difference: number; cancellation?: CancellationSummary | null }>('/sales', data),
+  update: (id: number, data: Partial<SaleRecord> & { cancel_reason?: string }) =>
+    put<SaleRecord & { collection_difference: number; cancellation?: CancellationSummary | null }>(`/sales/${id}`, data),
+  // Record the REAL refund / repayment for a cancelled order (cancelling alone never moves cash).
+  recordRefund: (id: number, input: { kind: 'customer_refund' | 'shipping_repayment'; amount: number; date?: string; note?: string; idempotency_key: string }) =>
+    post<{ duplicate: boolean; obligations: CancelledObligations | null }>(`/sales/${id}/refunds`, input),
   remove: (id: number) => del<{ message: string }>(`/sales/${id}`),
   // Kept for any non-UI caller; the Edit Order modal now drives "تم الحجز" (shown as «يتم التجهيز») → "تم الصرف"
   // through update() (status + received amount saved together via حفظ).
@@ -190,6 +194,7 @@ export type SaleRecord = {
   remaining: number;
   shipping_number: string;
   order_status: 'تم الصرف' | 'لم يتم الصرف' | 'حساب عميل' | 'تم الحجز' | 'تم الإلغاء';
+  cancel_disposition?: 'returned_resalable' | 'not_returned' | 'returned_damaged' | null;
   /** «يتم التجهيز» orders only: units really held in stock vs still to be produced / purchased. */
   fulfillment?: {
     requested: number; reserved: number; pending: number;
@@ -583,6 +588,11 @@ export interface DashboardMetrics {
   cash_items?: { key: string; label: string; amount: number; direction: 'in' | 'out' }[];
   pending_units?: number;
   missing_stock?: MissingStockSummaryData;
+  shipping_repayment_due?: number;
+  cancelled_orders?: {
+    count: number; customer_credit_due: number; shipping_repayment_due: number;
+    goods_outside: { orders: number; qty: number; cost: number; not_returned: { orders: number; qty: number; cost: number }; returned_damaged: { orders: number; qty: number; cost: number } };
+  };
   receivable_overlap_orders?: number;
   receivable_overlap_amount?: number;
   fabric_items: { material_type: string; color: string; available_qty: number; unit_cost: number; total: number }[];
@@ -965,6 +975,8 @@ export const charityApi = {
 export interface SaleLedger {
   collections: { id: number; amount: number; kind: string; collected_date: string; date_estimated: boolean; reference: string; created_by: string }[];
   collected_total: number;
+  obligations?: CancelledObligations | null;
+  cancellations?: { id: number; status_before: string; was_shipped: boolean; disposition: CancelDisposition | null; reason: string; goods_qty: number; goods_cost: number; created_by: string; created_at: string; reopened_at: string | null }[];
   movements: { id: number; movement_type: string; model_code: string; color: string; qty: number; unit_cost: number; total_cost: number; created_at: string }[];
 }
 
@@ -989,3 +1001,12 @@ export interface ReceivablesAudit {
     uncosted_orders: number;
   };
 }
+
+
+// ===== ORDER CANCELLATION =====
+export type CancelDisposition = 'returned_resalable' | 'not_returned' | 'returned_damaged';
+export interface CancellationSummary {
+  goods_qty: number; goods_cost: number; disposition: CancelDisposition | null; deposit_held: number; collected_held: number;
+}
+/** What a cancelled order still owes back: real cash that has not been refunded / repaid yet. */
+export interface CancelledObligations { customer_credit_due: number; customer_refunded: number; shipping_repayment_due: number }

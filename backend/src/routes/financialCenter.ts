@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
+import { holdsCollectedCash } from '../services/readyStockPositions';
 import { authenticate } from '../middleware/auth';
 import { FuzzyKeyIndex } from '../utils/textMatch';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
@@ -27,7 +28,7 @@ router.get('/', async (req: Request, res: Response) => {
     // Cash in from dispatched orders = only what the shipping company actually paid,
     // never the full remaining invoice balance (see confirm-payout in sales.ts).
     const remainingIn = sales
-      .filter(s => s.order_status === 'تم الصرف')
+      .filter(s => holdsCollectedCash(s.order_status))
       .reduce((s, sale) => s + sale.shipping_collected, 0);
     const clientPayIn = paymentLogs
       .filter(p => p.type === 'client_payment')

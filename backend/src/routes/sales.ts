@@ -6,8 +6,13 @@ import { logAudit } from '../services/auditHelper';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
 import { cairoToday, isValidDate } from '../services/charity';
 import {
-  STATUS_CANCELED, STATUS_RESERVED, computeStockPositions, increasingKeys, isStockDeducting, reservedSyncUpdates, validateShipment,
+  STATUS_CANCELED, STATUS_RESERVED, computeStockPositions, increasingKeys, isCancelDisposition, isStockDeducting, leavesStock,
+  reservedSyncUpdates, validateShipment, type CancelDisposition,
 } from '../services/readyStockPositions';
+import {
+  REFUND_KINDS, cancelledObligations, markReopened, recordCancellation, refundsByOrderNumber, refundsFor, shippedSnapshot, updateDisposition,
+  type RefundKind,
+} from '../services/orderCancellation';
 import { lockStock } from '../services/reservationSync';
 import { ledgerTotal } from '../services/shippingCollections';
 import { collectionDate, loadStockContext, syncCollections, syncShipMovements } from '../services/orderLedgers';
@@ -102,6 +107,9 @@ function resolveShippingCollected(
   wasDispatched: boolean,
   previouslyReceived: number,
 ): { value: number; isCorrection: boolean } | { error: string } {
+  // Cancelling is NOT a refund: whatever the shipping company already paid stays recorded (and stays cash)
+  // until a real repayment is entered via POST /sales/:id/refunds.
+  if (status === STATUS_CANCELED) return { value: previouslyReceived, isCorrection: false };
   if (status !== 'تم الصرف') {
     return { value: 0, isCorrection: false };
   }
@@ -118,6 +126,7 @@ function resolveShippingCollected(
 //                                  the money to another month); legacy NULL stays NULL
 //   - newly dispatched           → today (Cairo)
 function resolvePayoutDate(status: string, providedRaw: unknown, wasDispatched: boolean, previous: string | null): { value: string | null } | { error: string } {
+  if (status === STATUS_CANCELED) return { value: previous ?? null };   // keep the receipt date of money still held
   if (status !== 'تم الصرف') return { value: null };
   if (providedRaw !== undefined && providedRaw !== null && providedRaw !== '') {
     if (!isValidDate(providedRaw)) return { error: 'تاريخ استلام المبلغ من شركة الشحن غير صالح' };
@@ -172,6 +181,8 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
   try {
     const seasonId = await getSeasonId(req);
     const data = req.body as Record<string, unknown>;
+    delete data.cancel_reason;          // lives on the cancellation record, not on the order
+    data.cancel_disposition = null;     // set only when a shipped order is cancelled
     const status = (data.order_status as string) || '';
     const isReservation = status === 'تم الحجز';
     const remaining = (Number(data.invoice_value) || 0) - (Number(data.deposit_paid) || 0);
@@ -240,6 +251,12 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
   }
 });
 
+const DISPOSITION_LABELS: Record<CancelDisposition, string> = {
+  returned_resalable: 'رجعت وصالحة للبيع',
+  not_returned: 'لم ترجع (عند العميل / شركة الشحن)',
+  returned_damaged: 'رجعت تالفة / تحتاج فحصًا',
+};
+
 // PUT /api/sales/:id
 router.put('/:id', requireManager, async (req: Request, res: Response) => {
   try {
@@ -253,6 +270,30 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     const wasReservation = oldSale.order_status === 'تم الحجز';
     const newStatus = (data.order_status as string | undefined) ?? oldSale.order_status;
     const willBeReservation = newStatus === 'تم الحجز';
+
+    // ── Cancellation ──
+    const wasCancelled = oldSale.order_status === STATUS_CANCELED;
+    const willBeCancelled = newStatus === STATUS_CANCELED;
+    const cancellingShipped = willBeCancelled && isStockDeducting(oldSale.order_status);
+    const rawDisposition = data.cancel_disposition;
+    const cancelReason = typeof data.cancel_reason === 'string' ? data.cancel_reason.trim().slice(0, 300) : '';
+    delete data.cancel_reason;            // not a column of sales: it is stored on the cancellation record
+    let disposition: CancelDisposition | null = null;
+    if (willBeCancelled) {
+      if (cancellingShipped) {
+        // Goods that already left must say what happened to them — stock is never restored on assumption.
+        if (!isCancelDisposition(rawDisposition)) {
+          return res.status(400).json({ message: 'حدّد حالة البضاعة عند إلغاء أوردر تم شحنه: رجعت وصالحة للبيع / لم ترجع / رجعت تالفة أو تحتاج فحصًا' });
+        }
+        disposition = rawDisposition;
+      } else if (wasCancelled && oldSale.cancel_disposition) {
+        disposition = isCancelDisposition(rawDisposition) ? rawDisposition : (oldSale.cancel_disposition as CancelDisposition);
+      }
+    }
+    data.cancel_disposition = disposition;
+    if (wasCancelled && !willBeCancelled && oldSale.shipping_collected > 0 && newStatus !== 'تم الصرف') {
+      return res.status(400).json({ message: `الأوردر الملغى عليه تحصيل محفوظ ${oldSale.shipping_collected} ج من شركة الشحن — أعد فتحه بحالة «تم الصرف» أو سجّل رد المبلغ لشركة الشحن أولًا` });
+    }
 
     const inv = Number(data.invoice_value ?? oldSale.invoice_value ?? 0);
     const dep = Number(data.deposit_paid ?? oldSale.deposit_paid ?? 0);
@@ -287,16 +328,14 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     if ('error' in payoutDate) return res.status(400).json({ message: payoutDate.error });
     data.shipping_collected_date = payoutDate.value;
 
-    // Goods that already left the factory are never restored by a cancellation — they come
-    // back only through the returns workflow, once physically received.
-    if (newStatus === STATUS_CANCELED && isStockDeducting(oldSale.order_status)) {
-      return res.status(400).json({ message: 'لا يمكن إلغاء أوردر تم شحنه — استخدم المرتجعات لإرجاع البضاعة للمخزن بعد استلامها فعليًا' });
-    }
-
     const oldSlots = extractModels(oldSale as unknown as Record<string, unknown>);
     const newSlots = extractModels({ ...oldSale, ...data } as unknown as Record<string, unknown>);
     const slotsChanged = slotSignature(oldSlots) !== slotSignature(newSlots);
+    if (wasCancelled && willBeCancelled && oldSale.cancel_disposition && slotsChanged) {
+      return res.status(400).json({ message: 'لا يمكن تعديل أصناف أو كميات أوردر ملغى بعد الشحن — أعد فتحه أولًا' });
+    }
 
+    let cancelledGoods = { qty: 0, cost: 0 };   // pieces / historical cost that had shipped when the order was cancelled
     const sale = await prisma.$transaction(async (tx) => {
       await lockStock(tx, seasonId);
 
@@ -311,11 +350,14 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
       // orders. Edits that don't increase what was already shipped are never blocked.
       if (isStockDeducting(newStatus)) {
         const ctx = await loadStockContext(tx, seasonId, id);
-        const oldShipped = isStockDeducting(oldSale.order_status) ? oldSlots : [];
+        // Goods still outside the building after a cancellation (not returned / damaged) count as already shipped.
+        const oldShipped = leavesStock(oldSale) ? oldSlots : [];
         const problem = validateShipment(ctx, newSlots, increasingKeys(ctx, oldShipped, newSlots));
         if (problem) throw new StockError(problem);
       }
 
+      // What had shipped, measured BEFORE the reversal rows are appended.
+      const shippedBefore = cancellingShipped ? await shippedSnapshot(tx, id) : { qty: 0, cost: 0 };
       const updated = await tx.sale.update({ where: { id }, data: { ...data, season_id: seasonId } });
       await syncReserved(tx, seasonId, [...oldSlots, ...newSlots]);
       // Cash side: append only the change in what the shipping company actually paid.
@@ -325,6 +367,19 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
       });
       // Inventory-cost side: append only the change in what physically left the factory.
       await syncShipMovements(tx, updated, extractModels(updated as unknown as Record<string, unknown>), req.user?.username);
+
+      // Cancellation audit row (once per cancel event); disposition changes and reopening update it.
+      if (willBeCancelled && !wasCancelled) {
+        await recordCancellation(tx, {
+          seasonId, sale: updated, statusBefore: oldSale.order_status, wasShipped: cancellingShipped,
+          disposition, reason: cancelReason, snapshot: shippedBefore, user: req.user?.username,
+        });
+      } else if (willBeCancelled && wasCancelled && disposition !== oldSale.cancel_disposition) {
+        await updateDisposition(tx, id, disposition);
+      } else if (!willBeCancelled && wasCancelled) {
+        await markReopened(tx, id);
+      }
+      cancelledGoods = shippedBefore;
       return updated;
     });
 
@@ -336,18 +391,45 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     }
 
     const collection_difference = willBeDispatched ? Math.max(0, remaining - resolved.value) : 0;
-    const action = willBeDispatched
-      ? (resolved.isCorrection ? 'SHIPPING_PAYOUT_CORRECTED' : 'SHIPPING_PAYOUT_CONFIRMED')
-      : (wasDispatched ? 'SHIPPING_PAYOUT_REVERSED' : 'UPDATE');
-    const description = willBeDispatched
+    const cancelEvent = willBeCancelled && !wasCancelled;
+    const reopenEvent = !willBeCancelled && wasCancelled;
+    const dispositionEvent = willBeCancelled && wasCancelled && disposition !== oldSale.cancel_disposition;
+    const action = cancelEvent ? 'ORDER_CANCELLED'
+      : reopenEvent ? 'ORDER_REOPENED'
+      : dispositionEvent ? 'CANCEL_DISPOSITION_CHANGED'
+      : willBeDispatched
+        ? (resolved.isCorrection ? 'SHIPPING_PAYOUT_CORRECTED' : 'SHIPPING_PAYOUT_CONFIRMED')
+        : (wasDispatched ? 'SHIPPING_PAYOUT_REVERSED' : 'UPDATE');
+    const cancelSummary = {
+      goods_qty: cancellingShipped ? cancelledGoods.qty : 0,
+      goods_cost: cancellingShipped ? cancelledGoods.cost : 0,
+      disposition,
+      deposit_held: sale.deposit_paid,
+      collected_held: sale.shipping_collected,
+    };
+    const description = cancelEvent
+      ? `إلغاء أوردر ${sale.client} - ${sale.order_number} (كان: ${oldSale.order_status})${cancellingShipped ? ` — البضاعة: ${DISPOSITION_LABELS[disposition!]} — ${cancelSummary.goods_qty} قطعة بتكلفة مسجلة ${cancelSummary.goods_cost}` : ''} — عربون محتجز ${sale.deposit_paid} ج — محصّل من الشحن محتجز ${sale.shipping_collected} ج (لا يُرد إلا بتسجيل رد فعلي)${cancelReason ? ` — السبب: ${cancelReason}` : ''}`
+      : reopenEvent ? `إعادة فتح أوردر ملغى ${sale.client} - ${sale.order_number} إلى «${sale.order_status}»`
+      : dispositionEvent ? `تغيير حالة بضاعة أوردر ملغى ${sale.order_number}: ${oldSale.cancel_disposition ? DISPOSITION_LABELS[oldSale.cancel_disposition as CancelDisposition] : '—'} ← ${disposition ? DISPOSITION_LABELS[disposition] : '—'}`
+      : willBeDispatched
       ? `تعديل عملية بيع (تم الصرف): ${sale.client} - ${sale.order_number} — المتبقي: ${remaining} — المستلم فعليًا: ${resolved.value} — الفرق غير المحصل: ${collection_difference}`
       : (wasDispatched
         ? `تعديل عملية بيع — إلغاء حالة الصرف وعكس المبلغ المستلم سابقًا (${oldSale.shipping_collected}): ${sale.client} - ${sale.order_number}`
         : `تعديل عملية بيع: ${sale.client} - ${sale.order_number}`);
 
     logAudit({ user: req.user, module: 'Sales', action, record_id: id,
-      before_data: oldSale, after_data: { ...sale, collection_difference }, description });
-    return res.json({ ...sale, collection_difference, fulfillment: (await fulfillmentOf(seasonId, id)).one });
+      before_data: oldSale, after_data: { ...sale, collection_difference, ...(cancelEvent ? { cancellation: { ...cancelSummary, reason: cancelReason } } : {}) }, description });
+    if (cancellingShipped && !wasCancelled) {
+      logStockMovement(req.user, 'STOCK_RELEASED', sale, oldSlots,
+        disposition === 'returned_resalable'
+          ? 'إلغاء أوردر مشحون — استرجاع للمخزن بالتكلفة المسجلة وقت الشحن'
+          : `إلغاء أوردر مشحون — لا استرجاع للمخزون (${DISPOSITION_LABELS[disposition!]})`);
+    }
+    return res.json({
+      ...sale, collection_difference,
+      fulfillment: (await fulfillmentOf(seasonId, id)).one,
+      cancellation: willBeCancelled ? cancelSummary : null,
+    });
   } catch (err) {
     if (err instanceof StockError) return res.status(400).json({ message: err.message });
     console.error(err);
@@ -360,15 +442,92 @@ router.get('/:id/ledger', async (req: Request, res: Response) => {
   try {
     const seasonId = await getSeasonId(req);
     const id = parseInt(req.params.id as string);
-    const sale = await prisma.sale.findFirst({ where: { id, season_id: seasonId }, select: { id: true } });
+    const sale = await prisma.sale.findFirst({ where: { id, season_id: seasonId } });
     if (!sale) return res.status(404).json({ message: 'الطلب غير موجود' });
-    const [collections, movements] = await Promise.all([
+    const [collections, movements, cancellations, returns_] = await Promise.all([
       prisma.shippingCollection.findMany({ where: { sale_id: id }, orderBy: { id: 'asc' } }),
       prisma.inventoryMovement.findMany({ where: { sale_id: id }, orderBy: { id: 'asc' } }),
+      prisma.orderCancellation.findMany({ where: { sale_id: id }, orderBy: { id: 'asc' } }),
+      prisma.returnItem.findMany({ where: { ...seasonWhere(seasonId), order_number: sale.order_number } }),
     ]);
-    return res.json({ collections, collected_total: ledgerTotal(collections), movements });
+    // What a cancelled order still owes: real cash that has not been given back yet.
+    const obligations = sale.order_status === STATUS_CANCELED
+      ? cancelledObligations(sale, refundsFor(refundsByOrderNumber(returns_), sale.order_number))
+      : null;
+    return res.json({ collections, collected_total: ledgerTotal(collections), movements, cancellations, obligations });
   } catch {
     return res.status(500).json({ message: 'خطأ في جلب سجل الأوردر' });
+  }
+});
+
+// POST /api/sales/:id/refunds — record a REAL refund / repayment for a cancelled order.
+//   customer_refund    → returns the customer's deposit            (cash out, recorded as a refund row)
+//   shipping_repayment → pays back money the shipping company had paid (cash out, appended to the collection ledger)
+// Cancelling alone never moves cash; this is the only place the money actually leaves. Idempotent per key.
+router.post('/:id/refunds', requireManager, async (req: Request, res: Response) => {
+  try {
+    const seasonId = await getSeasonId(req);
+    const id = parseInt(req.params.id as string);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const kind = body.kind as RefundKind;
+    if (!(REFUND_KINDS as readonly string[]).includes(kind)) return res.status(400).json({ message: 'نوع الرد غير صالح' });
+    const amount = typeof body.amount === 'number' ? body.amount : Number(body.amount);
+    if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ message: 'مبلغ الرد يجب أن يكون أكبر من صفر' });
+    const amt = Math.round(amount * 100) / 100;
+    const date = body.date === undefined || body.date === '' ? cairoToday() : body.date;
+    if (!isValidDate(date)) return res.status(400).json({ message: 'تاريخ الرد غير صالح' });
+    const key = body.idempotency_key;
+    if (typeof key !== 'string' || key.length < 8 || key.length > 100) return res.status(400).json({ message: 'معرّف العملية (idempotency_key) مطلوب' });
+    const note = typeof body.note === 'string' ? body.note.trim().slice(0, 200) : '';
+
+    const result = await prisma.$transaction(async (tx) => {
+      await lockStock(tx, seasonId);
+      const sale = await tx.sale.findFirst({ where: { id, season_id: seasonId } });
+      if (!sale) throw new StockError('الطلب غير موجود');
+      if (sale.order_status !== STATUS_CANCELED) throw new StockError('تسجيل الرد متاح للأوردرات الملغاة فقط');
+      const tag = `[ref:${key}]`;
+
+      if (kind === 'customer_refund') {
+        const dup = await tx.returnItem.findFirst({ where: { ...seasonWhere(seasonId), notes: { contains: tag } } });
+        if (dup) return { duplicate: true as const, sale };
+        const refunded = refundsFor(refundsByOrderNumber(await tx.returnItem.findMany({ where: { ...seasonWhere(seasonId), order_number: sale.order_number } })), sale.order_number);
+        const due = cancelledObligations(sale, refunded).customer_credit_due;
+        if (amt > due + 0.005) throw new StockError(`المبلغ أكبر من العربون المتبقي للرد (${due} ج)`);
+        await tx.returnItem.create({ data: {
+          season_id: seasonId, date, order_number: sale.order_number, client_name: sale.client, returned_by: '', paid_by: req.user?.username ?? '',
+          model_code: '', model_qty: 0, model_color: '', refund_amount: amt, notes: `رد عربون أوردر ملغى${note ? ` — ${note}` : ''} ${tag}`,
+        } });
+        return { duplicate: false as const, sale };
+      }
+
+      // shipping_repayment
+      const dup = await tx.shippingCollection.findFirst({ where: { sale_id: id, reference: `repayment:${key}` } });
+      if (dup) return { duplicate: true as const, sale };
+      if (amt > sale.shipping_collected + 0.005) throw new StockError(`المبلغ أكبر من المحصّل المحتجز من شركة الشحن (${sale.shipping_collected} ج)`);
+      await tx.shippingCollection.create({ data: {
+        season_id: seasonId, sale_id: id, amount: -amt, kind: 'repayment', collected_date: date, date_estimated: false,
+        reference: `repayment:${key}`, created_by: req.user?.username ?? '',
+      } });
+      const rows = await tx.shippingCollection.findMany({ where: { sale_id: id } });
+      const updated = await tx.sale.update({ where: { id }, data: { shipping_collected: ledgerTotal(rows) } });
+      return { duplicate: false as const, sale: updated };
+    });
+
+    if (!result.duplicate) {
+      logAudit({ user: req.user, module: 'Sales', action: 'ORDER_REFUND_RECORDED', record_id: id,
+        after_data: { kind, amount: amt, date, note },
+        description: `${kind === 'customer_refund' ? 'رد عربون للعميل' : 'رد مبلغ لشركة الشحن'} ${amt} ج — أوردر ملغى ${result.sale.order_number}${note ? ` — ${note}` : ''}` });
+    }
+    const returns_ = await prisma.returnItem.findMany({ where: { ...seasonWhere(seasonId), order_number: result.sale.order_number } });
+    const fresh = await prisma.sale.findFirst({ where: { id, season_id: seasonId } });
+    return res.status(result.duplicate ? 200 : 201).json({
+      duplicate: result.duplicate,
+      obligations: fresh ? cancelledObligations(fresh, refundsFor(refundsByOrderNumber(returns_), fresh.order_number)) : null,
+    });
+  } catch (err) {
+    if (err instanceof StockError) return res.status(400).json({ message: err.message });
+    console.error(err);
+    return res.status(500).json({ message: 'خطأ في تسجيل الرد' });
   }
 });
 
@@ -464,8 +623,12 @@ router.post('/:id/cancel-reservation', requireManager, async (req: Request, res:
       await lockStock(tx, seasonId);
       const current = await tx.sale.findFirst({ where: { id, season_id: seasonId } });
       if (!current || current.order_status !== STATUS_RESERVED) throw new StockError('هذا الطلب ليس حجزاً');
-      const upd = await tx.sale.update({ where: { id }, data: { order_status: STATUS_CANCELED } });
+      const upd = await tx.sale.update({ where: { id }, data: { order_status: STATUS_CANCELED, cancel_disposition: null } });
       await syncReserved(tx, seasonId, slots);
+      await recordCancellation(tx, {
+        seasonId, sale: upd, statusBefore: STATUS_RESERVED, wasShipped: false, disposition: null, reason: '',
+        snapshot: { qty: 0, cost: 0 }, user: req.user?.username,
+      });
       return upd;
     });
     logStockMovement(req.user, 'STOCK_RELEASED', sale, slots, 'فك حجز مخزون (إلغاء)');

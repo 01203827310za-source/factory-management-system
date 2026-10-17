@@ -24,6 +24,29 @@ export const STATUS_CANCELED = 'تم الإلغاء';
 /** True when the order's goods have physically left the factory (stock is deducted). */
 export const isStockDeducting = (status: string) => status !== STATUS_RESERVED && status !== STATUS_CANCELED;
 
+// ── Cancelling an order that already SHIPPED ──
+// Stock is only restored when the goods are really back and resalable. Until then the goods are still
+// outside the sellable stock, so the order keeps counting against it even though its status is cancelled.
+export const CANCEL_DISPOSITIONS = ['returned_resalable', 'not_returned', 'returned_damaged'] as const;
+export type CancelDisposition = typeof CANCEL_DISPOSITIONS[number];
+export const isCancelDisposition = (v: unknown): v is CancelDisposition => typeof v === 'string' && (CANCEL_DISPOSITIONS as readonly string[]).includes(v);
+const OUTSIDE_DISPOSITIONS: readonly string[] = ['not_returned', 'returned_damaged'];
+
+type StatusAndDisposition = { order_status: string; cancel_disposition?: string | null };
+
+/** Cancelled after shipping, but the goods are NOT back in sellable stock (with the customer / carrier, or damaged). */
+export const holdsGoodsOutside = (s: StatusAndDisposition) =>
+  s.order_status === STATUS_CANCELED && !!s.cancel_disposition && OUTSIDE_DISPOSITIONS.includes(s.cancel_disposition);
+
+/** The order's goods count as OUT of sellable stock (shipped, or cancelled-but-not-back). */
+export const leavesStock = (s: StatusAndDisposition) => isStockDeducting(s.order_status) || holdsGoodsOutside(s);
+
+/**
+ * Money received from the shipping company stays real cash until it is actually repaid: a cancelled
+ * order keeps its collected amount (a status change alone never erases cash).
+ */
+export const holdsCollectedCash = (status: string) => status === 'تم الصرف' || status === STATUS_CANCELED;
+
 export type Slot = { code: string; qty: number; color: string };
 
 export function saleSlots(s: Pick<Sale,
@@ -135,7 +158,7 @@ export function computeStockPositions(
   });
 
   const sold = new Map<string, number>();
-  input.sales.filter(s => counted(s) && isStockDeducting(s.order_status)).forEach(s => {
+  input.sales.filter(s => counted(s) && leavesStock(s)).forEach(s => {
     saleSlots(s).forEach(m => { const k = keyOf(m.code, m.color); sold.set(k, (sold.get(k) || 0) + m.qty); });
   });
 

@@ -11,7 +11,7 @@ import { logAudit } from '../services/auditHelper';
 import { textsMatch, findBestMatch } from '../utils/textMatch';
 import { getSeasonId, seasonWhere, withSeason } from '../services/seasonContext';
 import { resyncReservations } from '../services/reservationSync';
-import { computeStockPositions } from '../services/readyStockPositions';
+import { computeStockPositions, leavesStock } from '../services/readyStockPositions';
 import { outstandingShippingReceivable } from '../services/receivablesAudit';
 
 // Remove PaymentLog entries when a debt/client-account paid amount is reduced.
@@ -1389,7 +1389,7 @@ async function computeAvailable(seasonId: number, stock: { id: number; model_cod
     .reduce((s, mp) => s + mp.qty_received, 0);
 
   const totalSales = sales
-    .filter(s => s.order_status !== 'تم الحجز' && s.order_status !== 'تم الإلغاء')
+    .filter(s => leavesStock(s))
     .reduce((s, sale) => s + [
       { code: sale.model1_code, qty: sale.model1_qty, color: sale.model1_color },
       { code: sale.model2_code, qty: sale.model2_qty, color: sale.model2_color },

@@ -18,6 +18,8 @@ export interface Sale {
   shipping_number: string;
   // Stored values. 'تم الحجز' is DISPLAYED as «يتم التجهيز» — use statusLabel() from utils/orderStatus.ts to show it.
   order_status: 'تم الصرف' | 'لم يتم الصرف' | 'حساب عميل' | 'تم الحجز' | 'تم الإلغاء';
+  /** Only for a SHIPPED order that was cancelled: what happened to the goods. */
+  cancel_disposition?: 'returned_resalable' | 'not_returned' | 'returned_damaged' | null;
   /** «يتم التجهيز» orders only: units really held in stock vs still to be produced / purchased. */
   fulfillment?: {
     requested: number; reserved: number; pending: number;
@@ -354,6 +356,11 @@ export interface DashboardMetrics {
   pending_units?: number;
   /** Shortages grouped by model code + colour (same allocation as pending_orders). */
   missing_stock?: MissingStockSummaryData;
+  shipping_repayment_due?: number;
+  cancelled_orders?: {
+    count: number; customer_credit_due: number; shipping_repayment_due: number;
+    goods_outside: { orders: number; qty: number; cost: number; not_returned: { orders: number; qty: number; cost: number }; returned_damaged: { orders: number; qty: number; cost: number } };
+  };
   receivable_overlap_orders?: number;
   receivable_overlap_amount?: number;
   fabric_items: FabricAssetItem[];

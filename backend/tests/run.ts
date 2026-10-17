@@ -7,5 +7,6 @@ import './statusLabel.test';
 import './guards.test';
 import './allocation.test';
 import './missingStock.test';
+import './cancellation.test';
 
 runAll();

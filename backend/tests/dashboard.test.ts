@@ -10,6 +10,8 @@ type Row = { season_id: number };
 type Json = Record<string, unknown> & {
   stock_value: number; stock_reserved_value: number; stock_available_value: number; money_owed_to_us: number;
   total_current_assets: number; total_in: number; total_out: number; net_profit: number; cash_available: number;
+  shipping_repayment_due: number; advances_on_canceled_orders: number;
+  cancelled_orders: { count: number; customer_credit_due: number; shipping_repayment_due: number; goods_outside: { orders: number; qty: number; cost: number; not_returned: { qty: number; cost: number }; returned_damaged: { qty: number; cost: number } } };
   cash_on_hand: number; cash_items: { key: string; amount: number; direction: 'in' | 'out' }[];
   receivable_overlap_orders: number; receivable_overlap_amount: number;
   assets_reconciliation: { reconciled: boolean; components_sum: number; differences: Record<string, number> };
@@ -23,15 +25,16 @@ type Json = Record<string, unknown> & {
 
 /** Runs the real Dashboard handler against `data` for the requested season. */
 async function callDashboard(data: Record<string, Row[]>, seasonId: number): Promise<Json> {
-  const rows = (name: string) => async (a?: { where?: { season_id?: number } }) =>
-    (data[name] ?? []).filter(r => a?.where?.season_id === undefined || r.season_id === a.where.season_id);
+  const rows = (name: string) => async (a?: { where?: { season_id?: number; reopened_at?: null } }) =>
+    (data[name] ?? []).filter(r => (a?.where?.season_id === undefined || r.season_id === a.where.season_id)
+      && (a?.where?.reopened_at !== null || (r as unknown as { reopened_at: unknown }).reopened_at === null));
   const model = (name: string) => ({ findMany: rows(name) });
   const fakePrisma = {
     season: { findUnique: async (a: { where: { id: number } }) => ({ id: a.where.id }), findFirst: async () => ({ id: 1 }) },
     sale: model('sales'), expenseRevenue: model('expenses'), debt: model('debts'), clientAccount: model('clientAccts'),
     returnItem: model('returns'), paymentLog: model('paymentLogs'), fabricWarehouse: model('fabric'), readyStock: model('readyStock'),
     accessoriesWarehouse: model('accessories'), cuttingOrder: model('cutting'), modelPart: model('modelParts'),
-    modelProduction: model('modelProds'), inventoryMovement: model('movements'), clientAccountInvoice: model('clientInvoices'),
+    modelProduction: model('modelProds'), inventoryMovement: model('movements'), clientAccountInvoice: model('clientInvoices'), orderCancellation: model('cancellations'),
     financialSnapshot: { upsert: async () => ({}) },
   };
 
@@ -53,7 +56,7 @@ async function callDashboard(data: Record<string, Row[]>, seasonId: number): Pro
 }
 
 const dataOf = (w: World, extra: Partial<Record<string, Row[]>> = {}) => ({
-  sales: w.sales, readyStock: w.readyStock, modelProds: w.modelProds, returns: w.returns, movements: w.movements, ...extra,
+  sales: w.sales, readyStock: w.readyStock, modelProds: w.modelProds, returns: w.returns, movements: w.movements, cancellations: w.cancellations, ...extra,
 }) as Record<string, Row[]>;
 
 test('Dashboard: stock = physical (shipped removed once, reserved kept); receivables = valid outstanding only', async () => {
@@ -289,4 +292,48 @@ test('Dashboard cash: each season has its own cash', async () => {
   const s2 = await callDashboard(dataOf(w), 2);
   assert.deepEqual([s1.cash_on_hand, s2.cash_on_hand], [300, 700]);
   assert.deepEqual([s1.total_current_assets, s2.total_current_assets], [50 * 600 + 300, 50 * 600 + 700]);
+});
+
+// ───────────── cancelled orders on the Dashboard ─────────────
+test('Dashboard cancellation: held cash, obligations and goods outside the building are shown; none of it leaks into assets', async () => {
+  const w = new World();
+  w.addStock('M1', 'أسود', 100, 600);
+  const o = await w.saveOrder({ order_number: 'X-1', status: PAID_OUT, slots: [M1], invoice: 8500, deposit: 1000, collected: 7500, date: '2026-10-05' });
+  const before = await callDashboard(dataOf(w), 1);
+  await w.saveOrder({ id: o.id, status: 'تم الإلغاء', slots: [M1], invoice: 8500, deposit: 1000, disposition: 'not_returned' });
+  const d = await callDashboard(dataOf(w), 1);
+  assert.equal(d.cash_on_hand, before.cash_on_hand);                           // cancelling is not a refund: cash unchanged
+  assert.equal(d.cash_on_hand, 8500);
+  assert.deepEqual([d.cancelled_orders.count, d.cancelled_orders.customer_credit_due, d.cancelled_orders.shipping_repayment_due], [1, 1000, 7500]);
+  assert.equal(d.advances_on_canceled_orders, 1000);
+  assert.equal(d.shipping_repayment_due, 7500);
+  assert.deepEqual([d.cancelled_orders.goods_outside.qty, d.cancelled_orders.goods_outside.cost], [10, 6000]);   // at the historical cost
+  assert.equal(d.stock_value, 90 * 600);                                        // the 10 pcs are NOT claimed as stock
+  assert.equal(d.money_owed_to_us, 0);                                          // no receivable on a cancelled order
+  assert.equal(d.total_current_assets, 8500 + 90 * 600);                        // cash held + real stock only (outside goods excluded)
+  assert.equal(d.assets_reconciliation.reconciled, true);
+});
+
+test('Dashboard cancellation: goods returned resalable are back in stock; refunds reduce cash and the obligation', async () => {
+  const w = new World();
+  w.addStock('M1', 'أسود', 100, 600);
+  const o = await w.saveOrder({ status: PAID_OUT, slots: [M1], invoice: 8500, deposit: 1000, collected: 7500, date: '2026-10-05' });
+  await w.saveOrder({ id: o.id, status: 'تم الإلغاء', slots: [M1], invoice: 8500, deposit: 1000, disposition: 'returned_resalable' });
+  let d = await callDashboard(dataOf(w), 1);
+  assert.equal(d.stock_value, 100 * 600);                                       // restored (returned and resalable)
+  assert.equal(d.cancelled_orders.goods_outside.qty, 0);
+  w.recordCustomerRefund(o.id, 1000);
+  w.recordShippingRepayment(o.id, 7500);
+  d = await callDashboard(dataOf(w), 1);
+  assert.deepEqual([d.cash_on_hand, d.advances_on_canceled_orders, d.shipping_repayment_due], [0, 0, 0]);
+});
+
+test('Dashboard cancellation: an unshipped cancellation leaves no goods outside and no phantom obligations', async () => {
+  const w = new World();
+  w.addStock('M1', 'أسود', 100, 600);
+  const o = await w.saveOrder({ status: PREPARED, slots: [M1], invoice: 8500 });
+  await w.saveOrder({ id: o.id, status: 'تم الإلغاء', slots: [M1], invoice: 8500 });
+  const d = await callDashboard(dataOf(w), 1);
+  assert.deepEqual([d.cancelled_orders.count, d.cancelled_orders.customer_credit_due, d.cancelled_orders.shipping_repayment_due, d.cancelled_orders.goods_outside.qty], [1, 0, 0, 0]);
+  assert.equal(d.stock_value, 100 * 600);
 });

@@ -149,20 +149,24 @@ test('G. cancelling a prepared order releases the reservation; physical value un
   assert.equal(w.movements.length, 0);
 });
 
-test('H. cancelling a shipped order is refused; stock returns only through a recorded return', async () => {
+test('H. cancelling a shipped order needs a stated disposition; stock returns only when the goods are back', async () => {
   const w = setup();
   const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: [M1], invoice: 8500, order_number: 'SO-77' });
-  await assert.rejects(() => w.saveOrder({ id: o.id, status: CANCELED, slots: [M1], invoice: 8500 }), /تم شحنه/);
+  // no disposition → refused, nothing changes
+  await assert.rejects(() => w.saveOrder({ id: o.id, status: CANCELED, slots: [M1], invoice: 8500 }), /حالة البضاعة/);
+  assert.equal(w.sales[0].order_status, NOT_PAID_OUT);
+  assert.equal(w.stock().physicalQty, 90);
+  // goods NOT returned → stock is not restored
+  await w.saveOrder({ id: o.id, status: CANCELED, slots: [M1], invoice: 8500, disposition: 'not_returned' });
+  assert.equal(w.stock().physicalQty, 90);
   assert.equal(isStockDeducting(NOT_PAID_OUT), true);
-  assert.equal(w.stock().physicalQty, 90);             // nothing restored
-
+  // a recorded return still adds stock (existing Returns workflow)
   w.returns.push({
     id: 1, season_id: 1, date: '2026-10-09', order_number: 'SO-77', client_name: 'c', returned_by: '', paid_by: '',
     model_code: 'M1', model_qty: 3, model_color: 'أسود', refund_amount: 0, notes: '', created_at: new Date(),
   });
-  assert.equal(w.stock().physicalQty, 93);             // restored only because 3 pcs were actually received
+  assert.equal(w.stock().physicalQty, 93);
   assert.equal(w.stock().physical, 93 * 600);
-  assert.equal(w.cogs(), 6000 - 3 * 600);              // cost credited at the originally recorded cost
 });
 
 test('I. cash + inventory + receivable reconcile; nothing counted twice across the whole lifecycle', async () => {

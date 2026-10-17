@@ -241,8 +241,13 @@ export default function Dashboard() {
             <div className="bg-gray-50 rounded-lg p-3"><p className="text-xs text-gray-500">هامش إجمالي (للأوردرات المسجّلة التكلفة)</p><p className="font-bold text-emerald-700">{fmt(metrics.gross_margin ?? 0)} ج.م</p></div>
             <div className="bg-gray-50 rounded-lg p-3"><p className="text-xs text-gray-500">مستحق عند شركة الشحن</p><p className="font-bold text-purple-700">{fmt(metrics.shipping_receivable ?? 0)} ج.م</p></div>
             <div className="bg-gray-50 rounded-lg p-3"><p className="text-xs text-gray-500">عربون على حجوزات لم تُشحن (التزام)</p><p className="font-bold text-amber-700">{fmt(metrics.advances_on_open_reservations ?? 0)} ج.م</p></div>
-            <div className="bg-gray-50 rounded-lg p-3"><p className="text-xs text-gray-500">عربون على أوردرات ملغاة (قد يُرد)</p><p className="font-bold text-amber-700">{fmt(metrics.advances_on_canceled_orders ?? 0)} ج.م</p></div>
+            <div className="bg-gray-50 rounded-lg p-3"><p className="text-xs text-gray-500">التزام رد عربون لعملاء (أوردرات ملغاة)</p><p className="font-bold text-amber-700">{fmt(metrics.advances_on_canceled_orders ?? 0)} ج.م</p></div>
+            <div className="bg-gray-50 rounded-lg p-3"><p className="text-xs text-gray-500">التزام رد لشركة الشحن (أوردرات ملغاة)</p><p className="font-bold text-amber-700">{fmt(metrics.shipping_repayment_due ?? 0)} ج.م</p></div>
+            <div className="bg-gray-50 rounded-lg p-3"><p className="text-xs text-gray-500">بضاعة ملغاة لم تعد للمخزون الصالح للبيع</p><p className="font-bold text-red-700">{(metrics.cancelled_orders?.goods_outside.qty ?? 0).toLocaleString('ar-EG')} قطعة · {fmt(metrics.cancelled_orders?.goods_outside.cost ?? 0)} ج.م</p></div>
           </div>
+          {((metrics.advances_on_canceled_orders ?? 0) > 0 || (metrics.shipping_repayment_due ?? 0) > 0) && (
+            <p className="text-xs text-amber-700 mt-3">الأوردرات الملغاة: العربون والمحصّل من شركة الشحن ما زالا في الكاش حتى تسجّل الرد الفعلي من نافذة الأوردر — الإلغاء وحده لا يُرجع أي فلوس.</p>
+          )}
           {(metrics.uncosted_shipped_orders ?? 0) > 0 && (
             <p className="text-xs text-amber-700 mt-3">{(metrics.uncosted_shipped_orders ?? 0).toLocaleString('ar-EG')} أوردر مشحون لا توجد له تكلفة مسجّلة (قبل تفعيل سجل التكلفة) — لا يدخل في التكلفة والهامش أعلاه.</p>
           )}

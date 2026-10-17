@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate } from '../middleware/auth';
 import { computeFinancialSummary } from '../services/financialMetrics';
-import { valueStockRow } from '../services/readyStockPositions';
+import { holdsCollectedCash, leavesStock, valueStockRow } from '../services/readyStockPositions';
 import { FuzzyKeyIndex } from '../utils/textMatch';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
 
@@ -41,7 +41,7 @@ function computeCapitalSnapshot(db: AllData, upToDate: string) {
   });
 
   const soldQty: Record<string, number> = {};
-  sales.filter(s => sd(s) <= upToDate && s.order_status !== 'تم الحجز' && s.order_status !== 'تم الإلغاء').forEach(s => {
+  sales.filter(s => sd(s) <= upToDate && leavesStock(s)).forEach(s => {
     [{ c: s.model1_code, q: s.model1_qty, col: s.model1_color },
      { c: s.model2_code, q: s.model2_qty, col: s.model2_color },
      { c: s.model3_code, q: s.model3_qty, col: s.model3_color },
@@ -147,7 +147,7 @@ router.get('/', async (req: Request, res: Response) => {
     });
 
     const soldQtyAll: Record<string, number> = {};
-    sales.filter(s => s.order_status !== 'تم الحجز' && s.order_status !== 'تم الإلغاء').forEach(s => {
+    sales.filter(s => leavesStock(s)).forEach(s => {
       [{ c: s.model1_code, q: s.model1_qty, col: s.model1_color },
        { c: s.model2_code, q: s.model2_qty, col: s.model2_color },
        { c: s.model3_code, q: s.model3_qty, col: s.model3_color },
@@ -319,7 +319,7 @@ router.get('/employee-movements', async (req: Request, res: Response) => {
     // 2. Actual cash received from the shipping company on dispatched orders
     // (never the full remaining balance — see confirm-payout in sales.ts)
     sales
-      .filter(s => s.order_status === 'تم الصرف' && s.shipping_collected !== 0 && inRange(saleD(s)))
+      .filter(s => holdsCollectedCash(s.order_status) && s.shipping_collected !== 0 && inRange(saleD(s)))
       .forEach(s => transactions.push({
         date: saleD(s), type: 'تحصيل شركة الشحن',
         description: `أوردر رقم ${s.order_number} — تم الصرف`, client: s.client,

@@ -1,6 +1,6 @@
 import prisma from '../lib/prisma';
 import { FuzzyKeyIndex } from '../utils/textMatch';
-import { valueStockRow } from '../services/readyStockPositions';
+import { holdsCollectedCash, leavesStock, valueStockRow } from '../services/readyStockPositions';
 
 export type SnapshotData = {
   total_current_assets: number;
@@ -35,7 +35,7 @@ export async function computeSnapshot(seasonId: number): Promise<SnapshotData> {
   // Cash in from dispatched orders = only what the shipping company actually paid,
   // never the full remaining invoice balance (see confirm-payout in sales.ts).
   const remainingIn = sales
-    .filter(s => s.order_status === 'تم الصرف')
+    .filter(s => holdsCollectedCash(s.order_status))
     .reduce((s, sale) => s + sale.shipping_collected, 0);
   const clientPayIn = paymentLogs
     .filter(p => p.type === 'client_payment')
@@ -80,7 +80,7 @@ export async function computeSnapshot(seasonId: number): Promise<SnapshotData> {
   });
   const totalSalesQty: Record<string, number> = {};
   sales
-    .filter(s => s.order_status !== 'تم الحجز' && s.order_status !== 'تم الإلغاء')
+    .filter(s => leavesStock(s))
     .forEach(s => {
       [
         { code: s.model1_code, qty: s.model1_qty, color: s.model1_color },

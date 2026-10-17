@@ -78,6 +78,7 @@ model Season {
   charity_payments       CharityPayment[]
   shipping_collections   ShippingCollection[]
   inventory_movements    InventoryMovement[]
+  order_cancellations    OrderCancellation[]
   ready_stock            ReadyStock[]
   fabric_warehouse       FabricWarehouse[]
   fabric_purchases       FabricPurchase[]
@@ -160,8 +161,14 @@ model Sale {
   // NULL for orders dispatched before this column existed — never back-filled/invented.
   shipping_collected_date String?
   created_at         DateTime @default(now())
+  // Set only when a SHIPPED order is cancelled: what happened to the goods.
+  //   returned_resalable → back in sellable stock · not_returned → still with the customer / shipping company
+  //   returned_damaged   → back in the building but not sellable (inspection)
+  // NULL for never-shipped cancellations and for orders cancelled before this column existed.
+  cancel_disposition String?
   collections        ShippingCollection[]
   movements          InventoryMovement[]
+  cancellations      OrderCancellation[]
 
   @@map("sales")
 }
@@ -683,4 +690,33 @@ model InventoryMovement {
   @@index([sale_id])
   @@index([season_id])
   @@map("inventory_movements")
+}
+
+
+// ===== ORDER CANCELLATIONS (audit trail of every cancellation) =====
+// One row per cancel event (an order can be reopened and cancelled again). Nothing in the collection or
+// inventory ledgers is deleted by a cancellation: reversal rows are appended there, and this row links them.
+model OrderCancellation {
+  id               Int       @id @default(autoincrement())
+  season_id        Int
+  season           Season    @relation(fields: [season_id], references: [id])
+  sale_id          Int
+  sale             Sale      @relation(fields: [sale_id], references: [id], onDelete: Cascade)
+  status_before    String
+  was_shipped      Boolean   @default(false)
+  disposition      String?   // see sales.cancel_disposition
+  reason           String    @default("")
+  goods_qty        Int       @default(0)      // pieces that had shipped
+  goods_cost       Float     @default(0)      // their recorded (historical) cost
+  deposit_held     Float     @default(0)      // customer deposit still held at cancellation (real cash)
+  collected_held   Float     @default(0)      // shipping-company money still held at cancellation (real cash)
+  linked_collection_ids String @default("[]") // JSON ids of shipping_collections rows of this order
+  linked_movement_ids   String @default("[]") // JSON ids of inventory_movements rows (originals + reversals)
+  created_by       String    @default("")
+  created_at       DateTime  @default(now())
+  reopened_at      DateTime?
+
+  @@index([sale_id])
+  @@index([season_id])
+  @@map("order_cancellations")
 }

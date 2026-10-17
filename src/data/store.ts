@@ -78,7 +78,8 @@ export const readyStockStore = {
     // Only deduct stock for dispatched/pending sales — NOT reservations or cancelled orders
     const totalSales: Record<string, number> = {};
     sales
-      .filter(s => s.order_status !== 'تم الحجز' && s.order_status !== 'تم الإلغاء')
+      // shipped, or cancelled-after-shipping with the goods NOT back in sellable stock (same rule as the server)
+      .filter(s => s.order_status !== 'تم الحجز' && (s.order_status !== 'تم الإلغاء' || ['not_returned', 'returned_damaged'].includes(s.cancel_disposition ?? '')))
       .forEach(s => {
         [
           { code: s.model1_code, qty: s.model1_qty, color: s.model1_color },

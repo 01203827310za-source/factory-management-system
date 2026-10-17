@@ -14,6 +14,7 @@ import { authenticate } from '../middleware/auth';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
 import { computeDashboardCashFlow } from '../services/financialMetrics';
 import { buildReceivablesAudit } from '../services/receivablesAudit';
+import { holdsCollectedCash } from '../services/readyStockPositions';
 import { ledgerTotal } from '../services/shippingCollections';
 
 const router = Router();
@@ -183,7 +184,7 @@ router.get('/sales', async (req: Request, res: Response) => {
     // canceled ones included — so the canceled slice is exposed, not hidden.
     const totalInvoice = sales.reduce((s, x) => s + x.invoice_value, 0);
     const deposits = sales.reduce((s, x) => s + x.deposit_paid, 0);
-    const shippingCollected = sales.filter(s => s.order_status === STATUS_DISPATCHED).reduce((s, x) => s + x.shipping_collected, 0);
+    const shippingCollected = sales.filter(s => holdsCollectedCash(s.order_status)).reduce((s, x) => s + x.shipping_collected, 0);
     // Sales part of "الفلوس اللي لنا برا" (same rule as the dashboard).
     const outstanding =
       sales.filter(s => s.order_status === STATUS_NOT_DISPATCHED).reduce((s, x) => s + Math.max(0, x.remaining), 0) +
@@ -197,7 +198,7 @@ router.get('/sales', async (req: Request, res: Response) => {
         cur.count += 1;
         cur.invoice_value += s.invoice_value;
         cur.deposit_paid += s.deposit_paid;
-        cur.collected += s.order_status === STATUS_DISPATCHED ? s.shipping_collected : 0;
+        cur.collected += holdsCollectedCash(s.order_status) ? s.shipping_collected : 0;
         m.set(v, cur);
       });
       return [...m.values()].sort((a, b) => b.invoice_value - a.invoice_value)
@@ -245,7 +246,7 @@ router.get('/sales/records', async (req: Request, res: Response) => {
       id: s.id, order_number: s.order_number, date: dateOf(s.created_at), client: s.client, marketer: s.marketer,
       order_status: s.order_status, delivery_method: s.delivery_method,
       invoice_value: s.invoice_value, deposit_paid: s.deposit_paid,
-      shipping_collected: s.order_status === STATUS_DISPATCHED ? s.shipping_collected : 0,
+      shipping_collected: holdsCollectedCash(s.order_status) ? s.shipping_collected : 0,
       remaining: s.remaining,
     }));
     return res.json({
