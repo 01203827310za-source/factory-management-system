@@ -10,7 +10,9 @@
 import type { Prisma } from '@prisma/client';
 import { cairoToday, isValidDate } from './charity';
 import { seasonWhere } from './seasonContext';
-import { computeStockPositions, isStockDeducting, type Slot } from './readyStockPositions';
+import { computeStockPositions, costSlots, type Slot } from './readyStockPositions';
+
+type CostSlotsInput = Parameters<typeof costSlots>[0];
 import { ledgerTotal, planCollectionChange, round2 } from './shippingCollections';
 import { planMovements } from './inventoryMovements';
 
@@ -59,11 +61,13 @@ export async function syncCollections(
 }
 
 // Records the cost of goods that physically left (or came back) as the DIFFERENCE between the
-// movement ledger and what the order's current status requires — never a blind re-deduction.
+// movement ledger and the pieces whose cost the order must still carry (costSlots) — never a blind re-deduction:
+//   shipped            → all shipped pieces at the card's cost at that moment
+//   cancelled, returned→ SHIP_REVERSAL at the originally RECORDED cost for the pieces that came back
+//   cancelled, unreturned pieces → their cost stays recognised until they return
 export async function syncShipMovements(
   tx: Tx,
-  sale: { id: number; season_id: number; order_number: string; order_status: string },
-  slots: ModelSlot[],
+  sale: CostSlotsInput & { id: number; season_id: number; order_number: string },
   user?: string,
 ) {
   const [existing, ctx] = await Promise.all([
@@ -73,7 +77,7 @@ export async function syncShipMovements(
   const byKey = new Map(ctx.positions.filter(p => p.primary).map(p => [p.key, p]));
   const plan = planMovements({
     existing,
-    desired: isStockDeducting(sale.order_status) ? slots : [],
+    desired: costSlots(sale),
     keyOf: ctx.keyOf,
     costOf: key => { const p = byKey.get(key); return p ? { unit_cost: p.row.cost_per_piece, stock_id: p.row.id } : null; },
   });

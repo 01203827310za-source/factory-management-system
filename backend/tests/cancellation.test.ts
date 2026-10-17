@@ -69,19 +69,22 @@ test('3. cancel a SHIPPED order before the shipping company pays: revenue, recei
   assert.deepEqual(w.cancellations.map(c => [c.was_shipped, c.disposition, c.goods_qty, c.goods_cost, c.reason]), [[true, 'returned_resalable', 10, 6000, 'العميل رفض']]);
 });
 
-test('3b. goods NOT returned: COGS reverses but stock is NOT restored (still outside the building)', async () => {
+test('3b. goods NOT returned: stock is NOT restored and their cost stays recognised until they really come back', async () => {
   const w = world();
   const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: slot(10), invoice: 8500 });
   await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, disposition: 'not_returned' });
   assert.equal(w.stock().physicalQty, 90);                         // never claim they are in the warehouse
   assert.equal(w.stock().physical, 90 * 600);
-  assert.equal(w.cogs(), 0);
+  assert.equal(w.cogs(), 6000);                                    // goods are gone: their cost is NOT reversed
+  assert.equal(w.movements.length, 1);
   assert.deepEqual(w.cancellations.map(c => [c.disposition, c.goods_qty, c.goods_cost]), [['not_returned', 10, 6000]]);   // tracked separately, at historical cost
-  // later the goods really come back → the user updates the disposition: stock restored once, no ledger duplication
-  const movementsBefore = w.movements.length;
+  // later the goods really come back → the user updates the disposition: stock restored once, cost reversed once at the recorded cost
   await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, disposition: 'returned_resalable' });
   assert.equal(w.stock().physicalQty, 100);
-  assert.equal(w.movements.length, movementsBefore);
+  assert.deepEqual(w.movements.map(m => [m.movement_type, m.qty, m.unit_cost]), [['SHIP', 10, 600], ['SHIP_REVERSAL', 10, 600]]);
+  assert.equal(w.cogs(), 0);
+  await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, disposition: 'returned_resalable' });   // repeat: nothing more
+  assert.equal(w.movements.length, 2);
   assert.equal(w.cancellations.length, 1);
   assert.equal(w.cancellations[0].disposition, 'returned_resalable');
 });
@@ -178,7 +181,37 @@ test('reopening a cancelled order ships it again with NEW movements (originals +
   // cancelling again is a NEW event
   await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, disposition: 'not_returned' });
   assert.equal(w.cancellations.length, 2);
-  assert.equal(w.movements.filter(m => m.movement_type === 'SHIP_REVERSAL').length, 2);
+  assert.equal(w.movements.filter(m => m.movement_type === 'SHIP_REVERSAL').length, 1);   // not returned → cost stays
+  assert.equal(w.cogs(), 6000);
+});
+
+test('J. partial return: only the pieces that came back are restored and reversed, at the recorded cost, per line', async () => {
+  const w = new World();
+  w.addStock('M1', 'أسود', 50, 600); w.addStock('M2', 'أبيض', 50, 400);
+  const lines = [...slot(10, 'M1', 'أسود'), ...slot(6, 'M2', 'أبيض')];
+  const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: lines, invoice: 9000 });
+  w.readyStock[0].cost_per_piece = 900;                            // the card's cost moves afterwards
+  await w.saveOrder({ id: o.id, status: CANCELED, slots: lines, invoice: 9000, disposition: 'returned_resalable', returnedQty: [7, 6] });
+  assert.equal(w.stock().physicalQty, 100 - 3);                    // only 3 pieces of M1 are still outside
+  assert.equal(w.cogs(), 3 * 600);                                 // cost of the 3 unreturned pieces stays, at the recorded cost
+  assert.deepEqual(w.movements.filter(m => m.movement_type === 'SHIP_REVERSAL').map(m => [m.model_code, m.qty, m.unit_cost]).sort(), [['M1', 7, 600], ['M2', 6, 400]]);
+  assert.equal(w.cancellations[0].restored_qty, 13);
+  // more pieces arrive later: only the difference is restored; repeating changes nothing
+  await w.saveOrder({ id: o.id, status: CANCELED, slots: lines, invoice: 9000, disposition: 'returned_resalable', returnedQty: [9, 6] });
+  assert.equal(w.stock().physicalQty, 100 - 1);
+  assert.equal(w.cogs(), 600);
+  const n = w.movements.length;
+  await w.saveOrder({ id: o.id, status: CANCELED, slots: lines, invoice: 9000, disposition: 'returned_resalable', returnedQty: [9, 6] });
+  assert.equal(w.movements.length, n);
+  await assert.rejects(() => w.saveOrder({ id: o.id, status: CANCELED, slots: lines, invoice: 9000, disposition: 'returned_resalable', returnedQty: [2, 6] }), /تقليل|مرتجع/);
+});
+
+test('J2. returned quantity is validated against what shipped', async () => {
+  const w = world();
+  const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: slot(10), invoice: 8500 });
+  await assert.rejects(() => w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, disposition: 'returned_resalable', returnedQty: [11] }), /غير صالحة/);
+  await assert.rejects(() => w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, disposition: 'returned_resalable', returnedQty: [-1] }), /غير صالحة/);
+  assert.equal(w.sales[0].order_status, NOT_PAID_OUT);
 });
 
 test('a cancelled order that still holds shipping-company money cannot be silently reopened to unpaid', async () => {

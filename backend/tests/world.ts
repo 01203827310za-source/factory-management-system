@@ -5,10 +5,10 @@ import type { Prisma } from '@prisma/client';
 import type { InventoryMovement, ModelProduction, OrderCancellation, ReadyStock, ReturnItem, Sale, ShippingCollection } from '@prisma/client';
 import { collectionDate, loadStockContext, syncCollections, syncShipMovements } from '../src/services/orderLedgers';
 import {
-  STATUS_CANCELED, computeStockPositions, increasingKeys, isStockDeducting, leavesStock, reservedSyncUpdates, saleSlots, validateShipment, valueStockRow,
+  STATUS_CANCELED, computeStockPositions, hasLineReturns, increasingKeys, isStockDeducting, outsideSlots, reservedSyncUpdates, validateShipment, valueStockRow,
   type CancelDisposition, type Slot,
 } from '../src/services/readyStockPositions';
-import { markReopened, recordCancellation, shippedSnapshot, updateDisposition, cancelledObligations, refundsByOrderNumber, refundsFor } from '../src/services/orderCancellation';
+import { computeUnreturned, markReopened, recordCancellation, shippedSnapshot, updateDisposition, cancelledObligations, refundsByOrderNumber, refundsFor } from '../src/services/orderCancellation';
 import { computeDashboardCashFlow, computeMoneyOwedToUs } from '../src/services/financialMetrics';
 import { costOfGoodsShipped, returnsCostCredit, type MovementRow } from '../src/services/inventoryMovements';
 import { FuzzyKeyIndex } from '../src/utils/textMatch';
@@ -121,6 +121,8 @@ export class World {
     /** Required when a SHIPPED order is cancelled: what happened to the goods. */
     disposition?: CancelDisposition;
     reason?: string;
+    /** Pieces of each line that came back resalable (default: all, when the disposition is returned_resalable). */
+    returnedQty?: number[];
   }): Promise<Sale> {
     const season = input.season ?? 1;
     const existing = input.id ? this.sales.find(s => s.id === input.id) : undefined;
@@ -142,14 +144,28 @@ export class World {
       mobile: '', warehouse: '', shipping_collected: 0, shipping_collected_date: null, created_at: new Date('2026-10-01T09:00:00Z'),
       model1_code: '', model1_qty: 0, model1_color: '', model2_code: '', model2_qty: 0, model2_color: '', model3_code: '', model3_qty: 0, model3_color: '',
       model4_code: '', model4_qty: 0, model4_color: '', model5_code: '', model5_qty: 0, model5_color: '', cancel_disposition: null,
+      model1_unreturned_qty: null, model2_unreturned_qty: null, model3_unreturned_qty: null, model4_unreturned_qty: null, model5_unreturned_qty: null,
     });
     // Same rule as the routes: «يتم التجهيز» is always accepted; goods leaving the factory must exist
     // and not be held for other orders (only checked where the shipped quantity goes UP).
     if (!input.legacy && isStockDeducting(input.status)) {
       const ctx = await loadStockContext(this.tx, season, existing?.id);
-      const oldShipped = existing && leavesStock(existing) ? saleSlots(existing) : [];
+      const oldShipped = existing ? outsideSlots(existing) : [];
       const problem = validateShipment(ctx, input.slots, increasingKeys(ctx, oldShipped, input.slots));
       if (problem) throw new Error(problem);
+    }
+    // per-line returns (same rule as the route): validated BEFORE anything is written
+    const lineQty = [1, 2, 3, 4, 5].map(i => (input.slots[i - 1]?.code ? input.slots[i - 1].qty : 0));
+    let unreturned: number[] | null = null;
+    let restoredQty = 0;
+    if (disposition && (cancellingShipped || (existing && hasLineReturns(existing) && (input.returnedQty !== undefined || disposition !== existing.cancel_disposition)))) {
+      const r = computeUnreturned(disposition, lineQty, input.returnedQty);
+      if ('error' in r) throw new Error(r.error);
+      if (!cancellingShipped && existing && r.unreturned.some((u, i) => u > ((([1, 2, 3, 4, 5].map(k => existing[`model${k}_unreturned_qty` as keyof Sale] as number | null))[i]) ?? lineQty[i]))) {
+        throw new Error('لا يمكن تقليل كمية مرتجع تم تسجيلها');
+      }
+      unreturned = r.unreturned;
+      restoredQty = r.returned.reduce((a, b) => a + b, 0);
     }
     const previousCached = row.shipping_collected;
     const storedDate = row.shipping_collected_date;
@@ -163,6 +179,8 @@ export class World {
       const s = input.slots[i - 1];
       Object.assign(row, { [`model${i}_code`]: s?.code ?? '', [`model${i}_qty`]: s?.qty ?? 0, [`model${i}_color`]: s?.color ?? '' });
     }
+    if (!willBeCancelled) for (let i = 1; i <= 5; i++) Object.assign(row, { [`model${i}_unreturned_qty`]: null });
+    else if (unreturned) unreturned.forEach((u, i) => Object.assign(row, { [`model${i + 1}_unreturned_qty`]: u }));
     if (!existing) this.sales.push(row);
 
     const date = collectionDate(input.date, storedDate);
@@ -170,14 +188,14 @@ export class World {
     if (collected > 0 && !row.shipping_collected_date) row.shipping_collected_date = date;
     if (input.status !== 'تم الصرف' && !willBeCancelled) row.shipping_collected_date = null;
     const shippedBefore = cancellingShipped ? await shippedSnapshot(this.tx, row.id) : { qty: 0, cost: 0 };
-    await syncShipMovements(this.tx, row, saleSlots(row), input.user);
+    await syncShipMovements(this.tx, row, input.user);
     if (willBeCancelled && !wasCancelled) {
       await recordCancellation(this.tx, {
         seasonId: season, sale: row, statusBefore: existing?.order_status ?? '', wasShipped: cancellingShipped, disposition,
-        reason: input.reason ?? '', snapshot: shippedBefore, user: input.user,
+        reason: input.reason ?? '', snapshot: shippedBefore, user: input.user, restoredQty,
       });
     } else if (willBeCancelled && wasCancelled && disposition !== oldDisposition) {
-      await updateDisposition(this.tx, row.id, disposition);
+      await updateDisposition(this.tx, row.id, disposition, hasLineReturns(row) ? restoredQty : undefined);
     } else if (!willBeCancelled && wasCancelled) {
       await markReopened(this.tx, row.id);
     }

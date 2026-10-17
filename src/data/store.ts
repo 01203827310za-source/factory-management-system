@@ -3,6 +3,7 @@
 // All functions are now ASYNC and call the backend
 // ============================================
 
+import { outsideSlots } from '../utils/orderStock';
 import {
   salesApi, expensesApi, readyStockApi, fabricApi, accessoriesApi,
   cuttingApi, modelProdApi, debtsApi, clientAccountsApi, returnsApi,
@@ -77,23 +78,13 @@ export const readyStockStore = {
 
     // Only deduct stock for dispatched/pending sales — NOT reservations or cancelled orders
     const totalSales: Record<string, number> = {};
-    sales
-      // shipped, or cancelled-after-shipping with the goods NOT back in sellable stock (same rule as the server)
-      .filter(s => s.order_status !== 'تم الحجز' && (s.order_status !== 'تم الإلغاء' || ['not_returned', 'returned_damaged'].includes(s.cancel_disposition ?? '')))
-      .forEach(s => {
-        [
-          { code: s.model1_code, qty: s.model1_qty, color: s.model1_color },
-          { code: s.model2_code, qty: s.model2_qty, color: s.model2_color },
-          { code: s.model3_code, qty: s.model3_qty, color: s.model3_color },
-          { code: s.model4_code, qty: s.model4_qty, color: s.model4_color },
-          { code: s.model5_code, qty: s.model5_qty, color: s.model5_color },
-        ].forEach(({ code, qty, color }) => {
-          if (code && qty > 0) {
-            const k = modelIndex.resolve([code, color || '']);
-            totalSales[k] = (totalSales[k] || 0) + qty;
-          }
-        });
+    // Pieces outside the sellable stock: shipped, or cancelled after shipping and NOT returned resalable (same rule as the server).
+    sales.forEach(s => {
+      outsideSlots(s).forEach(({ code, qty, color }) => {
+        const k = modelIndex.resolve([code, color || '']);
+        totalSales[k] = (totalSales[k] || 0) + qty;
       });
+    });
 
     const returnQty: Record<string, number> = {};
     returns_.forEach(r => {

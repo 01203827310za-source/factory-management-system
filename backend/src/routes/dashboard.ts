@@ -4,7 +4,7 @@ import { authenticate } from '../middleware/auth';
 import { FuzzyKeyIndex } from '../utils/textMatch';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
 import { computeDashboardCashFlow } from '../services/financialMetrics';
-import { STATUS_CANCELED, STATUS_RESERVED, computeStockPositions, holdsGoodsOutside, isStockDeducting, leavesStock, valueStockRow } from '../services/readyStockPositions';
+import { STATUS_CANCELED, STATUS_RESERVED, computeStockPositions, hasLineReturns, holdsGoodsOutside, isStockDeducting, leavesStock, outsideSlots, valueStockRow } from '../services/readyStockPositions';
 import { costOfGoodsShipped, returnsCostCredit, type MovementRow } from '../services/inventoryMovements';
 import { analyseShipments, findReceivableOverlap } from '../services/receivablesAudit';
 import { summarizeMissingStock } from '../services/missingStock';
@@ -123,13 +123,8 @@ router.get('/', async (req: Request, res: Response) => {
     sales
       .filter(s => leavesStock(s))
       .forEach(s => {
-        [
-          { code: s.model1_code, qty: s.model1_qty, color: s.model1_color },
-          { code: s.model2_code, qty: s.model2_qty, color: s.model2_color },
-          { code: s.model3_code, qty: s.model3_qty, color: s.model3_color },
-          { code: s.model4_code, qty: s.model4_qty, color: s.model4_color },
-          { code: s.model5_code, qty: s.model5_qty, color: s.model5_color },
-        ].forEach(({ code, qty, color }) => {
+        // pieces still outside the sellable stock (shipped, or cancelled-but-not-returned)
+        outsideSlots(s).forEach(({ code, qty, color }) => {
           if (code && qty > 0) { const k = modelIndex.resolve([code, color || '']); totalSalesQty[k] = (totalSalesQty[k] || 0) + qty; }
         });
       });
@@ -261,12 +256,21 @@ router.get('/', async (req: Request, res: Response) => {
     // valued at the historical cost recorded when they shipped; NOT part of stock value or current assets.
     const openCancellations = await prisma.orderCancellation.findMany({ where: { ...seasonWhere(seasonId), reopened_at: null } });
     const outside = { not_returned: { orders: 0, qty: 0, cost: 0 }, returned_damaged: { orders: 0, qty: 0, cost: 0 } };
+    const outsideSaleIds = openCancellations.map(c => c.sale_id).filter(sid => { const sl = saleById.get(sid); return !!sl && holdsGoodsOutside(sl); });
+    const outsideMovements = outsideSaleIds.length
+      ? await prisma.inventoryMovement.findMany({ where: { sale_id: { in: outsideSaleIds } } })
+      : [];
     openCancellations.forEach(c => {
       const sale = saleById.get(c.sale_id);
       if (!sale || !holdsGoodsOutside(sale) || !c.disposition) return;
-      const bucket = outside[c.disposition as 'not_returned' | 'returned_damaged'];
-      if (!bucket) return;
-      bucket.orders += 1; bucket.qty += c.goods_qty; bucket.cost += c.goods_cost;
+      // Orders cancelled before per-line returns existed keep the cost snapshot of the audit row; newer ones keep exactly
+      // the cost of the pieces that are still outside (cost ledger SHIP minus SHIP_REVERSAL for returned pieces).
+      const qty = hasLineReturns(sale) ? outsideSlots(sale).reduce((n, o) => n + o.qty, 0) : c.goods_qty;
+      const cost = hasLineReturns(sale) ? Math.max(0, costOfGoodsShipped(outsideMovements.filter(m => m.sale_id === sale.id))) : c.goods_cost;
+      // a resalable return with some pieces missing leaves the remainder "not returned"
+      const key = c.disposition === 'returned_damaged' ? 'returned_damaged' : 'not_returned';
+      const bucket = outside[key];
+      bucket.orders += 1; bucket.qty += qty; bucket.cost += cost;
     });
     const reservedOrdersCount = sales.filter(s => s.order_status === STATUS_RESERVED).length;
 

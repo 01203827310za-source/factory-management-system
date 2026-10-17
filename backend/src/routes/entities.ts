@@ -11,7 +11,7 @@ import { logAudit } from '../services/auditHelper';
 import { textsMatch, findBestMatch } from '../utils/textMatch';
 import { getSeasonId, seasonWhere, withSeason } from '../services/seasonContext';
 import { resyncReservations } from '../services/reservationSync';
-import { computeStockPositions, leavesStock } from '../services/readyStockPositions';
+import { computeStockPositions, leavesStock, outsideSlots } from '../services/readyStockPositions';
 import { outstandingShippingReceivable } from '../services/receivablesAudit';
 
 // Remove PaymentLog entries when a debt/client-account paid amount is reduced.
@@ -1390,13 +1390,7 @@ async function computeAvailable(seasonId: number, stock: { id: number; model_cod
 
   const totalSales = sales
     .filter(s => leavesStock(s))
-    .reduce((s, sale) => s + [
-      { code: sale.model1_code, qty: sale.model1_qty, color: sale.model1_color },
-      { code: sale.model2_code, qty: sale.model2_qty, color: sale.model2_color },
-      { code: sale.model3_code, qty: sale.model3_qty, color: sale.model3_color },
-      { code: sale.model4_code, qty: sale.model4_qty, color: sale.model4_color },
-      { code: sale.model5_code, qty: sale.model5_qty, color: sale.model5_color },
-    ].reduce((ss, { code, qty, color }) =>
+    .reduce((s, sale) => s + outsideSlots(sale).reduce((ss, { code, qty, color }) =>
       textsMatch(code, mc, 'model') && textsMatch(color || '', col, 'color') ? ss + qty : ss, 0), 0);
 
   const returnQty = returns_

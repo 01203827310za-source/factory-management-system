@@ -4,7 +4,7 @@ import {
   returnsApi,
   readyStockApi,
   marketersApi,
-  type SaleLedger,
+  type SaleLedger, type CancellationPreview,
   type CancelDisposition
 } from '../services/api';
 import type { Sale, ReturnItem } from '../types';
@@ -51,6 +51,10 @@ export default function Sales() {
   const [refundForm, setRefundForm] = useState({ kind: 'customer_refund' as 'customer_refund' | 'shipping_repayment', amount: 0, date: '', note: '' });
   const [refundKey, setRefundKey] = useState('');
   const [refunding, setRefunding] = useState(false);
+  // Cancellation form: server-computed preview, per-line pieces that came back, optional refunds paid right now.
+  const [preview, setPreview] = useState<CancellationPreview | null>(null);
+  const [returnedQty, setReturnedQty] = useState<number[]>([]);
+  const [refundNow, setRefundNow] = useState({ customer: 0, shipping: 0 });
 
   // Returns
   const [returnsModalOpen, setReturnsModalOpen] = useState(false);
@@ -149,6 +153,7 @@ readyStock.forEach((s: any) => {
     setCancelDisposition((sale.cancel_disposition as CancelDisposition | null | undefined) ?? '');
     setCancelReason('');
     setRefundKey(crypto.randomUUID());
+    setPreview(null); setReturnedQty([]); setRefundNow({ customer: 0, shipping: 0 });
     if (sale.order_status === 'تم الصرف' || sale.order_status === 'تم الإلغاء') salesApi.getLedger(sale.id).then(l => {
       setLedger(l);
       const o = l.obligations;
@@ -210,6 +215,19 @@ readyStock.forEach((s: any) => {
   const alreadyCancelled = !!editSale && editSale.order_status === 'تم الإلغاء';
   const obligations = alreadyCancelled ? ledger?.obligations ?? null : null;
 
+  // Load the server-computed amounts once the user selects «تم الإلغاء» (nothing here comes from the browser).
+  useEffect(() => {
+    if (!modalOpen || !editSale || form.order_status !== 'تم الإلغاء') return;
+    let live = true;
+    salesApi.getCancellationPreview(editSale.id).then(p => {
+      if (!live) return;
+      setPreview(p);
+      setReturnedQty(prev => (prev.length ? prev : p.lines.map(l => (p.already_cancelled ? l.returned_qty : l.shipped_qty))));
+    }).catch(() => { if (live) setPreview(null); });
+    return () => { live = false; };
+  }, [modalOpen, editSale?.id, form.order_status]);
+  const money = preview?.money;
+
   const handleRecordRefund = async () => {
     if (!editSale || refunding) return;
     if (!(refundForm.amount > 0)) { toast('error', 'أدخل مبلغ الرد'); return; }
@@ -242,6 +260,12 @@ readyStock.forEach((s: any) => {
       toast('error', 'حدّد حالة البضاعة المشحونة (رجعت وصالحة للبيع / لم ترجع / رجعت تالفة) قبل الإلغاء');
       return;
     }
+    if (form.order_status === 'تم الإلغاء' && preview) {
+      const bad = preview.lines.findIndex((l, i) => cancelDisposition === 'returned_resalable' && !(Number.isInteger(returnedQty[i]) && returnedQty[i] >= 0 && returnedQty[i] <= l.shipped_qty));
+      if (bad >= 0) { toast('error', `كمية المرتجع للصنف ${preview.lines[bad].code} يجب أن تكون بين 0 و ${preview.lines[bad].shipped_qty}`); return; }
+      if (refundNow.customer > 0 && money && refundNow.customer > money.customer_credit_due + 0.005) { toast('error', `المبلغ أكبر من العربون المتبقي للرد (${money.customer_credit_due} ج)`); return; }
+      if (refundNow.shipping > 0 && money && refundNow.shipping > money.shipping_collected + 0.005) { toast('error', `المبلغ أكبر من المحصّل المحتجز من شركة الشحن (${money.shipping_collected} ج)`); return; }
+    }
     if (form.order_status === 'تم الإلغاء' && editSale && editSale.order_status !== 'تم الإلغاء') {
       const msg = cancellingShipped
         ? 'سيتم إلغاء أوردر تم شحنه:\n• تُعكس حركات المخزون والتكلفة والإيراد والمستحق على شركة الشحن (مع بقاء السجل الأصلي).\n• المخزون يُضاف فقط إذا اخترت «رجعت وصالحة للبيع».\n• الفلوس التي استُلمت بالفعل (العربون / المحصّل من شركة الشحن) لن تُمحى من الكاش، وستبقى التزامًا حتى تسجّل رد فعلي.\n\nهل تريد المتابعة؟'
@@ -263,6 +287,10 @@ readyStock.forEach((s: any) => {
       shipping_collected_date: form.shipping_collected_date || undefined,
       cancel_disposition: form.order_status === 'تم الإلغاء' ? (cancelDisposition || undefined) : undefined,
       cancel_reason: form.order_status === 'تم الإلغاء' && cancelReason.trim() ? cancelReason.trim() : undefined,
+      cancel_returned_qty: form.order_status === 'تم الإلغاء' && cancelDisposition === 'returned_resalable' && returnedQty.length ? returnedQty : undefined,
+      refund_customer_now: form.order_status === 'تم الإلغاء' && refundNow.customer > 0 ? refundNow.customer : undefined,
+      repay_shipping_now: form.order_status === 'تم الإلغاء' && refundNow.shipping > 0 ? refundNow.shipping : undefined,
+      refund_key: form.order_status === 'تم الإلغاء' && (refundNow.customer > 0 || refundNow.shipping > 0) ? refundKey : undefined,
       row_number: sales.length + 1,
     };
     try {
@@ -694,6 +722,42 @@ await loadData();(returnForm);
                       <option value="returned_damaged">رجعت تالفة أو تحتاج فحصًا — لا تُضاف للمخزون الصالح للبيع</option>
                     </select>
                     {alreadyCancelled && <p className="text-xs text-gray-400 mt-1">عند وصول البضاعة فعليًا غيّر الحالة إلى «رجعت وصالحة للبيع» لتُضاف للمخزون (مرة واحدة).</p>}
+                  </div>
+                )}
+                {preview && cancelDisposition === 'returned_resalable' && (cancellingShipped || editSale.cancel_disposition) && (
+                  <div className="rounded-lg border border-gray-200 p-3 space-y-2">
+                    <p className="text-xs font-semibold text-gray-700">الكمية التي رجعت فعليًا وصالحة للبيع (لكل صنف)</p>
+                    {preview.lines.map((l, i) => (
+                      <div key={`${l.code}-${l.color}-${i}`} className="flex items-center justify-between gap-2 text-sm">
+                        <span>{l.code} {l.color && `— ${l.color}`} <span className="text-xs text-gray-400">(شُحن {l.shipped_qty}{l.recorded_unit_cost > 0 ? ` × ${l.recorded_unit_cost.toLocaleString('ar-EG')} ج` : ''})</span></span>
+                        <input type="number" min={0} max={l.shipped_qty} className="w-24 border rounded-lg px-2 py-1 text-sm" value={returnedQty[i] ?? l.shipped_qty}
+                          onChange={e => setReturnedQty(q => { const n = [...q]; n[i] = parseInt(e.target.value, 10) || 0; return n; })} />
+                      </div>
+                    ))}
+                    <p className="text-xs text-gray-400">ما لم يرجع يبقى خارج المخزون الصالح للبيع وتبقى تكلفته مسجلة حتى يرجع فعلًا.</p>
+                  </div>
+                )}
+                {money && (
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-1 text-sm">
+                    <p className="text-xs font-semibold text-gray-700">ملخص مالي محسوب من النظام</p>
+                    <div className="flex justify-between"><span>العربون المستلم</span><strong>{money.deposit_received.toLocaleString('ar-EG')} ج</strong></div>
+                    <div className="flex justify-between"><span>تم رده للعميل</span><span>{money.customer_refunded.toLocaleString('ar-EG')} ج</span></div>
+                    <div className="flex justify-between"><span>المتبقي للعميل</span><strong className="text-amber-700">{money.customer_credit_due.toLocaleString('ar-EG')} ج</strong></div>
+                    <div className="flex justify-between"><span>المحصّل من شركة الشحن</span><strong>{money.shipping_collected.toLocaleString('ar-EG')} ج</strong></div>
+                    <div className="flex justify-between"><span>مستحق على شركة الشحن (يُعكس بلا خروج كاش)</span><span>{money.outstanding_shipping_receivable.toLocaleString('ar-EG')} ج</span></div>
+                    {money.revenue_to_reverse > 0 && <div className="flex justify-between"><span>الإيراد الذي سيُعكس</span><span>{money.revenue_to_reverse.toLocaleString('ar-EG')} ج</span></div>}
+                    {preview.client_invoices.some(i => !i.reversed) && <p className="text-xs text-amber-700">سيُعكس أيضًا فاتورة حساب العميل المرتبطة بهذا الأوردر.</p>}
+                    {!alreadyCancelled && (money.customer_credit_due > 0 || money.shipping_collected > 0) && (
+                      <div className="grid grid-cols-2 gap-2 pt-2">
+                        <label className="text-xs text-gray-600">رد عربون الآن (اختياري — يُخصم من الكاش)
+                          <input type="number" min={0} max={money.customer_credit_due} className={inputClass} value={refundNow.customer || ''} onChange={e => setRefundNow(r => ({ ...r, customer: parseFloat(e.target.value) || 0 }))} />
+                        </label>
+                        <label className="text-xs text-gray-600">رد لشركة الشحن الآن (اختياري)
+                          <input type="number" min={0} max={money.shipping_collected} className={inputClass} value={refundNow.shipping || ''} onChange={e => setRefundNow(r => ({ ...r, shipping: parseFloat(e.target.value) || 0 }))} />
+                        </label>
+                        <p className="col-span-2 text-xs text-gray-400">اترك الحقلين فارغين إن لم يُدفع شيء فعليًا — لن يُسجَّل أي رد.</p>
+                      </div>
+                    )}
                   </div>
                 )}
                 {!alreadyCancelled && (

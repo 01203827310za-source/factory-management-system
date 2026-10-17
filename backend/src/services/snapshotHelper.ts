@@ -1,6 +1,6 @@
 import prisma from '../lib/prisma';
 import { FuzzyKeyIndex } from '../utils/textMatch';
-import { holdsCollectedCash, leavesStock, valueStockRow } from '../services/readyStockPositions';
+import { holdsCollectedCash, leavesStock, outsideSlots, valueStockRow } from '../services/readyStockPositions';
 
 export type SnapshotData = {
   total_current_assets: number;
@@ -82,13 +82,7 @@ export async function computeSnapshot(seasonId: number): Promise<SnapshotData> {
   sales
     .filter(s => leavesStock(s))
     .forEach(s => {
-      [
-        { code: s.model1_code, qty: s.model1_qty, color: s.model1_color },
-        { code: s.model2_code, qty: s.model2_qty, color: s.model2_color },
-        { code: s.model3_code, qty: s.model3_qty, color: s.model3_color },
-        { code: s.model4_code, qty: s.model4_qty, color: s.model4_color },
-        { code: s.model5_code, qty: s.model5_qty, color: s.model5_color },
-      ].forEach(({ code, qty, color }) => {
+      outsideSlots(s).forEach(({ code, qty, color }) => {
         if (code && qty > 0) {
           const k = modelIndex.resolve([code, color || '']);
           totalSalesQty[k] = (totalSalesQty[k] || 0) + qty;

@@ -142,12 +142,12 @@ async function main() {
   const out = await dash();
   check('3b. not returned → stock stays 90 (never claims the goods are in the warehouse)', (await stockQty('M1', 'أسود')) === 90 && out.stock_value === 90 * 600 + 50 * 400, { stock: await stockQty('M1', 'أسود'), value: out.stock_value });
   check('3b. goods tracked outside: 10 pcs at historical cost 6,000', out.cancelled_orders?.goods_outside?.qty === 10 && out.cancelled_orders?.goods_outside?.cost === 6000 && out.cancelled_orders?.goods_outside?.not_returned?.orders === 1, out.cancelled_orders);
-  check('3b. COGS reversed, receivable gone', out.cogs === 0 && out.money_owed_to_us === 0);
+  check('3b. receivable gone, but the cost of the goods that did NOT come back stays recognised (COGS 6,000)', out.cogs === 6000 && out.money_owed_to_us === 0, { cogs: out.cogs });
   await api('PUT', `/sales/${o.id}`, payload({ order_number: o.order_number, order_status: CANCELED, cancel_disposition: 'returned_resalable' }));
   db = await rows(o.id);
   check('3b. goods later received → disposition updated: stock restored once, no ledger duplication', (await stockQty('M1', 'أسود')) === 100 && db.movements.length === 2 && db.cancellations.length === 1 && db.cancellations[0].disposition === 'returned_resalable', db.cancellations);
   const outAfter = await dash();
-  check('3b. nothing outside any more', outAfter.cancelled_orders?.goods_outside?.qty === 0, outAfter.cancelled_orders);
+  check('3b. nothing outside any more, COGS reversed once at the recorded cost', outAfter.cancelled_orders?.goods_outside?.qty === 0 && outAfter.cogs === 0 && db.movements[1].unit_cost === 600, outAfter.cancelled_orders);
 
   // ───────── 4. cancel after FULL collection ─────────
   await reset();
@@ -223,6 +223,63 @@ async function main() {
   check('10. nothing changed by the rejected attempts', (await rows(o.id)).sale?.order_status === PAID_OUT);
   await prisma.financialSnapshot.deleteMany({ where: { season_id: second.id } });
   await prisma.season.delete({ where: { id: second.id } });
+
+  // ───────── L. Dashboard vs Financial Center agree after a partial cancellation ─────────
+  await reset();
+  o = (await api('POST', '/sales', payload({ order_status: NOT_PAID_OUT }))).body;
+  await api('PUT', `/sales/${o.id}`, payload({ order_number: o.order_number, order_status: CANCELED, cancel_disposition: 'returned_resalable', cancel_returned_qty: [6] }));
+  const dL = await dash();
+  const fcL = (await api('GET', '/financial-center')).body;
+  check('L. Dashboard and Financial Center agree on stock value (96 × 600 + 50 × 400) and on receivables after a partial cancellation', dL.stock_value === 96 * 600 + 50 * 400 && fcL.stock_value === dL.stock_value && fcL.money_owed_to_us === dL.money_owed_to_us, { dash: dL.stock_value, fc: fcL.stock_value });
+
+  // ───────── J. partial return (per line) ─────────
+  await reset();
+  const jl: Line[] = [{ code: 'M1', qty: 10, color: 'أسود' }, { code: 'M2', qty: 6, color: 'أبيض' }];
+  o = (await api('POST', '/sales', payload({ order_status: NOT_PAID_OUT, invoice_value: 9000, lines: jl }))).body;
+  const jp = await api('GET', `/sales/${o.id}/cancellation-preview`);
+  check('J. preview (server-computed): lines with shipped qty and recorded unit cost; receivable 9,000', jp.status === 200 && jp.body.lines.length === 2 && jp.body.lines[0].recorded_unit_cost === 600 && jp.body.money.outstanding_shipping_receivable === 9000, jp.body);
+  const jbad = await api('PUT', `/sales/${o.id}`, payload({ order_number: o.order_number, order_status: CANCELED, invoice_value: 9000, lines: jl, cancel_disposition: 'returned_resalable', cancel_returned_qty: [11, 6] }));
+  check('J. returned qty above what shipped is refused (400) and nothing changes', jbad.status === 400 && (await rows(o.id)).sale?.order_status === NOT_PAID_OUT && (await rows(o.id)).movements.length === 2, jbad);
+  const jr = await api('PUT', `/sales/${o.id}`, payload({ order_number: o.order_number, order_status: CANCELED, invoice_value: 9000, lines: jl, cancel_disposition: 'returned_resalable', cancel_returned_qty: [7, 6] }));
+  db = await rows(o.id);
+  const jd = await dash();
+  check('J. partial return: 7 of 10 (M1) and 6 of 6 (M2) restored; 3 pieces stay outside', jr.status === 200 && (await stockQty('M1', 'أسود')) === 97 && (await stockQty('M2', 'أبيض')) === 50, jr.body);
+  check('J. COGS keeps the 3 unreturned pieces at their recorded cost (1,800); goods outside = 3 pcs / 1,800', jd.cogs === 1800 && jd.cancelled_orders?.goods_outside?.qty === 3 && jd.cancelled_orders?.goods_outside?.cost === 1800, { cogs: jd.cogs, out: jd.cancelled_orders?.goods_outside });
+  check('J. the reversal rows reference the original cost per line; originals kept', db.movements.filter(m => m.movement_type === 'SHIP').length === 2 && db.movements.filter(m => m.movement_type === 'SHIP_REVERSAL').map(m => [m.model_code, m.qty, m.unit_cost]).sort().join('|') === 'M1,7,600|M2,6,400', db.movements);
+  check('J. audit row stores restored_qty 13', db.cancellations[0].restored_qty === 13, db.cancellations[0]);
+  await api('PUT', `/sales/${o.id}`, payload({ order_number: o.order_number, order_status: CANCELED, invoice_value: 9000, lines: jl, cancel_disposition: 'returned_resalable', cancel_returned_qty: [10, 6] }));
+  check('J. remaining pieces arrive later → restored once (stock 100), COGS 0', (await stockQty('M1', 'أسود')) === 100 && (await dash()).cogs === 0);
+  const nMov = (await rows(o.id)).movements.length;
+  await api('PUT', `/sales/${o.id}`, payload({ order_number: o.order_number, order_status: CANCELED, invoice_value: 9000, lines: jl, cancel_disposition: 'returned_resalable', cancel_returned_qty: [10, 6] }));
+  check('J. repeating the same save adds no rows', (await rows(o.id)).movements.length === nMov);
+
+  // ───────── refund paid together with the cancellation — atomic ─────────
+  await reset();
+  o = (await api('POST', '/sales', payload({ order_status: NOT_PAID_OUT, deposit_paid: 1000 }))).body;
+  const beforeAtomic = JSON.stringify(await rows(o.id));
+  const tooMuch = await api('PUT', `/sales/${o.id}`, payload({ order_number: o.order_number, order_status: CANCELED, deposit_paid: 1000, cancel_disposition: 'returned_resalable', refund_customer_now: 5000, refund_key: 'e2e-atomic-refund-1' }));
+  check('ATOMIC. refunding more than the deposit inside the cancel save is refused (400)', tooMuch.status === 400, tooMuch);
+  check('ATOMIC. …and the WHOLE cancellation rolled back: status, movements, cancellation rows, refunds unchanged', JSON.stringify(await rows(o.id)) === beforeAtomic && (await prisma.returnItem.count({ where: { order_number: o.order_number } })) === 0 && (await stockQty('M1', 'أسود')) === 90);
+  const ok = await api('PUT', `/sales/${o.id}`, payload({ order_number: o.order_number, order_status: CANCELED, deposit_paid: 1000, cancel_disposition: 'returned_resalable', refund_customer_now: 400, refund_key: 'e2e-atomic-refund-2' }));
+  const okDash = await dash();
+  check('ATOMIC. a valid refund-now: cancelled + refund recorded together; cash 1,000 → 600; 600 still owed', ok.status === 200 && okDash.cash_on_hand === 600 && okDash.cancelled_orders?.customer_credit_due === 600, { cash: okDash.cash_on_hand, c: okDash.cancelled_orders });
+  await api('PUT', `/sales/${o.id}`, payload({ order_number: o.order_number, order_status: CANCELED, deposit_paid: 1000, cancel_disposition: 'returned_resalable', refund_customer_now: 400, refund_key: 'e2e-atomic-refund-2' }));
+  check('ATOMIC. the same request repeated refunds nothing twice (cash still 600)', (await dash()).cash_on_hand === 600 && (await prisma.returnItem.count({ where: { order_number: o.order_number } })) === 1);
+  check('ATOMIC. audit row records the refund paid (400)', (await rows(o.id)).cancellations[0].refund_customer_paid === 400);
+
+  // ───────── client-account invoice of the cancelled order is reversed once ─────────
+  await reset();
+  const acct = await prisma.clientAccount.create({ data: { season_id: (await prisma.sale.findFirst({ select: { season_id: true } }))?.season_id ?? (await prisma.season.findFirst({ where: { is_active: true } }))!.id, date: '2026-10-05', client_name: 'عميل آجل', total_amount: 3000, remaining: 3000 } });
+  o = (await api('POST', '/sales', payload({ order_status: PREPARED, order_number: 'ACC-1' }))).body;
+  const inv = await prisma.clientAccountInvoice.create({ data: { season_id: acct.season_id, account_id: acct.id, date: '2026-10-05', order_number: 'ACC-1', amount: 3000 } });
+  await api('PUT', `/sales/${o.id}`, payload({ order_number: 'ACC-1', order_status: CANCELED }));
+  await api('PUT', `/sales/${o.id}`, payload({ order_number: 'ACC-1', order_status: CANCELED }));
+  const invs = await prisma.clientAccountInvoice.findMany({ where: { account_id: acct.id }, orderBy: { id: 'asc' } });
+  const acctAfter = await prisma.clientAccount.findUnique({ where: { id: acct.id } });
+  check('INVOICE. one negative reversal row referencing the original; original kept; account balance reduced once', invs.length === 2 && invs[1].amount === -3000 && invs[1].notes.includes(`[reversal-of:${inv.id}]`) && acctAfter?.total_amount === 0 && acctAfter?.remaining === 0, { invs, acctAfter });
+  check('INVOICE. cancellation audit row links the invoice', JSON.parse((await rows(o.id)).cancellations[0].linked_invoice_ids).includes(inv.id));
+  await prisma.clientAccountInvoice.deleteMany({ where: { account_id: acct.id } }); await prisma.clientAccount.delete({ where: { id: acct.id } });
+
 
   console.log(failed ? `\n${failed} FAILED` : '\nall passed');
   await prisma.$disconnect();

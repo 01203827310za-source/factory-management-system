@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate } from '../middleware/auth';
 import { computeFinancialSummary } from '../services/financialMetrics';
-import { holdsCollectedCash, leavesStock, valueStockRow } from '../services/readyStockPositions';
+import { holdsCollectedCash, leavesStock, outsideSlots, valueStockRow } from '../services/readyStockPositions';
 import { FuzzyKeyIndex } from '../utils/textMatch';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
 
@@ -42,12 +42,8 @@ function computeCapitalSnapshot(db: AllData, upToDate: string) {
 
   const soldQty: Record<string, number> = {};
   sales.filter(s => sd(s) <= upToDate && leavesStock(s)).forEach(s => {
-    [{ c: s.model1_code, q: s.model1_qty, col: s.model1_color },
-     { c: s.model2_code, q: s.model2_qty, col: s.model2_color },
-     { c: s.model3_code, q: s.model3_qty, col: s.model3_color },
-     { c: s.model4_code, q: s.model4_qty, col: s.model4_color },
-     { c: s.model5_code, q: s.model5_qty, col: s.model5_color }].forEach(({ c, q, col }) => {
-      if (c && q > 0) { const k = modelIndex.resolve([c, col || '']); soldQty[k] = (soldQty[k] || 0) + q; }
+    outsideSlots(s).forEach(({ code: c, qty: q, color: col }) => {
+      const k = modelIndex.resolve([c, col || '']); soldQty[k] = (soldQty[k] || 0) + q;
     });
   });
 
@@ -148,12 +144,8 @@ router.get('/', async (req: Request, res: Response) => {
 
     const soldQtyAll: Record<string, number> = {};
     sales.filter(s => leavesStock(s)).forEach(s => {
-      [{ c: s.model1_code, q: s.model1_qty, col: s.model1_color },
-       { c: s.model2_code, q: s.model2_qty, col: s.model2_color },
-       { c: s.model3_code, q: s.model3_qty, col: s.model3_color },
-       { c: s.model4_code, q: s.model4_qty, col: s.model4_color },
-       { c: s.model5_code, q: s.model5_qty, col: s.model5_color }].forEach(({ c, q, col }) => {
-        if (c && q > 0) { const k = modelIndexAll.resolve([c, col || '']); soldQtyAll[k] = (soldQtyAll[k] || 0) + q; }
+      outsideSlots(s).forEach(({ code: c, qty: q, color: col }) => {
+        const k = modelIndexAll.resolve([c, col || '']); soldQtyAll[k] = (soldQtyAll[k] || 0) + q;
       });
     });
 

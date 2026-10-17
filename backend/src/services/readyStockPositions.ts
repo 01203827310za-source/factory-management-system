@@ -34,12 +34,70 @@ const OUTSIDE_DISPOSITIONS: readonly string[] = ['not_returned', 'returned_damag
 
 type StatusAndDisposition = { order_status: string; cancel_disposition?: string | null };
 
-/** Cancelled after shipping, but the goods are NOT back in sellable stock (with the customer / carrier, or damaged). */
-export const holdsGoodsOutside = (s: StatusAndDisposition) =>
-  s.order_status === STATUS_CANCELED && !!s.cancel_disposition && OUTSIDE_DISPOSITIONS.includes(s.cancel_disposition);
+type SaleOutsideFields = StatusAndDisposition & Partial<Pick<Sale,
+  'model1_code' | 'model1_qty' | 'model1_color' | 'model2_code' | 'model2_qty' | 'model2_color' |
+  'model3_code' | 'model3_qty' | 'model3_color' | 'model4_code' | 'model4_qty' | 'model4_color' |
+  'model5_code' | 'model5_qty' | 'model5_color' |
+  'model1_unreturned_qty' | 'model2_unreturned_qty' | 'model3_unreturned_qty' | 'model4_unreturned_qty' | 'model5_unreturned_qty'>>;
+
+/** True when the order was cancelled under the per-line rule (all five unreturned columns were written). */
+export const hasLineReturns = (s: SaleOutsideFields) =>
+  s.model1_unreturned_qty != null || s.model2_unreturned_qty != null || s.model3_unreturned_qty != null ||
+  s.model4_unreturned_qty != null || s.model5_unreturned_qty != null;
+
+/**
+ * Pieces of this order that are OUTSIDE the sellable stock right now.
+ *   • shipped (any shipped status)            → every piece
+ *   • cancelled after shipping, per-line rule → the unreturned pieces of each line (returned & resalable ones are back)
+ *   • cancelled after shipping, older rows    → whole order unless it was marked returned & resalable
+ *   • everything else (reserved, never shipped, legacy cancelled with no disposition) → nothing
+ */
+export function outsideSlots(s: SaleOutsideFields): Slot[] {
+  const all = saleSlots({
+    model1_code: s.model1_code ?? '', model1_qty: s.model1_qty ?? 0, model1_color: s.model1_color ?? '',
+    model2_code: s.model2_code ?? '', model2_qty: s.model2_qty ?? 0, model2_color: s.model2_color ?? '',
+    model3_code: s.model3_code ?? '', model3_qty: s.model3_qty ?? 0, model3_color: s.model3_color ?? '',
+    model4_code: s.model4_code ?? '', model4_qty: s.model4_qty ?? 0, model4_color: s.model4_color ?? '',
+    model5_code: s.model5_code ?? '', model5_qty: s.model5_qty ?? 0, model5_color: s.model5_color ?? '',
+  });
+  if (isStockDeducting(s.order_status)) return all;
+  if (s.order_status !== STATUS_CANCELED || !s.cancel_disposition) return [];
+
+  if (!hasLineReturns(s)) {
+    return OUTSIDE_DISPOSITIONS.includes(s.cancel_disposition) ? all : [];
+  }
+  const unreturned = [s.model1_unreturned_qty, s.model2_unreturned_qty, s.model3_unreturned_qty, s.model4_unreturned_qty, s.model5_unreturned_qty];
+  const lines = [
+    { code: s.model1_code ?? '', qty: s.model1_qty ?? 0, color: s.model1_color ?? '' },
+    { code: s.model2_code ?? '', qty: s.model2_qty ?? 0, color: s.model2_color ?? '' },
+    { code: s.model3_code ?? '', qty: s.model3_qty ?? 0, color: s.model3_color ?? '' },
+    { code: s.model4_code ?? '', qty: s.model4_qty ?? 0, color: s.model4_color ?? '' },
+    { code: s.model5_code ?? '', qty: s.model5_qty ?? 0, color: s.model5_color ?? '' },
+  ];
+  return lines
+    .map((l, i) => ({ code: l.code, color: l.color, qty: Math.min(l.qty, Math.max(0, unreturned[i] ?? 0)) }))
+    .filter(l => l.code && l.qty > 0);
+}
+
+/** Cancelled after shipping, but some goods are NOT back in sellable stock (with the customer / carrier, or damaged). */
+export const holdsGoodsOutside = (s: SaleOutsideFields) =>
+  s.order_status === STATUS_CANCELED && outsideSlots(s).length > 0;
 
 /** The order's goods count as OUT of sellable stock (shipped, or cancelled-but-not-back). */
-export const leavesStock = (s: StatusAndDisposition) => isStockDeducting(s.order_status) || holdsGoodsOutside(s);
+export const leavesStock = (s: SaleOutsideFields) => isStockDeducting(s.order_status) || holdsGoodsOutside(s);
+
+/**
+ * Pieces whose COST stays recognised in the cost ledger (cost of goods sold):
+ *   • shipped orders → everything shipped
+ *   • cancelled under the per-line rule → only the pieces that did NOT come back (their cost is a real loss until they do)
+ *   • older cancellations / never shipped → nothing (their ledger was reversed in full when they were cancelled)
+ * The cost of returned, resalable pieces is reversed at the cost recorded when they shipped.
+ */
+export function costSlots(s: SaleOutsideFields): Slot[] {
+  if (isStockDeducting(s.order_status)) return outsideSlots(s);
+  if (s.order_status === STATUS_CANCELED && s.cancel_disposition && hasLineReturns(s)) return outsideSlots(s);
+  return [];
+}
 
 /**
  * Money received from the shipping company stays real cash until it is actually repaid: a cancelled
@@ -159,7 +217,7 @@ export function computeStockPositions(
 
   const sold = new Map<string, number>();
   input.sales.filter(s => counted(s) && leavesStock(s)).forEach(s => {
-    saleSlots(s).forEach(m => { const k = keyOf(m.code, m.color); sold.set(k, (sold.get(k) || 0) + m.qty); });
+    outsideSlots(s).forEach(m => { const k = keyOf(m.code, m.color); sold.set(k, (sold.get(k) || 0) + m.qty); });
   });
 
   const returned = new Map<string, number>();

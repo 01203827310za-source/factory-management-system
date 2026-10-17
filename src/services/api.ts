@@ -164,7 +164,11 @@ export const salesApi = {
   getAll: () => get<SaleRecord[]>('/sales'),
   getLedger: (id: number) => get<SaleLedger>(`/sales/${id}/ledger`),
   add: (data: Omit<SaleRecord, 'id' | 'created_at'>) => post<SaleRecord & { collection_difference: number; cancellation?: CancellationSummary | null }>('/sales', data),
-  update: (id: number, data: Partial<SaleRecord> & { cancel_reason?: string }) =>
+  getCancellationPreview: (id: number) => get<CancellationPreview>(`/sales/${id}/cancellation-preview`),
+  update: (id: number, data: Partial<SaleRecord> & {
+    cancel_reason?: string; cancel_returned_qty?: number[];
+    refund_customer_now?: number; repay_shipping_now?: number; refund_key?: string; refund_date?: string;
+  }) =>
     put<SaleRecord & { collection_difference: number; cancellation?: CancellationSummary | null }>(`/sales/${id}`, data),
   // Record the REAL refund / repayment for a cancelled order (cancelling alone never moves cash).
   recordRefund: (id: number, input: { kind: 'customer_refund' | 'shipping_repayment'; amount: number; date?: string; note?: string; idempotency_key: string }) =>
@@ -195,6 +199,11 @@ export type SaleRecord = {
   shipping_number: string;
   order_status: 'تم الصرف' | 'لم يتم الصرف' | 'حساب عميل' | 'تم الحجز' | 'تم الإلغاء';
   cancel_disposition?: 'returned_resalable' | 'not_returned' | 'returned_damaged' | null;
+  model1_unreturned_qty?: number | null;
+  model2_unreturned_qty?: number | null;
+  model3_unreturned_qty?: number | null;
+  model4_unreturned_qty?: number | null;
+  model5_unreturned_qty?: number | null;
   /** «يتم التجهيز» orders only: units really held in stock vs still to be produced / purchased. */
   fulfillment?: {
     requested: number; reserved: number; pending: number;
@@ -1007,6 +1016,18 @@ export interface ReceivablesAudit {
 export type CancelDisposition = 'returned_resalable' | 'not_returned' | 'returned_damaged';
 export interface CancellationSummary {
   goods_qty: number; goods_cost: number; disposition: CancelDisposition | null; deposit_held: number; collected_held: number;
+}
+/** Everything the cancel form shows — computed by the server from the database. */
+export interface CancellationPreview {
+  sale_id: number; order_number: string; client: string; status: string; already_cancelled: boolean; shipped: boolean;
+  cancel_disposition: CancelDisposition | null;
+  lines: { code: string; color: string; shipped_qty: number; outside_qty: number; returned_qty: number; recorded_unit_cost: number }[];
+  money: {
+    invoice_value: number; deposit_received: number; customer_refunded: number; customer_credit_due: number;
+    shipping_collected: number; shipping_repayment_due: number; outstanding_shipping_receivable: number; revenue_to_reverse: number;
+  };
+  cost: { recorded_cost_total: number; has_cost_record: boolean };
+  client_invoices: { id: number; account_id: number; amount: number; reversed: boolean }[];
 }
 /** What a cancelled order still owes back: real cash that has not been refunded / repaid yet. */
 export interface CancelledObligations { customer_credit_due: number; customer_refunded: number; shipping_repayment_due: number }

@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
-import { holdsCollectedCash } from '../services/readyStockPositions';
+import { holdsCollectedCash, leavesStock, outsideSlots } from '../services/readyStockPositions';
 import { authenticate } from '../middleware/auth';
 import { FuzzyKeyIndex } from '../utils/textMatch';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
@@ -73,16 +73,12 @@ router.get('/', async (req: Request, res: Response) => {
       newProd[key] = (newProd[key] || 0) + mp.qty_received;
     });
     const totalSalesQty: Record<string, number> = {};
-    sales.forEach(s => {
-      [{ code: s.model1_code, qty: s.model1_qty, color: s.model1_color },
-       { code: s.model2_code, qty: s.model2_qty, color: s.model2_color },
-       { code: s.model3_code, qty: s.model3_qty, color: s.model3_color },
-       { code: s.model4_code, qty: s.model4_qty, color: s.model4_color },
-       { code: s.model5_code, qty: s.model5_qty, color: s.model5_color }].forEach(({ code, qty, color }) => {
-        if (code && qty > 0) {
-          const key = modelIndex.resolve([code, color || '']);
-          totalSalesQty[key] = (totalSalesQty[key] || 0) + qty;
-        }
+    // Only pieces that are really outside the sellable stock count as shipped (same rule as the Dashboard):
+    // reservations, never-shipped cancellations and cancelled-and-returned goods do NOT reduce stock.
+    sales.filter(s => leavesStock(s)).forEach(s => {
+      outsideSlots(s).forEach(({ code, qty, color }) => {
+        const key = modelIndex.resolve([code, color || '']);
+        totalSalesQty[key] = (totalSalesQty[key] || 0) + qty;
       });
     });
     const returnQty: Record<string, number> = {};

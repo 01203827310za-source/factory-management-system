@@ -166,6 +166,15 @@ model Sale {
   //   returned_damaged   → back in the building but not sellable (inspection)
   // NULL for never-shipped cancellations and for orders cancelled before this column existed.
   cancel_disposition String?
+  // Cancellation of a shipped order, per order line: pieces that are STILL OUTSIDE the sellable stock
+  // (not returned / damaged). NULL = the order was cancelled before this column existed (the whole-order
+  // disposition then decides, and the shipped cost was fully reversed). Non-NULL (all five set) = the
+  // cost of exactly these pieces stays recognised until they come back resalable.
+  model1_unreturned_qty Int?
+  model2_unreturned_qty Int?
+  model3_unreturned_qty Int?
+  model4_unreturned_qty Int?
+  model5_unreturned_qty Int?
   collections        ShippingCollection[]
   movements          InventoryMovement[]
   cancellations      OrderCancellation[]
@@ -712,6 +721,12 @@ model OrderCancellation {
   collected_held   Float     @default(0)      // shipping-company money still held at cancellation (real cash)
   linked_collection_ids String @default("[]") // JSON ids of shipping_collections rows of this order
   linked_movement_ids   String @default("[]") // JSON ids of inventory_movements rows (originals + reversals)
+  restored_qty          Int    @default(0)    // pieces put back into sellable stock by this cancellation
+  refund_customer_paid  Float  @default(0)    // customer refund actually paid in the same save
+  repaid_shipping       Float  @default(0)    // shipping-company repayment actually paid in the same save
+  revenue_reversed      Float  @default(0)    // invoice value removed from recognised sales
+  receivable_reversed   Float  @default(0)    // outstanding shipping receivable removed
+  linked_invoice_ids    String @default("[]") // JSON ids of client-account invoices reversed
   created_by       String    @default("")
   created_at       DateTime  @default(now())
   reopened_at      DateTime?

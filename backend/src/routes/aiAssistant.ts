@@ -15,7 +15,7 @@ import { authenticate } from '../middleware/auth';
 import { calcEmployeePayroll, round2 } from '../services/payrollCalc';
 import { FuzzyKeyIndex } from '../utils/textMatch';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
-import { holdsCollectedCash, leavesStock, valueStockRow } from '../services/readyStockPositions';
+import { holdsCollectedCash, leavesStock, outsideSlots, valueStockRow } from '../services/readyStockPositions';
 
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
 
@@ -258,14 +258,9 @@ async function gatherSnapshot(seasonId: number) {
   sales
     .filter(s => leavesStock(s))
     .forEach(s => {
-      [1, 2, 3, 4, 5].forEach(i => {
-        const code  = s[`model${i}_code`  as keyof typeof s] as string;
-        const qty   = s[`model${i}_qty`   as keyof typeof s] as number;
-        const color = s[`model${i}_color` as keyof typeof s] as string;
-        if (code && qty > 0) {
-          const k = modelIndex.resolve([code, color || '']);
-          totalSalesQty[k] = (totalSalesQty[k] || 0) + qty;
-        }
+      outsideSlots(s).forEach(({ code, qty, color }) => {
+        const k = modelIndex.resolve([code, color || '']);
+        totalSalesQty[k] = (totalSalesQty[k] || 0) + qty;
       });
     });
 

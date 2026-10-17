@@ -14,6 +14,7 @@
     "typecheck:tests": "tsc -p tests",
     "test:e2e": "ts-node --transpile-only tests/integration/order-status.e2e.ts",
     "test:e2e:cancel": "ts-node --transpile-only tests/integration/cancellation.e2e.ts",
+    "audit:cancellations": "ts-node --transpile-only scripts/audit-cancellations.ts",
     "audit:receivables": "ts-node --transpile-only scripts/audit-receivables.ts",
     "postinstall": "prisma generate"
   },
