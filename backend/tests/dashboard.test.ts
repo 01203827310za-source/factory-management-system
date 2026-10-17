@@ -295,38 +295,27 @@ test('Dashboard cash: each season has its own cash', async () => {
 });
 
 // ───────────── cancelled orders on the Dashboard ─────────────
-test('Dashboard cancellation: held cash, obligations and goods outside the building are shown; none of it leaks into assets', async () => {
+test('Dashboard cancellation: the order leaves cash, receivables, liabilities and COGS; its stock is back', async () => {
   const w = new World();
   w.addStock('M1', 'أسود', 100, 600);
   const o = await w.saveOrder({ order_number: 'X-1', status: PAID_OUT, slots: [M1], invoice: 8500, deposit: 1000, collected: 7500, date: '2026-10-05' });
   const before = await callDashboard(dataOf(w), 1);
-  await w.saveOrder({ id: o.id, status: 'تم الإلغاء', slots: [M1], invoice: 8500, deposit: 1000, disposition: 'not_returned' });
+  assert.equal(before.cash_on_hand, 8500);
+  await w.saveOrder({ id: o.id, status: 'تم الإلغاء', slots: [M1], invoice: 8500, deposit: 1000 });
   const d = await callDashboard(dataOf(w), 1);
-  assert.equal(d.cash_on_hand, before.cash_on_hand);                           // cancelling is not a refund: cash unchanged
-  assert.equal(d.cash_on_hand, 8500);
-  assert.deepEqual([d.cancelled_orders.count, d.cancelled_orders.customer_credit_due, d.cancelled_orders.shipping_repayment_due], [1, 1000, 7500]);
-  assert.equal(d.advances_on_canceled_orders, 1000);
-  assert.equal(d.shipping_repayment_due, 7500);
-  assert.deepEqual([d.cancelled_orders.goods_outside.qty, d.cancelled_orders.goods_outside.cost], [10, 6000]);   // at the historical cost
-  assert.equal(d.stock_value, 90 * 600);                                        // the 10 pcs are NOT claimed as stock
-  assert.equal(d.money_owed_to_us, 0);                                          // no receivable on a cancelled order
-  assert.equal(d.total_current_assets, 8500 + 90 * 600);                        // cash held + real stock only (outside goods excluded)
+  assert.equal(d.cash_on_hand, 0);                                              // deposit + collection reversed with the order
+  assert.deepEqual([d.cancelled_orders.count, d.cancelled_orders.customer_credit_due, d.cancelled_orders.shipping_repayment_due], [1, 0, 0]);
+  assert.equal(d.advances_on_canceled_orders, 0);
+  assert.equal(d.shipping_repayment_due, 0);
+  assert.equal(d.cancelled_orders.goods_outside.qty, 0);
+  assert.equal(d.stock_value, 100 * 600);                                       // the whole order is back in stock
+  assert.equal(d.money_owed_to_us, 0);
+  assert.equal(d.cogs, 0);
+  assert.equal(d.recognized_sales, 0);
+  assert.equal(d.total_current_assets, 100 * 600);
   assert.equal(d.assets_reconciliation.reconciled, true);
 });
 
-test('Dashboard cancellation: goods returned resalable are back in stock; refunds reduce cash and the obligation', async () => {
-  const w = new World();
-  w.addStock('M1', 'أسود', 100, 600);
-  const o = await w.saveOrder({ status: PAID_OUT, slots: [M1], invoice: 8500, deposit: 1000, collected: 7500, date: '2026-10-05' });
-  await w.saveOrder({ id: o.id, status: 'تم الإلغاء', slots: [M1], invoice: 8500, deposit: 1000, disposition: 'returned_resalable' });
-  let d = await callDashboard(dataOf(w), 1);
-  assert.equal(d.stock_value, 100 * 600);                                       // restored (returned and resalable)
-  assert.equal(d.cancelled_orders.goods_outside.qty, 0);
-  w.recordCustomerRefund(o.id, 1000);
-  w.recordShippingRepayment(o.id, 7500);
-  d = await callDashboard(dataOf(w), 1);
-  assert.deepEqual([d.cash_on_hand, d.advances_on_canceled_orders, d.shipping_repayment_due], [0, 0, 0]);
-});
 
 test('Dashboard cancellation: an unshipped cancellation leaves no goods outside and no phantom obligations', async () => {
   const w = new World();

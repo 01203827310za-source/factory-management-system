@@ -276,56 +276,28 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     const wasCancelled = oldSale.order_status === STATUS_CANCELED;
     const willBeCancelled = newStatus === STATUS_CANCELED;
     const cancellingShipped = willBeCancelled && isStockDeducting(oldSale.order_status);
-    const rawDisposition = data.cancel_disposition;
     const cancelReason = typeof data.cancel_reason === 'string' ? data.cancel_reason.trim().slice(0, 300) : '';
     delete data.cancel_reason;            // not a column of sales: it is stored on the cancellation record
-    let disposition: CancelDisposition | null = null;
-    if (willBeCancelled) {
-      if (cancellingShipped) {
-        // Goods that already left must say what happened to them — stock is never restored on assumption.
-        if (!isCancelDisposition(rawDisposition)) {
-          return res.status(400).json({ message: 'حدّد حالة البضاعة عند إلغاء أوردر تم شحنه: رجعت وصالحة للبيع / لم ترجع / رجعت تالفة أو تحتاج فحصًا' });
-        }
-        disposition = rawDisposition;
-      } else if (wasCancelled && oldSale.cancel_disposition) {
-        disposition = isCancelDisposition(rawDisposition) ? rawDisposition : (oldSale.cancel_disposition as CancelDisposition);
-      }
-    }
-    data.cancel_disposition = disposition;
-
-    // Per-line return: how many pieces of each line really came back resalable (validated here, never trusted from the form).
+    // Cancelling reverses the WHOLE order automatically: no returned-goods condition, no returned quantities, no refund inputs.
+    // Anything the browser still sends for those is ignored.
+    ['cancel_disposition', 'cancel_returned_qty', 'refund_customer_now', 'repay_shipping_now', 'refund_key', 'refund_date'].forEach(k => delete data[k]);
     const unretKeys = [1, 2, 3, 4, 5].map(i => `model${i}_unreturned_qty`);
     const lineQty = [1, 2, 3, 4, 5].map(i => (oldSale[`model${i}_code` as keyof typeof oldSale] ? Number(oldSale[`model${i}_qty` as keyof typeof oldSale]) || 0 : 0));
-    const oldUnreturned = [1, 2, 3, 4, 5].map(i => (oldSale[`model${i}_unreturned_qty` as keyof typeof oldSale] as number | null));
-    const rawReturned = data.cancel_returned_qty;
-    delete data.cancel_returned_qty;
-    let restoredQty = 0;
-    if (!willBeCancelled) {
-      unretKeys.forEach(k => { data[k] = null; });          // reopening: back to a normal order
-    } else if (disposition && (cancellingShipped || (hasLineReturns(oldSale) && (rawReturned !== undefined || disposition !== oldSale.cancel_disposition)))) {
-      const r = computeUnreturned(disposition, lineQty, rawReturned);
-      if ('error' in r) return res.status(400).json({ message: r.error });
-      if (!cancellingShipped && r.unreturned.some((u, i) => u > Math.min(lineQty[i], oldUnreturned[i] ?? lineQty[i]))) {
-        return res.status(400).json({ message: 'لا يمكن تقليل كمية مرتجع تم تسجيلها — يمكن زيادتها فقط' });
-      }
-      unretKeys.forEach((k, i) => { data[k] = r.unreturned[i]; });
-      restoredQty = r.returned.reduce((a, b) => a + b, 0);
-    }
-
-    // Optional real refund recorded together with the cancellation (same transaction; nothing is paid unless entered).
-    const num = (v: unknown) => (v === undefined || v === null || v === '' ? 0 : Number(v));
-    const refundCustomerNow = num(data.refund_customer_now);
-    const repayShippingNow = num(data.repay_shipping_now);
-    const refundKey = typeof data.refund_key === 'string' ? data.refund_key : '';
-    const refundDate = data.refund_date === undefined || data.refund_date === '' ? cairoToday() : data.refund_date;
-    ['refund_customer_now', 'repay_shipping_now', 'refund_key', 'refund_date'].forEach(k => delete data[k]);
-    if (!Number.isFinite(refundCustomerNow) || !Number.isFinite(repayShippingNow) || refundCustomerNow < 0 || repayShippingNow < 0) {
-      return res.status(400).json({ message: 'مبلغ الرد غير صالح' });
-    }
-    if (refundCustomerNow > 0 || repayShippingNow > 0) {
-      if (!willBeCancelled) return res.status(400).json({ message: 'الرد متاح مع إلغاء الأوردر فقط' });
-      if (refundKey.length < 8 || refundKey.length > 100) return res.status(400).json({ message: 'معرّف العملية (refund_key) مطلوب لتسجيل الرد' });
-      if (!isValidDate(refundDate)) return res.status(400).json({ message: 'تاريخ الرد غير صالح' });
+    const cancelEvent0 = willBeCancelled && !wasCancelled;
+    // Shipped orders come back in full (every line, at the cost recorded when it shipped); reserved ones just release.
+    // An already-cancelled order keeps whatever its first cancellation recorded, so repeated saves change nothing.
+    const disposition: CancelDisposition | null = !willBeCancelled ? null
+      : cancelEvent0 ? (cancellingShipped ? 'returned_resalable' : null)
+      : ((oldSale.cancel_disposition as CancelDisposition | null) ?? null);
+    data.cancel_disposition = disposition;
+    const restoredQty = cancelEvent0 && cancellingShipped ? lineQty.reduce((a, b) => a + b, 0) : 0;
+    if (!willBeCancelled) unretKeys.forEach(k => { data[k] = null; });                  // reopening: back to a normal order
+    else if (cancelEvent0 && cancellingShipped) unretKeys.forEach(k => { data[k] = 0; });   // nothing is left outside
+    else unretKeys.forEach(k => { delete data[k]; });
+    if (willBeCancelled) {
+      // The deposit is reversed with the order on the cancel event (the amount stays in the cancellation record);
+      // later saves of the cancelled order can never bring it back.
+      if (cancelEvent0) data.deposit_paid = 0; else delete data.deposit_paid;
     }
     if (wasCancelled && !willBeCancelled && oldSale.shipping_collected > 0 && newStatus !== 'تم الصرف') {
       return res.status(400).json({ message: `الأوردر الملغى عليه تحصيل محفوظ ${oldSale.shipping_collected} ج من شركة الشحن — أعد فتحه بحالة «تم الصرف» أو سجّل رد المبلغ لشركة الشحن أولًا` });
@@ -350,6 +322,7 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     if ('error' in resolved) {
       return res.status(400).json({ message: resolved.error });
     }
+    if (cancelEvent0) resolved.value = 0;   // append-only reversal rows bring the order's collections to zero
     data.shipping_collected = resolved.value;
     const newOrderNumber = String(data.order_number ?? oldSale.order_number);
     const newOutstanding = outstandingShippingReceivable({ order_status: newStatus, remaining, shipping_collected: resolved.value });
@@ -408,7 +381,7 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
       if (willBeCancelled && !wasCancelled) {
         const invoices = await reverseClientInvoices(tx, { seasonId, orderNumber: updated.order_number, user: req.user?.username });
         await recordCancellation(tx, {
-          seasonId, sale: updated, statusBefore: oldSale.order_status, wasShipped: cancellingShipped,
+          seasonId, sale: { id, deposit_paid: oldSale.deposit_paid, shipping_collected: oldSale.shipping_collected }, statusBefore: oldSale.order_status, wasShipped: cancellingShipped,
           disposition, reason: cancelReason, snapshot: shippedBefore, user: req.user?.username,
           restoredQty, revenueReversed: isStockDeducting(oldSale.order_status) ? oldSale.invoice_value : 0,
           receivableReversed: outstandingShippingReceivable(oldSale), invoiceIds: invoices.ids,
@@ -417,13 +390,6 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
         await updateDisposition(tx, id, disposition, hasLineReturns(updated) ? restoredQty : undefined);
       } else if (!willBeCancelled && wasCancelled) {
         await markReopened(tx, id);
-      }
-      // Real refunds entered in the form: any failure (e.g. more than is owed) rolls the WHOLE cancellation back.
-      if (willBeCancelled && refundCustomerNow > 0) {
-        await applyRefund(tx, { seasonId, saleId: id, kind: 'customer_refund', amount: refundCustomerNow, date: refundDate as string, key: `${refundKey}:customer`, user: req.user?.username });
-      }
-      if (willBeCancelled && repayShippingNow > 0) {
-        await applyRefund(tx, { seasonId, saleId: id, kind: 'shipping_repayment', amount: repayShippingNow, date: refundDate as string, key: `${refundKey}:shipping`, user: req.user?.username });
       }
       cancelledGoods = shippedBefore;
       return tx.sale.findFirstOrThrow({ where: { id, season_id: seasonId } });
@@ -450,11 +416,11 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
       goods_qty: cancellingShipped ? cancelledGoods.qty : 0,
       goods_cost: cancellingShipped ? cancelledGoods.cost : 0,
       disposition,
-      deposit_held: sale.deposit_paid,
-      collected_held: sale.shipping_collected,
+      deposit_held: cancelEvent ? oldSale.deposit_paid : sale.deposit_paid,        // amounts reversed with the order
+      collected_held: cancelEvent ? oldSale.shipping_collected : sale.shipping_collected,
     };
     const description = cancelEvent
-      ? `إلغاء أوردر ${sale.client} - ${sale.order_number} (كان: ${oldSale.order_status})${cancellingShipped ? ` — البضاعة: ${DISPOSITION_LABELS[disposition!]} — ${cancelSummary.goods_qty} قطعة بتكلفة مسجلة ${cancelSummary.goods_cost}` : ''} — عربون محتجز ${sale.deposit_paid} ج — محصّل من الشحن محتجز ${sale.shipping_collected} ج (لا يُرد إلا بتسجيل رد فعلي)${cancelReason ? ` — السبب: ${cancelReason}` : ''}`
+      ? `إلغاء أوردر ${sale.client} - ${sale.order_number} (كان: ${oldSale.order_status})${cancellingShipped ? ` — البضاعة: ${DISPOSITION_LABELS[disposition!]} — ${cancelSummary.goods_qty} قطعة بتكلفة مسجلة ${cancelSummary.goods_cost}` : ''} — عُكس العربون ${oldSale.deposit_paid} ج وتحصيل شركة الشحن ${oldSale.shipping_collected} ج بقيود عكسية${cancelReason ? ` — السبب: ${cancelReason}` : ''}`
       : reopenEvent ? `إعادة فتح أوردر ملغى ${sale.client} - ${sale.order_number} إلى «${sale.order_status}»`
       : dispositionEvent ? `تغيير حالة بضاعة أوردر ملغى ${sale.order_number}: ${oldSale.cancel_disposition ? DISPOSITION_LABELS[oldSale.cancel_disposition as CancelDisposition] : '—'} ← ${disposition ? DISPOSITION_LABELS[disposition] : '—'}`
       : willBeDispatched

@@ -8,7 +8,7 @@ import {
   STATUS_CANCELED, computeStockPositions, hasLineReturns, increasingKeys, isStockDeducting, outsideSlots, reservedSyncUpdates, validateShipment, valueStockRow,
   type CancelDisposition, type Slot,
 } from '../src/services/readyStockPositions';
-import { computeUnreturned, markReopened, recordCancellation, shippedSnapshot, updateDisposition, cancelledObligations, refundsByOrderNumber, refundsFor } from '../src/services/orderCancellation';
+import { markReopened, recordCancellation, shippedSnapshot, updateDisposition, cancelledObligations, refundsByOrderNumber, refundsFor } from '../src/services/orderCancellation';
 import { computeDashboardCashFlow, computeMoneyOwedToUs } from '../src/services/financialMetrics';
 import { costOfGoodsShipped, returnsCostCredit, type MovementRow } from '../src/services/inventoryMovements';
 import { FuzzyKeyIndex } from '../src/utils/textMatch';
@@ -126,17 +126,18 @@ export class World {
   }): Promise<Sale> {
     const season = input.season ?? 1;
     const existing = input.id ? this.sales.find(s => s.id === input.id) : undefined;
-    const deposit = input.deposit ?? 0;
-    // Cancelling keeps what the shipping company already paid (cancelling is not a refund).
-    const collected = input.status === STATUS_CANCELED ? (existing?.shipping_collected ?? 0) : input.status === 'تم الصرف' ? (input.collected ?? 0) : 0;
-    if (input.status === 'تم الصرف' && (collected < 0 || collected > input.invoice - deposit + 0.005)) throw new Error('invalid collected amount');
     const wasCancelled = existing?.order_status === STATUS_CANCELED;
     const willBeCancelled = input.status === STATUS_CANCELED;
+    const cancelEvent = !!existing && willBeCancelled && !wasCancelled;
     const cancellingShipped = !!existing && willBeCancelled && isStockDeducting(existing.order_status);
-    if (cancellingShipped && !input.disposition) throw new Error('حدّد حالة البضاعة');
+    // Cancelling reverses the whole order: the deposit and every collection are taken back with append-only rows
+    // (the amounts stay on the cancellation record); a later save of the cancelled order changes nothing.
+    const deposit = willBeCancelled ? (cancelEvent ? 0 : (existing?.deposit_paid ?? 0)) : (input.deposit ?? 0);
+    const collected = willBeCancelled ? (cancelEvent ? 0 : (existing?.shipping_collected ?? 0)) : input.status === 'تم الصرف' ? (input.collected ?? 0) : 0;
+    if (input.status === 'تم الصرف' && (collected < 0 || collected > input.invoice - deposit + 0.005)) throw new Error('invalid collected amount');
     if (wasCancelled && !willBeCancelled && (existing?.shipping_collected ?? 0) > 0 && input.status !== 'تم الصرف') throw new Error('المحصّل محتجز');
     const disposition: CancelDisposition | null = !willBeCancelled ? null
-      : cancellingShipped ? input.disposition! : (wasCancelled ? (input.disposition ?? (existing!.cancel_disposition as CancelDisposition | null)) : null);
+      : cancelEvent ? (cancellingShipped ? 'returned_resalable' : null) : ((existing?.cancel_disposition as CancelDisposition | null) ?? null);
 
     const row: Sale = existing ?? ({
       id: this.ids.sale++, season_id: season, order_number: input.order_number ?? `SO-${this.ids.sale}`, row_number: 0, marketer: '', client: 'c',
@@ -154,19 +155,10 @@ export class World {
       const problem = validateShipment(ctx, input.slots, increasingKeys(ctx, oldShipped, input.slots));
       if (problem) throw new Error(problem);
     }
-    // per-line returns (same rule as the route): validated BEFORE anything is written
     const lineQty = [1, 2, 3, 4, 5].map(i => (input.slots[i - 1]?.code ? input.slots[i - 1].qty : 0));
-    let unreturned: number[] | null = null;
-    let restoredQty = 0;
-    if (disposition && (cancellingShipped || (existing && hasLineReturns(existing) && (input.returnedQty !== undefined || disposition !== existing.cancel_disposition)))) {
-      const r = computeUnreturned(disposition, lineQty, input.returnedQty);
-      if ('error' in r) throw new Error(r.error);
-      if (!cancellingShipped && existing && r.unreturned.some((u, i) => u > ((([1, 2, 3, 4, 5].map(k => existing[`model${k}_unreturned_qty` as keyof Sale] as number | null))[i]) ?? lineQty[i]))) {
-        throw new Error('لا يمكن تقليل كمية مرتجع تم تسجيلها');
-      }
-      unreturned = r.unreturned;
-      restoredQty = r.returned.reduce((a, b) => a + b, 0);
-    }
+    const unreturned: number[] | null = cancelEvent && cancellingShipped ? [0, 0, 0, 0, 0] : null;
+    const restoredQty = unreturned ? lineQty.reduce((x, y) => x + y, 0) : 0;
+    const reversedAmounts = { id: row.id, deposit_paid: row.deposit_paid, shipping_collected: row.shipping_collected };   // as they were BEFORE the reversal
     const previousCached = row.shipping_collected;
     const storedDate = row.shipping_collected_date;
     const oldDisposition = existing?.cancel_disposition ?? null;   // captured before the row is mutated
@@ -191,7 +183,7 @@ export class World {
     await syncShipMovements(this.tx, row, input.user);
     if (willBeCancelled && !wasCancelled) {
       await recordCancellation(this.tx, {
-        seasonId: season, sale: row, statusBefore: existing?.order_status ?? '', wasShipped: cancellingShipped, disposition,
+        seasonId: season, sale: reversedAmounts, statusBefore: existing?.order_status ?? '', wasShipped: cancellingShipped, disposition,
         reason: input.reason ?? '', snapshot: shippedBefore, user: input.user, restoredQty,
       });
     } else if (willBeCancelled && wasCancelled && disposition !== oldDisposition) {

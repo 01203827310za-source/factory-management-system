@@ -1,9 +1,9 @@
-// Full order cancellation: every effect of the order is reversed exactly once, history is kept, and
-// money / goods are never assumed to have moved just because a status changed.
-//   stock      : restored ONLY if the goods are back and resalable (disposition)
+// Full order cancellation: selecting «تم الإلغاء» and saving reverses the WHOLE order automatically, exactly once.
+//   stock      : the entire order comes back (no returned-goods condition, no quantities to enter)
 //   cost / COGS: reversed at the originally recorded cost (append-only reversal rows)
 //   revenue / receivable : drop out automatically (derived from status)
-//   cash       : money already received STAYS until a real refund / repayment is recorded
+//   money      : the deposit and every collection are reversed with the order (append-only rows); nothing is left
+//                as a refund liability and no cash is invented for money that was never received
 import { assert, test } from './harness';
 import { World } from './world';
 import { isStockDeducting } from '../src/services/readyStockPositions';
@@ -24,222 +24,174 @@ function world() {
   return w;
 }
 
-test('1. cancel an UNSHIPPED order with no deposit: reservation released, nothing else created', async () => {
+test('A. cancel a RESERVED order: reservation released, nothing else created', async () => {
   const w = world();
   const o = await w.saveOrder({ status: PREPARED, slots: slot(10), invoice: 8500 });
   assert.equal(w.readyStock[0].reserved_quantity, 10);
   await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500 });
   assert.equal(w.readyStock[0].reserved_quantity, 0);
-  assert.equal(w.stock().physicalQty, 100);                       // no artificial stock return
-  assert.deepEqual([w.movements.length, w.collections.length], [0, 0]);   // no financial reversals invented
+  assert.equal(w.stock().physicalQty, 100);
+  assert.deepEqual([w.movements.length, w.collections.length], [0, 0]);
   assert.equal(w.cash().cash, 0);
-  assert.equal(w.sales[0].cancel_disposition, null);
   assert.deepEqual(w.cancellations.map(c => [c.was_shipped, c.goods_qty, c.deposit_held]), [[false, 0, 0]]);
-  assert.deepEqual(w.obligations(o.id), { customer_credit_due: 0, customer_refunded: 0, shipping_repayment_due: 0 });
 });
 
-test('2. cancel an UNSHIPPED order WITH a deposit: the deposit stays in cash as a refund liability until really refunded', async () => {
+test('B. cancel a RESERVED order WITH a deposit: the deposit is reversed with the order (no liability left); the amount stays in the record', async () => {
   const w = world();
   const o = await w.saveOrder({ status: PREPARED, slots: slot(10), invoice: 8500, deposit: 1000 });
+  assert.equal(w.cash().cash, 1000);
   await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, deposit: 1000 });
-  assert.equal(w.cash().cash, 1000);                              // real money received is not erased
-  assert.deepEqual(w.obligations(o.id), { customer_credit_due: 1000, customer_refunded: 0, shipping_repayment_due: 0 });
-  w.recordCustomerRefund(o.id, 400);                              // a real partial refund
-  assert.equal(w.cash().cash, 600);
-  assert.equal(w.obligations(o.id).customer_credit_due, 600);
-  w.recordCustomerRefund(o.id, 600);
-  assert.deepEqual([w.cash().cash, w.obligations(o.id).customer_credit_due], [0, 0]);
+  assert.equal(w.cash().cash, 0);
+  assert.deepEqual(w.obligations(o.id), { customer_credit_due: 0, customer_refunded: 0, shipping_repayment_due: 0 });
+  assert.equal(w.cancellations[0].deposit_held, 1000);              // the audit trail keeps what was reversed
+  await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, deposit: 1000 });   // a stale form cannot bring it back
+  assert.equal(w.cash().cash, 0);
 });
 
-test('3. cancel a SHIPPED order before the shipping company pays: revenue, receivable and COGS reverse; cost at the recorded cost', async () => {
+test('C. cancel a SHIPPED (not yet paid out) order: stock, revenue, receivable and COGS all reverse; cost at the ORIGINAL cost', async () => {
   const w = world();
   const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: slot(10), invoice: 8500, deposit: 1000 });
   assert.equal(w.shippingReceivable(), 7500);
   assert.equal(recognized(w), 8500);
   assert.equal(w.cogs(), 6000);
   w.readyStock[0].cost_per_piece = 700;                           // the card's cost changes before the cancellation
-  await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, deposit: 1000, disposition: 'returned_resalable', reason: 'العميل رفض' });
-  assert.equal(w.shippingReceivable(), 0);                         // the receivable is reversed
-  assert.equal(recognized(w), 0);                                  // recognised revenue reversed
-  assert.equal(w.cogs(), 0);                                       // COGS reversed…
-  assert.deepEqual(w.movements.map(m => [m.movement_type, m.qty, m.unit_cost, m.total_cost]),
-    [['SHIP', 10, 600, 6000], ['SHIP_REVERSAL', 10, 600, 6000]]);  // …at the ORIGINAL cost (600), not today's 700; original kept
-  assert.equal(w.stock().physicalQty, 100);                        // goods back and resalable → stock restored exactly
-  assert.equal(w.cash().cash, 1000);                               // the deposit stays
-  assert.deepEqual(w.cancellations.map(c => [c.was_shipped, c.disposition, c.goods_qty, c.goods_cost, c.reason]), [[true, 'returned_resalable', 10, 6000, 'العميل رفض']]);
-});
-
-test('3b. goods NOT returned: stock is NOT restored and their cost stays recognised until they really come back', async () => {
-  const w = world();
-  const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: slot(10), invoice: 8500 });
-  await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, disposition: 'not_returned' });
-  assert.equal(w.stock().physicalQty, 90);                         // never claim they are in the warehouse
-  assert.equal(w.stock().physical, 90 * 600);
-  assert.equal(w.cogs(), 6000);                                    // goods are gone: their cost is NOT reversed
-  assert.equal(w.movements.length, 1);
-  assert.deepEqual(w.cancellations.map(c => [c.disposition, c.goods_qty, c.goods_cost]), [['not_returned', 10, 6000]]);   // tracked separately, at historical cost
-  // later the goods really come back → the user updates the disposition: stock restored once, cost reversed once at the recorded cost
-  await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, disposition: 'returned_resalable' });
-  assert.equal(w.stock().physicalQty, 100);
-  assert.deepEqual(w.movements.map(m => [m.movement_type, m.qty, m.unit_cost]), [['SHIP', 10, 600], ['SHIP_REVERSAL', 10, 600]]);
+  await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, deposit: 1000, reason: 'العميل رفض' });
+  assert.equal(w.shippingReceivable(), 0);
+  assert.equal(recognized(w), 0);
   assert.equal(w.cogs(), 0);
-  await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, disposition: 'returned_resalable' });   // repeat: nothing more
-  assert.equal(w.movements.length, 2);
-  assert.equal(w.cancellations.length, 1);
-  assert.equal(w.cancellations[0].disposition, 'returned_resalable');
+  assert.deepEqual(w.movements.map(m => [m.movement_type, m.qty, m.unit_cost, m.total_cost]),
+    [['SHIP', 10, 600, 6000], ['SHIP_REVERSAL', 10, 600, 6000]]);  // original kept, reversal at 600 (not today's 700)
+  assert.equal(w.stock().physicalQty, 100);                        // the whole order is back, no condition asked
+  assert.equal(w.cash().cash, 0);                                  // deposit reversed
+  assert.deepEqual(w.cancellations.map(c => [c.was_shipped, c.disposition, c.goods_qty, c.goods_cost, c.restored_qty, c.reason]), [[true, 'returned_resalable', 10, 6000, 10, 'العميل رفض']]);
 });
 
-test('3c. goods returned DAMAGED: not sellable stock, tracked as outside the sellable stock', async () => {
-  const w = world();
-  const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: slot(4), invoice: 3000 });
-  await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(4), invoice: 3000, disposition: 'returned_damaged' });
-  assert.equal(w.stock().physicalQty, 96);
-  assert.equal(w.sales[0].cancel_disposition, 'returned_damaged');
-});
-
-test('4. cancel after FULL collection: the cash stays; it becomes money owed back to the shipping company until repaid', async () => {
+test('D. cancel a PAID-OUT order: collections reversed by ledger rows (history kept); cash back to 0; no liability', async () => {
   const w = world();
   const o = await w.saveOrder({ status: PAID_OUT, slots: slot(10), invoice: 8500, deposit: 1000, collected: 7500, date: '2026-10-05' });
   assert.equal(w.cash().cash, 8500);
-  const ledgerBefore = w.collections.map(c => [c.amount, c.kind]);
-  await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, deposit: 1000, disposition: 'returned_resalable' });
-  assert.equal(w.cash().cash, 8500);                               // NOT pretended never received
-  assert.deepEqual(w.collections.map(c => [c.amount, c.kind]), ledgerBefore);   // collection history untouched, no reversal row
-  assert.equal(w.sales[0].shipping_collected, 7500);
-  assert.deepEqual(w.obligations(o.id), { customer_credit_due: 1000, customer_refunded: 0, shipping_repayment_due: 7500 });
+  await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, deposit: 1000 });
+  assert.deepEqual(w.collections.map(c => c.amount), [7500, -7500]);   // original + reversal, nothing deleted
+  assert.equal(w.collections[1].collected_date, '2026-10-05');         // reversed in the month it was received
+  assert.equal(w.sales[0].shipping_collected, 0);
+  assert.equal(w.cash().cash, 0);
+  assert.deepEqual(w.obligations(o.id), { customer_credit_due: 0, customer_refunded: 0, shipping_repayment_due: 0 });
   assert.equal(w.shippingReceivable(), 0);
-  // the real repayment is what reduces cash
-  w.recordShippingRepayment(o.id, 7500);
-  assert.equal(w.cash().cash, 1000);
-  assert.deepEqual(w.collections.map(c => c.kind), ['collection', 'repayment']);
-  assert.equal(w.obligations(o.id).shipping_repayment_due, 0);
+  assert.equal(w.stock().physicalQty, 100);
+  assert.equal(w.cancellations[0].collected_held, 7500);
 });
 
-test('5. cancel a PARTIALLY collected order: the unpaid gap stops being a receivable; the collected part is held', async () => {
+test('E. cancel a PARTIALLY collected order: collected part reversed, the unpaid gap stops being a receivable', async () => {
   const w = world();
   const o = await w.saveOrder({ status: PAID_OUT, slots: slot(10), invoice: 8500, collected: 8200, date: '2026-10-05' });
   assert.equal(w.shippingReceivable(), 300);
-  await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, disposition: 'returned_resalable' });
+  await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500 });
   assert.equal(w.shippingReceivable(), 0);
-  assert.equal(w.cash().cash, 8200);
-  assert.equal(w.obligations(o.id).shipping_repayment_due, 8200);
+  assert.equal(w.cash().cash, 0);
+  assert.deepEqual(w.collections.map(c => c.amount), [8200, -8200]);
 });
 
-test('6. multiple models and colours: every line is reversed at its own recorded cost', async () => {
+test('F. no money was ever received: no cash transaction is invented', async () => {
+  const w = world();
+  const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: slot(10), invoice: 8500 });
+  await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500 });
+  assert.equal(w.collections.length, 0);
+  assert.equal(w.cash().cash, 0);
+  assert.equal(w.cash().totalOut, 0);
+});
+
+test('G. returned-goods inputs are ignored: any disposition / quantity still restores the whole order', async () => {
+  const w = world();
+  const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: slot(10), invoice: 8500 });
+  await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, disposition: 'not_returned', returnedQty: [2] });
+  assert.equal(w.stock().physicalQty, 100);
+  assert.equal(w.cogs(), 0);
+});
+
+test('H. multiple models and colours: every line is reversed at its own recorded cost', async () => {
   const w = new World();
   w.addStock('M1', 'أسود', 50, 600); w.addStock('M1', 'أبيض', 50, 650); w.addStock('M2', 'أسود', 50, 400);
   const lines = [...slot(5, 'M1', 'أسود'), ...slot(3, 'M1', 'أبيض'), ...slot(7, 'M2', 'أسود')];
   const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: lines, invoice: 9000 });
   const shipped = 5 * 600 + 3 * 650 + 7 * 400;
   assert.equal(w.cogs(), shipped);
-  await w.saveOrder({ id: o.id, status: CANCELED, slots: lines, invoice: 9000, disposition: 'returned_resalable' });
+  await w.saveOrder({ id: o.id, status: CANCELED, slots: lines, invoice: 9000 });
   assert.equal(w.cogs(), 0);
   assert.equal(w.stock().physicalQty, 150);
   const rev = w.movements.filter(m => m.movement_type === 'SHIP_REVERSAL');
   assert.deepEqual(rev.map(m => [m.model_code, m.color, m.qty, m.unit_cost]).sort(), [['M1', 'أبيض', 3, 650], ['M1', 'أسود', 5, 600], ['M2', 'أسود', 7, 400]].sort());
-  assert.equal(w.cancellations[0].goods_qty, 15);
   assert.equal(w.cancellations[0].goods_cost, shipped);
 });
 
-test('7. submitting the cancellation many times never duplicates a reversal, a record, stock or cash', async () => {
+test('I. saving the cancelled order again and again never restores or reverses anything twice', async () => {
   const w = world();
   const o = await w.saveOrder({ status: PAID_OUT, slots: slot(10), invoice: 8500, deposit: 500, collected: 8000, date: '2026-10-05' });
-  await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, deposit: 500, disposition: 'returned_resalable' });
-  const snap = JSON.stringify([w.movements, w.collections, w.cancellations, w.stock(), w.cash(), w.sales[0].shipping_collected]);
-  for (let i = 0; i < 5; i++) await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, deposit: 500, disposition: 'returned_resalable' });
-  assert.equal(JSON.stringify([w.movements, w.collections, w.cancellations, w.stock(), w.cash(), w.sales[0].shipping_collected]), snap);
+  await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, deposit: 500 });
+  const state = () => JSON.stringify([w.movements, w.collections, w.cancellations, w.stock(), w.cash(), w.sales[0].shipping_collected, w.sales[0].deposit_paid]);
+  const snap = state();
+  for (let i = 0; i < 5; i++) await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, deposit: 500 });
+  assert.equal(state(), snap);
   assert.equal(w.movements.filter(m => m.movement_type === 'SHIP_REVERSAL').length, 1);
-  assert.equal(w.stock().physicalQty, 100);                        // restored once, not 5 times
+  assert.equal(w.collections.length, 2);
+  assert.equal(w.stock().physicalQty, 100);
 });
 
-test('8+9. stock, historical cost, receivables, cash, revenue, COGS and profit all reconcile after a cancellation', async () => {
+test('J. stock, historical cost, receivables, cash, revenue, COGS and profit all reconcile after a cancellation', async () => {
   const w = world();
-  const keep = await w.saveOrder({ order_number: 'KEEP', status: NOT_PAID_OUT, slots: slot(10), invoice: 5000 });
+  await w.saveOrder({ order_number: 'KEEP', status: NOT_PAID_OUT, slots: slot(10), invoice: 5000 });
   const gone = await w.saveOrder({ order_number: 'GONE', status: NOT_PAID_OUT, slots: slot(20), invoice: 9000, deposit: 1000 });
-  assert.deepEqual([recognized(w), w.cogs(), w.shippingReceivable()], [14000, 18000, 5000 + 8000]);   // KEEP 5,000 owed + GONE (9,000 − 1,000 deposit)
-  void keep;
-  await w.saveOrder({ id: gone.id, status: CANCELED, slots: slot(20), invoice: 9000, deposit: 1000, disposition: 'returned_resalable' });
-  assert.equal(recognized(w), 5000);                               // only KEEP is revenue
-  assert.equal(w.cogs(), 6000);                                    // only KEEP's 10 × 600
-  assert.equal(w.shippingReceivable(), 5000);                      // only KEEP's receivable
-  assert.equal(w.stock().physicalQty, 90);                         // 100 − KEEP's 10
-  assert.equal(w.stock().physical, 90 * 600);
-  assert.equal(w.cash().cash, 1000);                               // GONE's deposit still held
-  assert.equal(w.cash().netProfit, 1000);                          // cash-basis profit does not move on a status change
+  assert.deepEqual([recognized(w), w.cogs(), w.shippingReceivable()], [14000, 18000, 5000 + 8000]);
+  await w.saveOrder({ id: gone.id, status: CANCELED, slots: slot(20), invoice: 9000, deposit: 1000 });
+  assert.equal(recognized(w), 5000);
+  assert.equal(w.cogs(), 6000);
+  assert.equal(w.shippingReceivable(), 5000);
+  assert.equal(w.stock().physicalQty, 90);
+  assert.equal(w.cash().cash, 0);                                  // GONE's deposit is reversed with the order
 });
 
-test('reopening a cancelled order ships it again with NEW movements (originals + reversal kept)', async () => {
+test('K. every reversal references the original: same line, original cost, originals untouched', async () => {
   const w = world();
-  const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: slot(10), invoice: 8500 });
-  await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, disposition: 'returned_resalable' });
+  const o = await w.saveOrder({ status: PAID_OUT, slots: slot(10), invoice: 8500, collected: 8500, date: '2026-10-05' });
+  const originals = JSON.stringify([w.movements[0], w.collections[0]]);
+  await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500 });
+  assert.equal(JSON.stringify([w.movements[0], w.collections[0]]), originals);
+  assert.deepEqual([w.movements[1].model_code, w.movements[1].color, w.movements[1].unit_cost], [w.movements[0].model_code, w.movements[0].color, w.movements[0].unit_cost]);
+  assert.equal(w.collections[1].sale_id, w.collections[0].sale_id);
+});
+
+test('L. reopening a cancelled order ships it again with NEW movements (originals + reversal kept)', async () => {
+  const w = world();
+  const o = await w.saveOrder({ status: PAID_OUT, slots: slot(10), invoice: 8500, collected: 8500, date: '2026-10-05' });
+  await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500 });
   await w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: slot(10), invoice: 8500 });
   assert.deepEqual(w.movements.map(m => m.movement_type), ['SHIP', 'SHIP_REVERSAL', 'SHIP']);
   assert.equal(w.stock().physicalQty, 90);
   assert.equal(w.cogs(), 6000);
   assert.equal(w.sales[0].cancel_disposition, null);
-  assert.notEqual(w.cancellations[0].reopened_at, null);          // the first cancel event is marked reopened
-  // cancelling again is a NEW event
-  await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, disposition: 'not_returned' });
+  assert.notEqual(w.cancellations[0].reopened_at, null);
+  await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500 });   // cancelling again is a NEW event
   assert.equal(w.cancellations.length, 2);
-  assert.equal(w.movements.filter(m => m.movement_type === 'SHIP_REVERSAL').length, 1);   // not returned → cost stays
-  assert.equal(w.cogs(), 6000);
-});
-
-test('J. partial return: only the pieces that came back are restored and reversed, at the recorded cost, per line', async () => {
-  const w = new World();
-  w.addStock('M1', 'أسود', 50, 600); w.addStock('M2', 'أبيض', 50, 400);
-  const lines = [...slot(10, 'M1', 'أسود'), ...slot(6, 'M2', 'أبيض')];
-  const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: lines, invoice: 9000 });
-  w.readyStock[0].cost_per_piece = 900;                            // the card's cost moves afterwards
-  await w.saveOrder({ id: o.id, status: CANCELED, slots: lines, invoice: 9000, disposition: 'returned_resalable', returnedQty: [7, 6] });
-  assert.equal(w.stock().physicalQty, 100 - 3);                    // only 3 pieces of M1 are still outside
-  assert.equal(w.cogs(), 3 * 600);                                 // cost of the 3 unreturned pieces stays, at the recorded cost
-  assert.deepEqual(w.movements.filter(m => m.movement_type === 'SHIP_REVERSAL').map(m => [m.model_code, m.qty, m.unit_cost]).sort(), [['M1', 7, 600], ['M2', 6, 400]]);
-  assert.equal(w.cancellations[0].restored_qty, 13);
-  // more pieces arrive later: only the difference is restored; repeating changes nothing
-  await w.saveOrder({ id: o.id, status: CANCELED, slots: lines, invoice: 9000, disposition: 'returned_resalable', returnedQty: [9, 6] });
-  assert.equal(w.stock().physicalQty, 100 - 1);
-  assert.equal(w.cogs(), 600);
-  const n = w.movements.length;
-  await w.saveOrder({ id: o.id, status: CANCELED, slots: lines, invoice: 9000, disposition: 'returned_resalable', returnedQty: [9, 6] });
-  assert.equal(w.movements.length, n);
-  await assert.rejects(() => w.saveOrder({ id: o.id, status: CANCELED, slots: lines, invoice: 9000, disposition: 'returned_resalable', returnedQty: [2, 6] }), /تقليل|مرتجع/);
-});
-
-test('J2. returned quantity is validated against what shipped', async () => {
-  const w = world();
-  const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: slot(10), invoice: 8500 });
-  await assert.rejects(() => w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, disposition: 'returned_resalable', returnedQty: [11] }), /غير صالحة/);
-  await assert.rejects(() => w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, disposition: 'returned_resalable', returnedQty: [-1] }), /غير صالحة/);
-  assert.equal(w.sales[0].order_status, NOT_PAID_OUT);
-});
-
-test('a cancelled order that still holds shipping-company money cannot be silently reopened to unpaid', async () => {
-  const w = world();
-  const o = await w.saveOrder({ status: PAID_OUT, slots: slot(10), invoice: 8500, collected: 8500, date: '2026-10-05' });
-  await w.saveOrder({ id: o.id, status: CANCELED, slots: slot(10), invoice: 8500, disposition: 'returned_resalable' });
-  await assert.rejects(() => w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: slot(10), invoice: 8500 }), /محتجز/);
-  assert.equal(w.cash().cash, 8500);                               // cash never erased by the attempt
+  assert.equal(w.stock().physicalQty, 100);
+  assert.equal(w.cogs(), 0);
 });
 
 test('legacy: orders cancelled before this feature (no disposition) keep restoring stock as before', async () => {
   const w = world();
-  const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: slot(10), invoice: 1000 });
+  await w.saveOrder({ status: NOT_PAID_OUT, slots: slot(10), invoice: 1000 });
   w.sales[0].order_status = CANCELED;                              // an old row: cancelled, disposition NULL
   assert.equal(w.sales[0].cancel_disposition, null);
   assert.equal(w.stock().physicalQty, 100);
-  void o;
 });
 
-test('10. seasons stay isolated and the refund endpoint needs sales.edit', async () => {
+test('M. seasons stay isolated and the refund endpoint needs sales.edit', async () => {
   const w = new World();
   w.addStock('M1', 'أسود', 50, 600, 1); w.addStock('M1', 'أسود', 50, 600, 2);
   const a = await w.saveOrder({ season: 1, status: NOT_PAID_OUT, slots: slot(10), invoice: 1000, deposit: 200 });
   await w.saveOrder({ season: 2, status: NOT_PAID_OUT, slots: slot(5), invoice: 1000, deposit: 300 });
-  await w.saveOrder({ season: 1, id: a.id, status: CANCELED, slots: slot(10), invoice: 1000, deposit: 200, disposition: 'not_returned' });
-  assert.equal(w.stock(1).physicalQty, 40);                        // summer: goods still outside
+  await w.saveOrder({ season: 1, id: a.id, status: CANCELED, slots: slot(10), invoice: 1000, deposit: 200 });
+  assert.equal(w.stock(1).physicalQty, 50);                        // summer: restored
   assert.equal(w.stock(2).physicalQty, 45);                        // winter untouched
-  assert.deepEqual([w.cash(1).cash, w.cash(2).cash], [200, 300]);
+  assert.deepEqual([w.cash(1).cash, w.cash(2).cash], [0, 300]);
   assert.equal(w.cancellations.every(c => c.season_id === 1), true);
   assert.equal(permissionForRequest('POST', '/sales/5/refunds'), 'sales.edit');
   assert.equal(permissionForRequest('PUT', '/sales/5'), 'sales.edit');

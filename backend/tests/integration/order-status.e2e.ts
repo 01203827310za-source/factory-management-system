@@ -124,8 +124,6 @@ async function main() {
   const cancelPrepared = await api('PUT', `/sales/${rid}`, modalPayload({ order_number: 'E2E-2', order_status: 'تم الإلغاء', model1_qty: 5 }));
   const stockAfterCancel = await prisma.readyStock.findFirst({ where: { model_code: 'M1' } });
   check('cancelling a prepared order releases the reservation', cancelPrepared.status === 200 && stockAfterCancel?.reserved_quantity === 0, { cancelPrepared: cancelPrepared.status, reserved: stockAfterCancel?.reserved_quantity });
-  const cancelShippedNoDisposition = await api('PUT', `/sales/${id}`, modalPayload({ order_status: 'تم الإلغاء', shipping_collected: 0 }));
-  check('cancelling a shipped order requires saying what happened to the goods (400 without it)', cancelShippedNoDisposition.status === 400 && /حالة البضاعة/.test(String(cancelShippedNoDisposition.body.message)), cancelShippedNoDisposition);
 
   // 3c) an order stored the OLD way (status 'تم الحجز' + reserved_quantity set by the previous workflow)
   await prisma.readyStock.updateMany({ where: { model_code: 'M1' }, data: { reserved_quantity: 7 } });
