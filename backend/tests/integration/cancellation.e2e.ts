@@ -216,6 +216,25 @@ async function main() {
   const fcL = (await api('GET', '/financial-center')).body;
   check('L. Dashboard and Financial Center agree after a cancellation (stock 100 × 600 + 50 × 400, receivable 0)', dL.stock_value === 100 * 600 + 50 * 400 && fcL.stock_value === dL.stock_value && fcL.money_owed_to_us === 0 && dL.money_owed_to_us === 0, { dash: dL.stock_value, fc: fcL.stock_value });
 
+  // ───────── LEGACY: cancelled by an earlier version (goods "not returned", deposit + collection still held) ─────────
+  await reset();
+  o = (await api('POST', '/sales', payload({ order_status: PAID_OUT, deposit_paid: 1000, shipping_collected: 7500, shipping_collected_date: '2026-10-05' }))).body;
+  // what the old rule left behind: status cancelled, goods outside, cost already reversed, money untouched
+  await prisma.sale.update({ where: { id: o.id }, data: { order_status: CANCELED, cancel_disposition: 'not_returned' } });
+  const shipRow = (await rows(o.id)).movements[0];
+  await prisma.inventoryMovement.create({ data: { season_id: shipRow.season_id, sale_id: o.id, stock_id: shipRow.stock_id, movement_type: 'SHIP_REVERSAL', model_code: shipRow.model_code, color: shipRow.color, qty: shipRow.qty, unit_cost: shipRow.unit_cost, total_cost: shipRow.total_cost, reference: 'legacy', created_by: 'legacy' } });
+  check('LEGACY. before: the stock is NOT back (90) and cash still holds 8,500', (await stockQty('M1', 'أسود')) === 90 && (await dash()).cash_on_hand === 8500);
+  r = await api('PUT', `/sales/${o.id}`, cancelBody(o, { deposit_paid: 1000 }));
+  db = await rows(o.id);
+  const legacyDash = await dash();
+  check('LEGACY. saving it again restores the stock (100) on the Dashboard', r.status === 200 && (await stockQty('M1', 'أسود')) === 100 && legacyDash.stock_value === 100 * 600 + 50 * 400, { status: r.status, stock: await stockQty('M1', 'أسود') });
+  check('LEGACY. cost not reversed twice (1 reversal), collection reversed once, deposit reversed, cash 0', db.movements.filter(m => m.movement_type === 'SHIP_REVERSAL').length === 1 && db.collections.map(c => c.amount).join() === '7500,-7500' && db.sale?.deposit_paid === 0 && legacyDash.cash_on_hand === 0, { moves: db.movements.length, cols: db.collections.map(c => c.amount) });
+  const rs = (await api('GET', '/ready-stock')).body as { model_code: string; reserved_quantity: number }[];
+  check('LEGACY. the Ready Stock endpoint shows nothing reserved or deducted for it', rs.every(x => x.reserved_quantity === 0));
+  const snapLegacy = JSON.stringify(await rows(o.id)); const snapLegacyDash = await dashSnap();
+  for (let i = 0; i < 3; i++) await api('PUT', `/sales/${o.id}`, cancelBody(o, { deposit_paid: 1000 }));
+  check('LEGACY. saving it three more times restores / reverses nothing more', JSON.stringify(await rows(o.id)) === snapLegacy && (await dashSnap()) === snapLegacyDash && (await stockQty('M1', 'أسود')) === 100);
+
   // ───────── seasons + authorisation ─────────
   o = reopenedOrder;
   await reset();

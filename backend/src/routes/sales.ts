@@ -7,7 +7,7 @@ import { getSeasonId, seasonWhere } from '../services/seasonContext';
 import { cairoToday, isValidDate } from '../services/charity';
 import {
   STATUS_CANCELED, STATUS_RESERVED, computeStockPositions, hasLineReturns, increasingKeys, isCancelDisposition, isStockDeducting,
-  outsideSlots, reservedSyncUpdates, validateShipment, type CancelDisposition,
+  holdsGoodsOutside, outsideSlots, reservedSyncUpdates, validateShipment, type CancelDisposition,
 } from '../services/readyStockPositions';
 import {
   REFUND_KINDS, applyRefund, buildCancellationPreview, cancelledObligations, computeUnreturned, isRefundError, markReopened,
@@ -284,20 +284,30 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     const unretKeys = [1, 2, 3, 4, 5].map(i => `model${i}_unreturned_qty`);
     const lineQty = [1, 2, 3, 4, 5].map(i => (oldSale[`model${i}_code` as keyof typeof oldSale] ? Number(oldSale[`model${i}_qty` as keyof typeof oldSale]) || 0 : 0));
     const cancelEvent0 = willBeCancelled && !wasCancelled;
+    // An order cancelled by an EARLIER version may still hold goods outside the stock (marked not returned / damaged)
+    // or money it never reversed. Saving it again finishes the job — once: afterwards nothing is left to reconcile.
+    const refundedBefore = wasCancelled && willBeCancelled
+      ? refundsFor(refundsByOrderNumber(await prisma.returnItem.findMany({ where: { ...seasonWhere(seasonId), order_number: oldSale.order_number } })), oldSale.order_number)
+      : 0;
+    const goodsOutsideBefore = wasCancelled && willBeCancelled && holdsGoodsOutside(oldSale);
+    const keptDeposit = Math.min(oldSale.deposit_paid, refundedBefore);   // refunds already paid out stay balanced (cash in = cash out)
+    const reconcile = wasCancelled && willBeCancelled && (goodsOutsideBefore || oldSale.shipping_collected !== 0 || oldSale.deposit_paid > keptDeposit + 0.005);
     // Shipped orders come back in full (every line, at the cost recorded when it shipped); reserved ones just release.
     // An already-cancelled order keeps whatever its first cancellation recorded, so repeated saves change nothing.
     const disposition: CancelDisposition | null = !willBeCancelled ? null
       : cancelEvent0 ? (cancellingShipped ? 'returned_resalable' : null)
+      : goodsOutsideBefore ? 'returned_resalable'
       : ((oldSale.cancel_disposition as CancelDisposition | null) ?? null);
     data.cancel_disposition = disposition;
-    const restoredQty = cancelEvent0 && cancellingShipped ? lineQty.reduce((a, b) => a + b, 0) : 0;
+    const restoredQty = cancelEvent0 && cancellingShipped ? lineQty.reduce((a, b) => a + b, 0)
+      : goodsOutsideBefore ? outsideSlots(oldSale).reduce((n, o) => n + o.qty, 0) : 0;
     if (!willBeCancelled) unretKeys.forEach(k => { data[k] = null; });                  // reopening: back to a normal order
-    else if (cancelEvent0 && cancellingShipped) unretKeys.forEach(k => { data[k] = 0; });   // nothing is left outside
+    else if ((cancelEvent0 && cancellingShipped) || goodsOutsideBefore) unretKeys.forEach(k => { data[k] = 0; });   // nothing is left outside
     else unretKeys.forEach(k => { delete data[k]; });
     if (willBeCancelled) {
       // The deposit is reversed with the order on the cancel event (the amount stays in the cancellation record);
       // later saves of the cancelled order can never bring it back.
-      if (cancelEvent0) data.deposit_paid = 0; else delete data.deposit_paid;
+      if (cancelEvent0) data.deposit_paid = 0; else if (reconcile) data.deposit_paid = keptDeposit; else delete data.deposit_paid;
     }
     if (wasCancelled && !willBeCancelled && oldSale.shipping_collected > 0 && newStatus !== 'تم الصرف') {
       return res.status(400).json({ message: `الأوردر الملغى عليه تحصيل محفوظ ${oldSale.shipping_collected} ج من شركة الشحن — أعد فتحه بحالة «تم الصرف» أو سجّل رد المبلغ لشركة الشحن أولًا` });
@@ -322,7 +332,7 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     if ('error' in resolved) {
       return res.status(400).json({ message: resolved.error });
     }
-    if (cancelEvent0) resolved.value = 0;   // append-only reversal rows bring the order's collections to zero
+    if (cancelEvent0 || reconcile) resolved.value = 0;   // append-only reversal rows bring the order's collections to zero
     data.shipping_collected = resolved.value;
     const newOrderNumber = String(data.order_number ?? oldSale.order_number);
     const newOutstanding = outstandingShippingReceivable({ order_status: newStatus, remaining, shipping_collected: resolved.value });
@@ -386,7 +396,7 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
           restoredQty, revenueReversed: isStockDeducting(oldSale.order_status) ? oldSale.invoice_value : 0,
           receivableReversed: outstandingShippingReceivable(oldSale), invoiceIds: invoices.ids,
         });
-      } else if (willBeCancelled && wasCancelled && (disposition !== oldSale.cancel_disposition || restoredQty > 0)) {
+      } else if (willBeCancelled && wasCancelled && (disposition !== oldSale.cancel_disposition || restoredQty > 0 || reconcile)) {
         await updateDisposition(tx, id, disposition, hasLineReturns(updated) ? restoredQty : undefined);
       } else if (!willBeCancelled && wasCancelled) {
         await markReopened(tx, id);
@@ -405,7 +415,7 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     const collection_difference = willBeDispatched ? Math.max(0, remaining - resolved.value) : 0;
     const cancelEvent = willBeCancelled && !wasCancelled;
     const reopenEvent = !willBeCancelled && wasCancelled;
-    const dispositionEvent = willBeCancelled && wasCancelled && disposition !== oldSale.cancel_disposition;
+    const dispositionEvent = willBeCancelled && wasCancelled && (disposition !== oldSale.cancel_disposition || reconcile);
     const action = cancelEvent ? 'ORDER_CANCELLED'
       : reopenEvent ? 'ORDER_REOPENED'
       : dispositionEvent ? 'CANCEL_DISPOSITION_CHANGED'

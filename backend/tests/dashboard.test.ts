@@ -326,3 +326,83 @@ test('Dashboard cancellation: an unshipped cancellation leaves no goods outside 
   assert.deepEqual([d.cancelled_orders.count, d.cancelled_orders.customer_credit_due, d.cancelled_orders.shipping_repayment_due, d.cancelled_orders.goods_outside.qty], [1, 0, 0, 0]);
   assert.equal(d.stock_value, 100 * 600);
 });
+
+// ───────────── cancellation restores inventory exactly once (Dashboard + Ready Stock page sources) ─────────────
+import { outsideSlots as backendOutside } from '../src/services/readyStockPositions';
+// the frontend file lives outside this package (and is an ES module): transpile it here so the two rules can be compared
+import fs from 'node:fs';
+import ts from 'typescript';
+const pageOutside = (() => {
+  const src = fs.readFileSync(path.resolve(__dirname, '../../src/utils/orderStock.ts'), 'utf8');
+  const js = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
+  const mod = { exports: {} as { outsideSlots: (s: never) => unknown } };
+  new Function('module', 'exports', js)(mod, mod.exports);
+  return mod.exports.outsideSlots;
+})();
+
+const CANCELLED = 'تم الإلغاء';
+const dashQty = async (w: World) => (await callDashboard(dataOf(w), 1)).stock_items.reduce((n, i) => n + i.actual_qty, 0);
+/** What the Ready Stock page shows: physical = opening + production − outside pieces + returns (derived, same function the endpoint uses). */
+const pageQty = (w: World) => w.stock().physicalQty;
+
+for (const [label, status, extra] of [
+  ['prepared (يتم التجهيز)', PREPARED, {}],
+  ['shipped, not yet paid out', NOT_PAID_OUT, {}],
+  ['paid out', PAID_OUT, { collected: 7500, deposit: 1000, date: '2026-10-05' }],
+  ['customer account', 'حساب عميل', {}],
+] as const) {
+  test(`Cancel from «${label}»: stock before / after cancel / after saving again — Dashboard and Ready Stock agree`, async () => {
+    const w = new World();
+    w.addStock('M1', 'أسود', 100, 600);
+    const o = await w.saveOrder({ status, slots: [M1], invoice: 8500, ...extra });
+    const shipped = status !== PREPARED;
+    const before = [pageQty(w), await dashQty(w)];
+    assert.deepEqual(before, [shipped ? 90 : 100, shipped ? 90 : 100]);
+    await w.saveOrder({ id: o.id, status: CANCELLED, slots: [M1], invoice: 8500, ...extra });
+    assert.deepEqual([pageQty(w), await dashQty(w), w.readyStock[0].reserved_quantity], [100, 100, 0]);
+    for (let i = 0; i < 3; i++) await w.saveOrder({ id: o.id, status: CANCELLED, slots: [M1], invoice: 8500, ...extra });
+    assert.deepEqual([pageQty(w), await dashQty(w)], [100, 100]);                      // not restored twice
+    assert.equal(w.movements.filter(m => m.movement_type === 'SHIP_REVERSAL').length, shipped ? 1 : 0);
+  });
+}
+
+test('Cancel an order with several models and colours: every line is back, once', async () => {
+  const w = new World();
+  w.addStock('M1', 'أسود', 50, 600); w.addStock('M1', 'أبيض', 50, 650); w.addStock('M2', 'أسود', 50, 400);
+  const lines = [{ code: 'M1', qty: 5, color: 'أسود' }, { code: 'M1', qty: 3, color: 'أبيض' }, { code: 'M2', qty: 7, color: 'أسود' }];
+  const o = await w.saveOrder({ status: PAID_OUT, slots: lines, invoice: 9000, collected: 9000, date: '2026-10-05' });
+  assert.deepEqual([pageQty(w), await dashQty(w)], [135, 135]);
+  await w.saveOrder({ id: o.id, status: CANCELLED, slots: lines, invoice: 9000 });
+  assert.deepEqual([pageQty(w), await dashQty(w)], [150, 150]);
+  await w.saveOrder({ id: o.id, status: CANCELLED, slots: lines, invoice: 9000 });
+  assert.deepEqual([pageQty(w), await dashQty(w)], [150, 150]);
+  assert.deepEqual(w.stock().physical, 50 * 600 + 50 * 650 + 50 * 400);
+});
+
+test('An order cancelled by an EARLIER version (goods marked not returned) is restored — once — when it is saved again', async () => {
+  const w = new World();
+  w.addStock('M1', 'أسود', 100, 600);
+  const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: [M1], invoice: 8500, deposit: 1000 });
+  // simulate the old rule: cancelled, goods "not returned", cost already reversed, per-line columns unknown, deposit still held
+  Object.assign(w.sales[0], { order_status: CANCELLED, cancel_disposition: 'not_returned' });
+  w.movements.push({ ...w.movements[0], id: 99, movement_type: 'SHIP_REVERSAL' });
+  assert.deepEqual([pageQty(w), await dashQty(w)], [90, 90]);                         // the bug the user sees: stock not back
+  await w.saveOrder({ id: o.id, status: CANCELLED, slots: [M1], invoice: 8500 });
+  assert.deepEqual([pageQty(w), await dashQty(w)], [100, 100]);                       // saving finishes the restoration
+  assert.equal(w.movements.filter(m => m.movement_type === 'SHIP_REVERSAL').length, 1);   // cost was already reversed: not reversed twice
+  assert.equal(w.cash().cash, 0);                                                      // the unreversed deposit is reversed too
+  await w.saveOrder({ id: o.id, status: CANCELLED, slots: [M1], invoice: 8500 });
+  assert.deepEqual([pageQty(w), await dashQty(w), w.cash().cash], [100, 100, 0]);
+});
+
+test('The Ready Stock page rule (frontend) and the server rule agree for every status / disposition / per-line combination', () => {
+  const base = { model1_code: 'M1', model1_qty: 10, model1_color: 'أسود', model2_code: 'M2', model2_qty: 4, model2_color: 'أبيض', model3_code: '', model3_qty: 0, model3_color: '', model4_code: '', model4_qty: 0, model4_color: '', model5_code: '', model5_qty: 0, model5_color: '' };
+  for (const order_status of [PREPARED, NOT_PAID_OUT, PAID_OUT, 'حساب عميل', CANCELLED]) {
+    for (const cancel_disposition of [null, 'returned_resalable', 'not_returned', 'returned_damaged']) {
+      for (const un of [[null, null], [0, 0], [3, 0], [10, 4]]) {
+        const sale = { ...base, order_status, cancel_disposition, model1_unreturned_qty: un[0], model2_unreturned_qty: un[1], model3_unreturned_qty: null, model4_unreturned_qty: null, model5_unreturned_qty: null };
+        assert.deepEqual(pageOutside(sale as never), backendOutside(sale as never), JSON.stringify([order_status, cancel_disposition, un]));
+      }
+    }
+  }
+});

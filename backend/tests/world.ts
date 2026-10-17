@@ -5,7 +5,7 @@ import type { Prisma } from '@prisma/client';
 import type { InventoryMovement, ModelProduction, OrderCancellation, ReadyStock, ReturnItem, Sale, ShippingCollection } from '@prisma/client';
 import { collectionDate, loadStockContext, syncCollections, syncShipMovements } from '../src/services/orderLedgers';
 import {
-  STATUS_CANCELED, computeStockPositions, hasLineReturns, increasingKeys, isStockDeducting, outsideSlots, reservedSyncUpdates, validateShipment, valueStockRow,
+  STATUS_CANCELED, computeStockPositions, hasLineReturns, holdsGoodsOutside, increasingKeys, isStockDeducting, outsideSlots, reservedSyncUpdates, validateShipment, valueStockRow,
   type CancelDisposition, type Slot,
 } from '../src/services/readyStockPositions';
 import { markReopened, recordCancellation, shippedSnapshot, updateDisposition, cancelledObligations, refundsByOrderNumber, refundsFor } from '../src/services/orderCancellation';
@@ -132,12 +132,17 @@ export class World {
     const cancellingShipped = !!existing && willBeCancelled && isStockDeducting(existing.order_status);
     // Cancelling reverses the whole order: the deposit and every collection are taken back with append-only rows
     // (the amounts stay on the cancellation record); a later save of the cancelled order changes nothing.
-    const deposit = willBeCancelled ? (cancelEvent ? 0 : (existing?.deposit_paid ?? 0)) : (input.deposit ?? 0);
-    const collected = willBeCancelled ? (cancelEvent ? 0 : (existing?.shipping_collected ?? 0)) : input.status === 'تم الصرف' ? (input.collected ?? 0) : 0;
+    // An order cancelled by an earlier version may still hold goods outside / money: saving it finishes the reversal once.
+    const goodsOutsideBefore = !!existing && wasCancelled && willBeCancelled && holdsGoodsOutside(existing);
+    const refundedBefore = existing && wasCancelled ? this.returns.filter(r => r.order_number === existing.order_number).reduce((n, r) => n + r.refund_amount, 0) : 0;
+    const keptDeposit = Math.min(existing?.deposit_paid ?? 0, refundedBefore);
+    const reconcile = !!existing && wasCancelled && willBeCancelled && (goodsOutsideBefore || existing.shipping_collected !== 0 || existing.deposit_paid > keptDeposit + 0.005);
+    const deposit = willBeCancelled ? (cancelEvent ? 0 : reconcile ? keptDeposit : (existing?.deposit_paid ?? 0)) : (input.deposit ?? 0);
+    const collected = willBeCancelled ? (cancelEvent || reconcile ? 0 : (existing?.shipping_collected ?? 0)) : input.status === 'تم الصرف' ? (input.collected ?? 0) : 0;
     if (input.status === 'تم الصرف' && (collected < 0 || collected > input.invoice - deposit + 0.005)) throw new Error('invalid collected amount');
     if (wasCancelled && !willBeCancelled && (existing?.shipping_collected ?? 0) > 0 && input.status !== 'تم الصرف') throw new Error('المحصّل محتجز');
     const disposition: CancelDisposition | null = !willBeCancelled ? null
-      : cancelEvent ? (cancellingShipped ? 'returned_resalable' : null) : ((existing?.cancel_disposition as CancelDisposition | null) ?? null);
+      : cancelEvent ? (cancellingShipped ? 'returned_resalable' : null) : goodsOutsideBefore ? 'returned_resalable' : ((existing?.cancel_disposition as CancelDisposition | null) ?? null);
 
     const row: Sale = existing ?? ({
       id: this.ids.sale++, season_id: season, order_number: input.order_number ?? `SO-${this.ids.sale}`, row_number: 0, marketer: '', client: 'c',
@@ -156,8 +161,8 @@ export class World {
       if (problem) throw new Error(problem);
     }
     const lineQty = [1, 2, 3, 4, 5].map(i => (input.slots[i - 1]?.code ? input.slots[i - 1].qty : 0));
-    const unreturned: number[] | null = cancelEvent && cancellingShipped ? [0, 0, 0, 0, 0] : null;
-    const restoredQty = unreturned ? lineQty.reduce((x, y) => x + y, 0) : 0;
+    const unreturned: number[] | null = (cancelEvent && cancellingShipped) || goodsOutsideBefore ? [0, 0, 0, 0, 0] : null;
+    const restoredQty = goodsOutsideBefore && existing ? outsideSlots(existing).reduce((n, o) => n + o.qty, 0) : unreturned ? lineQty.reduce((x, y) => x + y, 0) : 0;
     const reversedAmounts = { id: row.id, deposit_paid: row.deposit_paid, shipping_collected: row.shipping_collected };   // as they were BEFORE the reversal
     const previousCached = row.shipping_collected;
     const storedDate = row.shipping_collected_date;
@@ -186,7 +191,7 @@ export class World {
         seasonId: season, sale: reversedAmounts, statusBefore: existing?.order_status ?? '', wasShipped: cancellingShipped, disposition,
         reason: input.reason ?? '', snapshot: shippedBefore, user: input.user, restoredQty,
       });
-    } else if (willBeCancelled && wasCancelled && disposition !== oldDisposition) {
+    } else if (willBeCancelled && wasCancelled && (disposition !== oldDisposition || reconcile)) {
       await updateDisposition(this.tx, row.id, disposition, hasLineReturns(row) ? restoredQty : undefined);
     } else if (!willBeCancelled && wasCancelled) {
       await markReopened(this.tx, row.id);
