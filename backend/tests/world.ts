@@ -183,6 +183,9 @@ export class World {
     const date = collectionDate(input.date, storedDate);
     await syncCollections(this.tx, row, { previousCached, desired: collected, date, user: input.user });
     if (collected > 0 && !row.shipping_collected_date) row.shipping_collected_date = date;
+    // route rule (resolvePayoutDate): an order that newly reaches «تم الصرف» takes the explicit payout date it was given
+    if (input.status === 'تم الصرف' && storedDate === null && input.date) row.shipping_collected_date = input.date;
+    else if (input.status === 'تم الصرف' && wasCancelled && input.date) row.shipping_collected_date = input.date;
     if (input.status !== 'تم الصرف' && !willBeCancelled) row.shipping_collected_date = null;
     const shippedBefore = cancellingShipped ? await shippedSnapshot(this.tx, row.id) : { qty: 0, cost: 0 };
     await syncShipMovements(this.tx, row, input.user);

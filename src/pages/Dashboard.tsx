@@ -17,6 +17,7 @@ import CharitySection from '../components/CharitySection';
 import { statusLabel } from '../utils/orderStatus';
 import ReceivablesAuditModal from '../components/ReceivablesAuditModal';
 import CashReconciliationModal from '../components/CashReconciliationModal';
+import MonthlyModelSales from '../components/MonthlyModelSales';
 import MissingStockSummary from '../components/MissingStockSummary';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -296,6 +297,9 @@ export default function Dashboard() {
             </table>
           </div>
         </div>
+
+        {/* Pieces sold per model this month (orders currently «تم الصرف») */}
+        <MonthlyModelSales />
 
         {/* Summary Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

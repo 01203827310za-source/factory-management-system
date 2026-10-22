@@ -124,6 +124,36 @@ async function main() {
   await prisma.financialSnapshot.deleteMany({ where: { season_id: second.id } });
   await prisma.season.delete({ where: { id: second.id } });
 
+  // ───────── monthly units sold by model (GET /api/dashboard/monthly-sales) ─────────
+  await reset();
+  await api('POST', '/ready-stock', { model_code: 'M2', product_name: 'Hoodie', color: 'أبيض', opening_balance: 100, cost_per_piece: 400, location: '' });
+  const m1 = (await api('POST', '/sales', payload({ order_status: PAID_OUT, invoice_value: 2000, shipping_collected: 2000, shipping_collected_date: '2026-10-05', lines: [{ code: 'M1', qty: 4, color: 'أسود' }, { code: 'M2', qty: 6, color: 'أبيض' }] }))).body;
+  const m2 = (await api('POST', '/sales', payload({ order_status: PAID_OUT, invoice_value: 900, shipping_collected: 900, shipping_collected_date: '2026-10-31', lines: [{ code: 'M1', qty: 3, color: 'أسود' }] }))).body;
+  await api('POST', '/sales', payload({ order_status: PAID_OUT, invoice_value: 500, shipping_collected: 500, shipping_collected_date: '2026-11-01', lines: [{ code: 'M1', qty: 50, color: 'أسود' }] }));
+  await api('POST', '/sales', payload({ order_status: NOT_PAID_OUT, invoice_value: 500, lines: [{ code: 'M1', qty: 70, color: 'أسود' }] }));
+  await api('POST', '/sales', payload({ order_status: PREPARED, invoice_value: 500, lines: [{ code: 'M1', qty: 5, color: 'أسود' }] }));
+  const ms = async (month: string, tk?: string) => api('GET', `/dashboard/monthly-sales?month=${month}`, undefined, tk ? { token: tk } : {});
+  let oct = (await ms('2026-10')).body;
+  check('MONTHLY. October: M1 = 4 + 3 = 7 and M2 = 6; the total is their sum (13); unpaid / reserved / November orders excluded', oct.rows.find((x: Json) => x.model_code === 'M1')?.qty === 7 && oct.rows.find((x: Json) => x.model_code === 'M2')?.qty === 6 && oct.total_qty === 13 && oct.rows.length === 2, oct);
+  check('MONTHLY. model name from the stock card; per-colour breakdown; all-time column', oct.rows.find((x: Json) => x.model_code === 'M2')?.model_name === 'Hoodie' && oct.rows.find((x: Json) => x.model_code === 'M1')?.all_time_qty === 57, oct.rows);
+  check('MONTHLY. November (month boundary) counts only the 1 November payout', (await ms('2026-11')).body.total_qty === 50);
+  check('MONTHLY. an empty month returns no rows', (await ms('2026-02')).body.rows.length === 0);
+  check('MONTHLY. an invalid month is refused (400)', (await ms('2026-13')).status === 400);
+  await api('PUT', `/sales/${m2.id}`, payload({ order_number: m2.order_number, order_status: PAID_OUT, invoice_value: 900, shipping_collected: 900, shipping_collected_date: '2026-10-31', lines: [{ code: 'M1', qty: 10, color: 'أسود' }] }));
+  oct = (await ms('2026-10')).body;
+  check('MONTHLY. editing a paid-out order quantity (3 → 10) is reflected immediately: M1 = 14, total 20', oct.rows.find((x: Json) => x.model_code === 'M1')?.qty === 14 && oct.total_qty === 20, oct.total_qty);
+  for (let i = 0; i < 2; i++) await api('PUT', `/sales/${m2.id}`, payload({ order_number: m2.order_number, order_status: PAID_OUT, invoice_value: 900, shipping_collected: 900, shipping_collected_date: '2026-10-31', lines: [{ code: 'M1', qty: 10, color: 'أسود' }] }));
+  check('MONTHLY. saving it again twice does not change the report', (await ms('2026-10')).body.total_qty === 20);
+  await api('PUT', `/sales/${m1.id}`, payload({ order_number: m1.order_number, order_status: CANCELED, invoice_value: 2000, lines: [{ code: 'M1', qty: 4, color: 'أسود' }, { code: 'M2', qty: 6, color: 'أبيض' }] }));
+  oct = (await ms('2026-10')).body;
+  check('MONTHLY. cancelling a paid-out order removes it (M1 = 10, M2 gone, total 10)', oct.rows.find((x: Json) => x.model_code === 'M1')?.qty === 10 && !oct.rows.some((x: Json) => x.model_code === 'M2') && oct.total_qty === 10, oct);
+  const secondSeason = await prisma.season.create({ data: { name: 'Winter E2E', year: 2099, type: 'Winter', status: 'inactive', is_active: false } });
+  const otherSeasonMs = await api('GET', '/dashboard/monthly-sales?month=2026-10', undefined, { season: secondSeason.id });
+  check('MONTHLY. another season sees none of it', otherSeasonMs.status === 200 && otherSeasonMs.body.total_qty === 0, otherSeasonMs.body);
+  await prisma.financialSnapshot.deleteMany({ where: { season_id: secondSeason.id } });
+  await prisma.season.delete({ where: { id: secondSeason.id } });
+  await prisma.paymentLog.deleteMany({}); await prisma.cashAdjustment.deleteMany({}); await prisma.cashCount.deleteMany({});
+
   console.log(failed ? `\n${failed} FAILED` : '\nall passed');
   await prisma.$disconnect();
   process.exit(failed ? 1 : 0);

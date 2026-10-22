@@ -517,6 +517,7 @@ export const dashboardApi = {
   getExpenseRecords: (category: string) =>
     get<ExpenseRecordsResult>(`/dashboard/breakdown/expenses/records?category=${encodeURIComponent(category)}`),
   getReceivablesAudit: () => get<ReceivablesAudit>('/dashboard/breakdown/receivables-audit'),
+  getMonthlySales: (month: string) => get<MonthlyModelSales>(`/dashboard/monthly-sales?month=${encodeURIComponent(month)}`),
   getSalesBreakdown: () => get<SalesBreakdown>('/dashboard/breakdown/sales'),
   getSalesRecords: (group: string, value: string) =>
     get<SalesRecordsResult>(`/dashboard/breakdown/sales/records?group=${encodeURIComponent(group)}&value=${encodeURIComponent(value)}`),
@@ -1076,3 +1077,10 @@ export const cashReportApi = {
   recordAdjustment: (input: { kind: 'opening' | 'adjustment'; amount: number; entry_date?: string; reason: string; idempotency_key: string }) =>
     post<{ duplicate: boolean }>('/cash-report/adjustments', input),
 };
+
+// ===== MONTHLY UNITS SOLD BY MODEL (orders currently «تم الصرف», by payout month) =====
+export interface MonthlyModelSales {
+  season_id: number; month: string;
+  rows: { model_code: string; model_name: string; qty: number; order_count: number; all_time_qty: number; colors: { color: string; qty: number }[] }[];
+  total_qty: number; order_count: number; estimated_orders: number; available_months: string[];
+}

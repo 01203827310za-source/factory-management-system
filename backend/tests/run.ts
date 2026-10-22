@@ -9,5 +9,6 @@ import './allocation.test';
 import './missingStock.test';
 import './cancellation.test';
 import './cashLedger.test';
+import './monthlySales.test';
 
 runAll();

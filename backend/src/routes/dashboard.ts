@@ -8,10 +8,31 @@ import { STATUS_CANCELED, STATUS_RESERVED, computeStockPositions, hasLineReturns
 import { costOfGoodsShipped, returnsCostCredit, type MovementRow } from '../services/inventoryMovements';
 import { analyseShipments, findReceivableOverlap } from '../services/receivablesAudit';
 import { summarizeMissingStock } from '../services/missingStock';
+import { cairoToday, isValidMonth } from '../services/charity';
+import { monthlySalesByModel } from '../services/monthlySales';
 import { cancelledObligations, refundsByOrderNumber, refundsFor } from '../services/orderCancellation';
 
 const router = Router();
 router.use(authenticate);
+
+// GET /api/dashboard/monthly-sales?month=YYYY-MM — pieces sold per model from orders currently «تم الصرف» (read-only).
+router.get('/monthly-sales', async (req: Request, res: Response) => {
+  try {
+    const month = req.query.month ? String(req.query.month) : cairoToday().slice(0, 7);
+    if (!isValidMonth(month)) return res.status(400).json({ message: 'الشهر غير صالح (YYYY-MM)' });
+    const seasonId = await getSeasonId(req);
+    const [sales, stock] = await Promise.all([
+      prisma.sale.findMany({ where: { ...seasonWhere(seasonId), order_status: 'تم الصرف' } }),
+      prisma.readyStock.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'asc' } }),
+    ]);
+    const names = new Map<string, string>();
+    stock.forEach(r => { const k = r.model_code.trim().toLowerCase(); if (!names.has(k) && r.product_name) names.set(k, r.product_name); });
+    return res.json({ season_id: seasonId, ...monthlySalesByModel(sales, month, names) });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'خطأ في حساب المبيعات الشهرية' });
+  }
+});
 
 router.get('/', async (req: Request, res: Response) => {
   try {
