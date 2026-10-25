@@ -185,7 +185,6 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
     delete data.cancel_reason;          // lives on the cancellation record, not on the order
     data.cancel_disposition = null;     // set only when a shipped order is cancelled
     const status = (data.order_status as string) || '';
-    const isReservation = status === 'تم الحجز';
     const remaining = (Number(data.invoice_value) || 0) - (Number(data.deposit_paid) || 0);
 
     // A brand-new order can be entered directly as "تم الصرف" (e.g. a counter sale) —
@@ -209,42 +208,54 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
 
     const newSlots = extractModels(data);
     const explicitDate = data.shipping_collected_date;
+    let downgradeReason = '';
     const sale = await prisma.$transaction(async (tx) => {
       await lockStock(tx, seasonId);
       // «يتم التجهيز» is always accepted — whatever is not in stock is simply left pending.
-      // Goods that physically leave the factory must exist and not be held for other orders.
+      // Goods that physically leave the factory must exist and not be held for other orders. A NEW order entered directly as
+      // shipped while the stock is short is not rejected: it is saved as «يتم التجهيز» with its FULL quantity (what exists is
+      // reserved, the rest is a tracked shortage) and nothing is deducted. If money from the shipping company was already
+      // entered, that cannot be dropped silently, so the order is refused with an explanation instead.
+      let effectiveStatus = status;
       if (isStockDeducting(status)) {
         const problem = validateShipment(await loadStockContext(tx, seasonId), newSlots);
-        if (problem) throw new StockError(problem);
+        if (problem) {
+          if (resolved.value > 0) throw new StockError(`${problem} — سجّل الأوردر بحالة «يتم التجهيز» أولًا، ثم اشحنه عند توفر الكمية`);
+          effectiveStatus = STATUS_RESERVED;
+          downgradeReason = problem;
+        }
       }
+      const reserve = effectiveStatus === STATUS_RESERVED;
       const created = await tx.sale.create({
         data: {
           ...saleData,
+          order_status: effectiveStatus,
           season_id: seasonId,
           remaining,
-          shipping_collected: resolved.value,
-          shipping_collected_date: payoutDate.value,
+          shipping_collected: reserve ? 0 : resolved.value,
+          shipping_collected_date: reserve ? null : payoutDate.value,
         },
       });
-      if (isReservation) await syncReserved(tx, seasonId, newSlots);
+      if (reserve) await syncReserved(tx, seasonId, newSlots);
       await syncCollections(tx, created, { previousCached: 0, desired: resolved.value, date: collectionDate(explicitDate, null), user: req.user?.username });
       await syncShipMovements(tx, created, req.user?.username);
       return created;
     });
 
-    if (isReservation) logStockMovement(req.user, 'STOCK_RESERVED', sale, newSlots, 'حجز مخزون');
+    const savedAsReservation = sale.order_status === STATUS_RESERVED;
+    if (savedAsReservation) logStockMovement(req.user, 'STOCK_RESERVED', sale, newSlots, downgradeReason ? 'حجز مخزون (الكمية غير متوفرة للشحن)' : 'حجز مخزون');
     else if (isStockDeducting(status)) logStockMovement(req.user, 'STOCK_SHIPPED', sale, newSlots, 'خروج مخزون (شحن)');
 
-    const isDispatched = status === 'تم الصرف';
+    const isDispatched = sale.order_status === 'تم الصرف';
     const collection_difference = isDispatched ? Math.max(0, remaining - resolved.value) : 0;
     logAudit({
       user: req.user, module: 'Sales', action: isDispatched ? 'SHIPPING_PAYOUT_CONFIRMED' : 'CREATE', record_id: sale.id,
       after_data: isDispatched ? { ...sale, collection_difference } : sale,
-      description: isDispatched
+      description: downgradeReason ? `إضافة عملية بيع: ${sale.client} - ${sale.order_number} — حُفظ «يتم التجهيز» بدل «${status}» لأن الكمية غير متوفرة (${downgradeReason})` : isDispatched
         ? `إضافة عملية بيع (تم الصرف مباشرة): ${sale.client} - ${sale.order_number} — المتبقي: ${remaining} — المستلم فعليًا: ${resolved.value} — الفرق غير المحصل: ${collection_difference}`
         : `إضافة عملية بيع: ${sale.client} - ${sale.order_number}`,
     });
-    return res.status(201).json({ ...sale, collection_difference, fulfillment: (await fulfillmentOf(seasonId, sale.id)).one });
+    return res.status(201).json({ ...sale, collection_difference, fulfillment: (await fulfillmentOf(seasonId, sale.id)).one, status_downgraded: !!downgradeReason, requested_status: status, downgrade_reason: downgradeReason || null });
   } catch (err) {
     if (err instanceof StockError) return res.status(400).json({ message: err.message });
     console.error(err);

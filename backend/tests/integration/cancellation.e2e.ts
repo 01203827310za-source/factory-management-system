@@ -235,6 +235,33 @@ async function main() {
   for (let i = 0; i < 3; i++) await api('PUT', `/sales/${o.id}`, cancelBody(o, { deposit_paid: 1000 }));
   check('LEGACY. saving it three more times restores / reverses nothing more', JSON.stringify(await rows(o.id)) === snapLegacy && (await dashSnap()) === snapLegacyDash && (await stockQty('M1', 'أسود')) === 100);
 
+  // ───────── SHORTAGE. orders are never blocked by missing stock ─────────
+  await reset();
+  const big: Line[] = [{ code: 'M1', qty: 150, color: 'أسود' }];
+  const sh = await api('POST', '/sales', payload({ order_status: NOT_PAID_OUT, invoice_value: 15000, lines: big }));
+  check('SHORTAGE. a directly shipped order for 150 pieces with 100 in stock is SAVED (201), not rejected', sh.status === 201, sh.body);
+  check('SHORTAGE. saved as «يتم التجهيز» with the FULL requested quantity (150); 100 reserved, 50 pending; flagged for the UI', sh.body.order_status === PREPARED && sh.body.model1_qty === 150 && sh.body.status_downgraded === true && sh.body.fulfillment?.reserved === 100 && sh.body.fulfillment?.pending === 50, sh.body);
+  const shMovements = await prisma.inventoryMovement.count({ where: { sale_id: sh.body.id } });
+  const shDash = await dash();
+  check('SHORTAGE. nothing was deducted: no cost-ledger rows, stock still 100, no receivable, no revenue', shMovements === 0 && (await stockQty('M1', 'أسود')) === 100 && shDash.money_owed_to_us === 0 && shDash.recognized_sales === 0, { shMovements, owed: shDash.money_owed_to_us });
+  check('SHORTAGE. the shortage appears in the existing summary: M1 أسود missing 50', shDash.missing_stock?.total_missing_units === 50 && shDash.missing_stock?.rows[0]?.missing === 50 && shDash.missing_stock?.rows[0]?.orders?.length === 1, shDash.missing_stock);
+  const shRefused = await api('POST', '/sales', payload({ order_status: PAID_OUT, invoice_value: 500, shipping_collected: 500, shipping_collected_date: '2026-10-05', lines: [{ code: 'M1', qty: 500, color: 'أسود' }] }));
+  check('SHORTAGE. shipping-company money entered for goods that do not exist is refused (400), never dropped', shRefused.status === 400 && (await prisma.sale.count()) === 1, shRefused.body);
+  const shShip = await api('PUT', `/sales/${sh.body.id}`, payload({ order_number: sh.body.order_number, order_status: NOT_PAID_OUT, invoice_value: 15000, lines: big }));
+  check('SHORTAGE. explicitly shipping the under-stocked order is still refused (400) and nothing changes', shShip.status === 400 && (await rows(sh.body.id)).sale?.order_status === PREPARED && (await rows(sh.body.id)).movements.length === 0, shShip.body);
+  for (let i = 0; i < 3; i++) await api('PUT', `/sales/${sh.body.id}`, payload({ order_number: sh.body.order_number, order_status: PREPARED, invoice_value: 15000, lines: big }));
+  check('SHORTAGE. saving it again does not duplicate the shortage or the reservation', (await dash()).missing_stock?.total_missing_units === 50 && (await prisma.readyStock.findFirst({ where: { model_code: 'M1', color: 'أسود' } }))?.reserved_quantity === 100);
+  await api('PUT', `/sales/${sh.body.id}`, payload({ order_number: sh.body.order_number, order_status: PREPARED, invoice_value: 12000, lines: [{ code: 'M1', qty: 120, color: 'أسود' }] }));
+  check('SHORTAGE. editing the quantity to 120 re-derives the shortage (20)', (await dash()).missing_stock?.total_missing_units === 20);
+  await prisma.modelProduction.create({ data: { season_id: sh.body.season_id, date: '2026-10-10', cut_number: 1, model_code: 'M1', qty_from_cutting: 30, model_description: 'M1', color: 'أسود', sizes: '', status: 'تام', wastage: 0, qty_received: 30, cost_per_piece: 0 } });
+  const afterProd = await dash();
+  check('SHORTAGE. production arriving later clears the shortage by allocation; the order is NOT shipped automatically', (afterProd.missing_stock?.total_missing_units ?? 0) === 0 && (await rows(sh.body.id)).sale?.order_status === PREPARED && (await rows(sh.body.id)).movements.length === 0, afterProd.missing_stock);
+  await prisma.modelProduction.deleteMany({});
+  const sh2 = await api('POST', '/sales', payload({ order_status: PREPARED, invoice_value: 1000, lines: [{ code: 'M2', qty: 80, color: 'أبيض' }] }));
+  check('SHORTAGE. a second short order (M2: 80 vs 50) is tracked on its own row', sh2.status === 201 && (await dash()).missing_stock?.rows.some((r: Json) => r.model_code === 'M2' && r.missing === 30), (await dash()).missing_stock);
+  await api('PUT', `/sales/${sh2.body.id}`, payload({ order_number: sh2.body.order_number, order_status: CANCELED, invoice_value: 1000, lines: [{ code: 'M2', qty: 80, color: 'أبيض' }] }));
+  check('SHORTAGE. cancelling an order with a shortage removes it; stock never went negative', !(await dash()).missing_stock?.rows.some((r: Json) => r.model_code === 'M2') && (await stockQty('M2', 'أبيض')) === 50);
+
   // ───────── seasons + authorisation ─────────
   o = reopenedOrder;
   await reset();

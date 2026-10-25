@@ -6,6 +6,7 @@ import { World } from './world';
 const PREPARED = 'تم الحجز';        // stored value of «يتم التجهيز»
 const NOT_PAID_OUT = 'لم يتم الصرف';
 const PAID_OUT = 'تم الصرف';
+const CANCELED = 'تم الإلغاء';
 const slot = (qty: number) => [{ code: 'M1', qty, color: 'أسود' }];
 
 function worldWithStock(qty: number) {
@@ -89,10 +90,15 @@ test('6. shipping is blocked when the quantity is not physically available / all
   assert.equal(w.sales[0].order_status, PREPARED);        // unchanged
   assert.equal(w.stock().physicalQty, 4);
   assert.equal(w.movements.length, 0);
-  // a direct shipment of goods that were never produced is refused too
-  await assert.rejects(() => w.saveOrder({ status: NOT_PAID_OUT, slots: slot(1), invoice: 100 }), /لا يمكن شحن/);
-  // …and no card at all
-  await assert.rejects(() => w.saveOrder({ status: NOT_PAID_OUT, slots: [{ code: 'ZZ', qty: 1, color: '' }], invoice: 100 }), /لا يوجد كارت مخزون/);
+  // a NEW order entered directly as shipped while the stock is short is not refused: it is saved as «يتم التجهيز», nothing deducted
+  const direct = await w.saveOrder({ status: NOT_PAID_OUT, slots: slot(1), invoice: 100 });
+  assert.equal(direct.order_status, PREPARED);
+  const noCard = await w.saveOrder({ status: NOT_PAID_OUT, slots: [{ code: 'ZZ', qty: 1, color: '' }], invoice: 100 });
+  assert.equal(noCard.order_status, PREPARED);            // …even with no stock card at all (all pending)
+  assert.equal(w.movements.length, 0);
+  assert.equal(w.stock().physicalQty, 4);
+  await w.saveOrder({ id: direct.id, status: CANCELED, slots: slot(1), invoice: 100 });   // keep the following numbers simple
+  await w.saveOrder({ id: noCard.id, status: CANCELED, slots: [{ code: 'ZZ', qty: 1, color: '' }], invoice: 100 });
   // once production covers it, shipping works and deducts exactly once
   w.addProduction('M1', 'أسود', 6);
   await w.resync();
@@ -109,7 +115,11 @@ test('6. shipping is blocked when the quantity is not physically available / all
 test('6b. units held for another prepared order cannot be shipped by a different order', async () => {
   const w = worldWithStock(4);
   const a = await w.saveOrder({ status: PREPARED, slots: slot(4), invoice: 1 });   // holds all 4
-  await assert.rejects(() => w.saveOrder({ status: NOT_PAID_OUT, slots: slot(2), invoice: 1 }), /المحجوز لأوردرات أخرى 4/);
+  const other = await w.saveOrder({ status: NOT_PAID_OUT, slots: slot(2), invoice: 1 });   // new order: saved, but as «يتم التجهيز» (nothing free to ship)
+  assert.equal(other.order_status, PREPARED);
+  assert.equal(w.allocation(other.id)!.reserved, 0);
+  await assert.rejects(() => w.saveOrder({ id: other.id, status: NOT_PAID_OUT, slots: slot(2), invoice: 1 }), /المحجوز لأوردرات أخرى 4/);   // explicit shipping is still blocked
+  await w.saveOrder({ id: other.id, status: CANCELED, slots: slot(2), invoice: 1 });
   // the owner can ship them
   await w.saveOrder({ id: a.id, status: NOT_PAID_OUT, slots: slot(4), invoice: 1 });
   assert.equal(w.stock().physicalQty, 0);

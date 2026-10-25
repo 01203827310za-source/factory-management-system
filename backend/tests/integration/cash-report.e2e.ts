@@ -130,7 +130,7 @@ async function main() {
   const m1 = (await api('POST', '/sales', payload({ order_status: PAID_OUT, invoice_value: 2000, shipping_collected: 2000, shipping_collected_date: '2026-10-05', lines: [{ code: 'M1', qty: 4, color: 'أسود' }, { code: 'M2', qty: 6, color: 'أبيض' }] }))).body;
   const m2 = (await api('POST', '/sales', payload({ order_status: PAID_OUT, invoice_value: 900, shipping_collected: 900, shipping_collected_date: '2026-10-31', lines: [{ code: 'M1', qty: 3, color: 'أسود' }] }))).body;
   await api('POST', '/sales', payload({ order_status: PAID_OUT, invoice_value: 500, shipping_collected: 500, shipping_collected_date: '2026-11-01', lines: [{ code: 'M1', qty: 50, color: 'أسود' }] }));
-  await api('POST', '/sales', payload({ order_status: NOT_PAID_OUT, invoice_value: 500, lines: [{ code: 'M1', qty: 70, color: 'أسود' }] }));
+  await api('POST', '/sales', payload({ order_status: NOT_PAID_OUT, invoice_value: 500, lines: [{ code: 'M1', qty: 20, color: 'أسود' }] }));
   await api('POST', '/sales', payload({ order_status: PREPARED, invoice_value: 500, lines: [{ code: 'M1', qty: 5, color: 'أسود' }] }));
   const ms = async (month: string, tk?: string) => api('GET', `/dashboard/monthly-sales?month=${month}`, undefined, tk ? { token: tk } : {});
   let oct = (await ms('2026-10')).body;

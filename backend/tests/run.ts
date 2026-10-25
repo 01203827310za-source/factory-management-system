@@ -10,5 +10,6 @@ import './missingStock.test';
 import './cancellation.test';
 import './cashLedger.test';
 import './monthlySales.test';
+import './shortageOrders.test';
 
 runAll();

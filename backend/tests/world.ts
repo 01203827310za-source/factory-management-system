@@ -124,6 +124,15 @@ export class World {
     /** Pieces of each line that came back resalable (default: all, when the disposition is returned_resalable). */
     returnedQty?: number[];
   }): Promise<Sale> {
+    // Same rule as POST /sales: a NEW order entered directly as shipped while the stock is short is saved as «يتم التجهيز»
+    // with its full quantity (nothing deducted); it is refused only if shipping-company money was already entered.
+    if (!input.id && !input.legacy && isStockDeducting(input.status)) {
+      const problem = validateShipment(await loadStockContext(this.tx, input.season ?? 1), input.slots);
+      if (problem) {
+        if (input.status === 'تم الصرف' && (input.collected ?? 0) > 0) throw new Error(problem);
+        input = { ...input, status: 'تم الحجز', collected: 0 };
+      }
+    }
     const season = input.season ?? 1;
     const existing = input.id ? this.sales.find(s => s.id === input.id) : undefined;
     const wasCancelled = existing?.order_status === STATUS_CANCELED;
