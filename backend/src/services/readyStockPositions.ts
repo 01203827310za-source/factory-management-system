@@ -53,6 +53,7 @@ type SaleOutsideFields = StatusAndDisposition & Partial<Pick<Sale,
   'model1_code' | 'model1_qty' | 'model1_color' | 'model2_code' | 'model2_qty' | 'model2_color' |
   'model3_code' | 'model3_qty' | 'model3_color' | 'model4_code' | 'model4_qty' | 'model4_color' |
   'model5_code' | 'model5_qty' | 'model5_color' |
+  'model1_extra_qty' | 'model2_extra_qty' | 'model3_extra_qty' | 'model4_extra_qty' | 'model5_extra_qty' |
   'model1_unreturned_qty' | 'model2_unreturned_qty' | 'model3_unreturned_qty' | 'model4_unreturned_qty' | 'model5_unreturned_qty'>>;
 
 /** True when the order was cancelled under the per-line rule (all five unreturned columns were written). */
@@ -70,6 +71,7 @@ export const hasLineReturns = (s: SaleOutsideFields) =>
 export function outsideSlots(s: SaleOutsideFields): Slot[] {
   if (isAwaitingStock(s)) return [];
   const all = saleSlots({
+    model1_extra_qty: s.model1_extra_qty ?? 0, model2_extra_qty: s.model2_extra_qty ?? 0, model3_extra_qty: s.model3_extra_qty ?? 0, model4_extra_qty: s.model4_extra_qty ?? 0, model5_extra_qty: s.model5_extra_qty ?? 0,
     model1_code: s.model1_code ?? '', model1_qty: s.model1_qty ?? 0, model1_color: s.model1_color ?? '',
     model2_code: s.model2_code ?? '', model2_qty: s.model2_qty ?? 0, model2_color: s.model2_color ?? '',
     model3_code: s.model3_code ?? '', model3_qty: s.model3_qty ?? 0, model3_color: s.model3_color ?? '',
@@ -84,11 +86,11 @@ export function outsideSlots(s: SaleOutsideFields): Slot[] {
   }
   const unreturned = [s.model1_unreturned_qty, s.model2_unreturned_qty, s.model3_unreturned_qty, s.model4_unreturned_qty, s.model5_unreturned_qty];
   const lines = [
-    { code: s.model1_code ?? '', qty: s.model1_qty ?? 0, color: s.model1_color ?? '' },
-    { code: s.model2_code ?? '', qty: s.model2_qty ?? 0, color: s.model2_color ?? '' },
-    { code: s.model3_code ?? '', qty: s.model3_qty ?? 0, color: s.model3_color ?? '' },
-    { code: s.model4_code ?? '', qty: s.model4_qty ?? 0, color: s.model4_color ?? '' },
-    { code: s.model5_code ?? '', qty: s.model5_qty ?? 0, color: s.model5_color ?? '' },
+    { code: s.model1_code ?? '', qty: (s.model1_qty ?? 0) - (s.model1_extra_qty ?? 0), color: s.model1_color ?? '' },
+    { code: s.model2_code ?? '', qty: (s.model2_qty ?? 0) - (s.model2_extra_qty ?? 0), color: s.model2_color ?? '' },
+    { code: s.model3_code ?? '', qty: (s.model3_qty ?? 0) - (s.model3_extra_qty ?? 0), color: s.model3_color ?? '' },
+    { code: s.model4_code ?? '', qty: (s.model4_qty ?? 0) - (s.model4_extra_qty ?? 0), color: s.model4_color ?? '' },
+    { code: s.model5_code ?? '', qty: (s.model5_qty ?? 0) - (s.model5_extra_qty ?? 0), color: s.model5_color ?? '' },
   ];
   return lines
     .map((l, i) => ({ code: l.code, color: l.color, qty: Math.min(l.qty, Math.max(0, unreturned[i] ?? 0)) }))
@@ -127,13 +129,15 @@ export type Slot = { code: string; qty: number; color: string };
 export function saleSlots(s: Pick<Sale,
   'model1_code' | 'model1_qty' | 'model1_color' | 'model2_code' | 'model2_qty' | 'model2_color' |
   'model3_code' | 'model3_qty' | 'model3_color' | 'model4_code' | 'model4_qty' | 'model4_color' |
-  'model5_code' | 'model5_qty' | 'model5_color'>): Slot[] {
+  'model5_code' | 'model5_qty' | 'model5_color'> & Partial<Pick<Sale,
+  'model1_extra_qty' | 'model2_extra_qty' | 'model3_extra_qty' | 'model4_extra_qty' | 'model5_extra_qty'>>): Slot[] {
+  // STOCK quantity of a line = ordered quantity minus the sales-only extra (pieces added while «لم يتم الصرف»).
   return [
-    { code: s.model1_code, qty: s.model1_qty, color: s.model1_color },
-    { code: s.model2_code, qty: s.model2_qty, color: s.model2_color },
-    { code: s.model3_code, qty: s.model3_qty, color: s.model3_color },
-    { code: s.model4_code, qty: s.model4_qty, color: s.model4_color },
-    { code: s.model5_code, qty: s.model5_qty, color: s.model5_color },
+    { code: s.model1_code, qty: s.model1_qty - (s.model1_extra_qty ?? 0), color: s.model1_color },
+    { code: s.model2_code, qty: s.model2_qty - (s.model2_extra_qty ?? 0), color: s.model2_color },
+    { code: s.model3_code, qty: s.model3_qty - (s.model3_extra_qty ?? 0), color: s.model3_color },
+    { code: s.model4_code, qty: s.model4_qty - (s.model4_extra_qty ?? 0), color: s.model4_color },
+    { code: s.model5_code, qty: s.model5_qty - (s.model5_extra_qty ?? 0), color: s.model5_color },
   ].filter(m => m.code && m.qty > 0);
 }
 

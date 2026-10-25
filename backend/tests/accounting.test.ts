@@ -127,12 +127,13 @@ test('F3. un-paying an order reverses the cash; un-shipping reverses cost at the
 
 test('F4. editing the shipped quantity records only the delta; cost changes do not rewrite history', async () => {
   const w = setup();
-  const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: [M1], invoice: 8500 });
+  // (a «لم يتم الصرف» quantity edit is sales-only — see the dedicated tests; the delta rule still applies to the other shipped statuses)
+  const o = await w.saveOrder({ status: 'حساب عميل', slots: [M1], invoice: 8500 });
   w.readyStock[0].cost_per_piece = 650;
-  await w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: [{ ...M1, qty: 12 }], invoice: 8500 });
+  await w.saveOrder({ id: o.id, status: 'حساب عميل', slots: [{ ...M1, qty: 12 }], invoice: 8500 });
   assert.deepEqual(w.movements.map(m => [m.movement_type, m.qty, m.unit_cost]), [['SHIP', 10, 600], ['SHIP', 2, 650]]);
   assert.equal(w.cogs(), 10 * 600 + 2 * 650);
-  await w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: [{ ...M1, qty: 8 }], invoice: 8500 });
+  await w.saveOrder({ id: o.id, status: 'حساب عميل', slots: [{ ...M1, qty: 8 }], invoice: 8500 });
   assert.equal(w.movements.at(-1)?.movement_type, 'SHIP_REVERSAL');
   assert.equal(w.stock().physicalQty, 92);
 });

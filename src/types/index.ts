@@ -24,6 +24,8 @@ export interface Sale {
   requested_status?: string | null;
   /** «لم يتم الصرف» saved while the pieces are not available: the status is kept, but nothing has shipped. */
   awaiting_stock?: boolean;
+  /** Pieces added while «لم يتم الصرف»: they count in the order (sales) but never in stock. Stock qty = qty − extra. */
+  model1_extra_qty?: number; model2_extra_qty?: number; model3_extra_qty?: number; model4_extra_qty?: number; model5_extra_qty?: number;
   model1_unreturned_qty?: number | null;
   model2_unreturned_qty?: number | null;
   model3_unreturned_qty?: number | null;

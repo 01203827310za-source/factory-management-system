@@ -30,7 +30,7 @@ function extractModels(data: Record<string, unknown>): ModelSlot[] {
   return [1, 2, 3, 4, 5]
     .map(i => ({
       code: (data[`model${i}_code`] as string) || '',
-      qty: Number(data[`model${i}_qty`]) || 0,
+      qty: (Number(data[`model${i}_qty`]) || 0) - (Number(data[`model${i}_extra_qty`]) || 0),   // stock quantity: the sales-only extra is excluded
       color: (data[`model${i}_color`] as string) || '',
     }))
     .filter(m => m.code && m.qty > 0);
@@ -186,6 +186,7 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
     data.cancel_disposition = null;     // set only when a shipped order is cancelled
     delete data.requested_status;       // server-managed: set below only when a shipped status had to be held
     delete data.awaiting_stock;         // server-managed too
+    for (let i = 1; i <= 5; i++) delete data[`model${i}_extra_qty`];   // server-managed: only a quantity edit of a «لم يتم الصرف» order creates it
     const status = (data.order_status as string) || '';
     const remaining = (Number(data.invoice_value) || 0) - (Number(data.deposit_paid) || 0);
 
@@ -294,6 +295,23 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     const wasReservation = oldSale.order_status === 'تم الحجز';
     let newStatus = (data.order_status as string | undefined) ?? oldRaw.order_status;
 
+    // ── Quantity edits on an order that stays «لم يتم الصرف» are SALES-ONLY ──
+    // The order quantity and value follow the edit, but the extra pieces are never reserved, deducted, costed or counted as a shortage:
+    // stock keeps seeing only the quantity it already accounted for (model{i}_qty − model{i}_extra_qty). Lowering the quantity removes
+    // extra pieces first. Any other status change (a real shipment) resets the extra to 0, so the whole quantity is validated and shipped.
+    const keepsNotPaidOut = oldRaw.order_status === 'لم يتم الصرف' && newStatus === 'لم يتم الصرف';
+    const norm = (v: unknown) => String(v ?? '').trim().toLowerCase();
+    for (let i = 1; i <= 5; i++) {
+      const rec = oldRaw as unknown as Record<string, unknown>;
+      const oldQty = Number(rec[`model${i}_qty`]) || 0;
+      const oldExtra = Number(rec[`model${i}_extra_qty`]) || 0;
+      const newQty = data[`model${i}_qty`] !== undefined ? Number(data[`model${i}_qty`]) || 0 : oldQty;
+      const sameItem = !!rec[`model${i}_code`]
+        && norm(data[`model${i}_code`] ?? rec[`model${i}_code`]) === norm(rec[`model${i}_code`])
+        && norm(data[`model${i}_color`] ?? rec[`model${i}_color`]) === norm(rec[`model${i}_color`]);
+      data[`model${i}_extra_qty`] = keepsNotPaidOut && sameItem ? Math.max(0, oldExtra + (newQty - oldQty)) : 0;
+    }
+
     // Saving an edit is not a shipment. When an order that has NOT shipped yet (يتم التجهيز / cancelled) is saved with a shipped
     // status while its pieces are not available, the edit is kept (requested quantities untouched), the order stays «يتم التجهيز»
     // and the missing pieces are tracked as a shortage — nothing is deducted and no pieces held for other orders are used.
@@ -308,7 +326,7 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     let holdAwaiting = false;
     let awaitingReason = '';
     const unpaidShipped = ['لم يتم الصرف', 'حساب عميل'].includes(oldSale.order_status) && oldSale.shipping_collected === 0;
-    if (isStockDeducting(newStatus) && (!isStockDeducting(oldSale.order_status) || unpaidShipped)) {
+    if (isStockDeducting(newStatus) && (!isStockDeducting(oldSale.order_status) || (unpaidShipped && newStatus === 'لم يتم الصرف'))) {
       const wanted = extractModels({ ...oldSale, ...data } as unknown as Record<string, unknown>);
       const pre = await loadStockContext(prisma as unknown as Prisma.TransactionClient, seasonId, id);
       const problem = validateShipment(pre, wanted, increasingKeys(pre, outsideSlots(oldSale), wanted));
@@ -343,7 +361,7 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     // Anything the browser still sends for those is ignored.
     ['cancel_disposition', 'cancel_returned_qty', 'refund_customer_now', 'repay_shipping_now', 'refund_key', 'refund_date'].forEach(k => delete data[k]);
     const unretKeys = [1, 2, 3, 4, 5].map(i => `model${i}_unreturned_qty`);
-    const lineQty = [1, 2, 3, 4, 5].map(i => (oldSale[`model${i}_code` as keyof typeof oldSale] ? Number(oldSale[`model${i}_qty` as keyof typeof oldSale]) || 0 : 0));
+    const lineQty = [1, 2, 3, 4, 5].map(i => (oldSale[`model${i}_code` as keyof typeof oldSale] ? (Number(oldSale[`model${i}_qty` as keyof typeof oldSale]) || 0) - (Number(oldSale[`model${i}_extra_qty` as keyof typeof oldSale]) || 0) : 0));
     const cancelEvent0 = willBeCancelled && !wasCancelled;
     // An order cancelled by an EARLIER version may still hold goods outside the stock (marked not returned / damaged)
     // or money it never reversed. Saving it again finishes the job — once: afterwards nothing is left to reconcile.

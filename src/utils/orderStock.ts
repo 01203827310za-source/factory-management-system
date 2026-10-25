@@ -10,11 +10,11 @@ export type OutsideSlot = { code: string; qty: number; color: string };
 
 export function outsideSlots(s: Sale): OutsideSlot[] {
   const lines = [
-    { code: s.model1_code, qty: s.model1_qty, color: s.model1_color, un: s.model1_unreturned_qty },
-    { code: s.model2_code, qty: s.model2_qty, color: s.model2_color, un: s.model2_unreturned_qty },
-    { code: s.model3_code, qty: s.model3_qty, color: s.model3_color, un: s.model3_unreturned_qty },
-    { code: s.model4_code, qty: s.model4_qty, color: s.model4_color, un: s.model4_unreturned_qty },
-    { code: s.model5_code, qty: s.model5_qty, color: s.model5_color, un: s.model5_unreturned_qty },
+    { code: s.model1_code, qty: s.model1_qty - (s.model1_extra_qty ?? 0), color: s.model1_color, un: s.model1_unreturned_qty },
+    { code: s.model2_code, qty: s.model2_qty - (s.model2_extra_qty ?? 0), color: s.model2_color, un: s.model2_unreturned_qty },
+    { code: s.model3_code, qty: s.model3_qty - (s.model3_extra_qty ?? 0), color: s.model3_color, un: s.model3_unreturned_qty },
+    { code: s.model4_code, qty: s.model4_qty - (s.model4_extra_qty ?? 0), color: s.model4_color, un: s.model4_unreturned_qty },
+    { code: s.model5_code, qty: s.model5_qty - (s.model5_extra_qty ?? 0), color: s.model5_color, un: s.model5_unreturned_qty },
   ];
   const all = lines.filter(l => l.code && l.qty > 0).map(l => ({ code: l.code, qty: l.qty, color: l.color }));
   if (s.order_status === 'تم الحجز' || (s.order_status === 'لم يتم الصرف' && s.awaiting_stock)) return [];   // held for missing pieces: nothing shipped

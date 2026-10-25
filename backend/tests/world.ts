@@ -130,11 +130,21 @@ export class World {
     let heldFor: string | null = null;
     let awaiting = false;                // «لم يتم الصرف» kept while the pieces are missing (nothing ships)   // status the user asked for while the order is held for missing pieces
     const pre = input.id ? this.sales.find(s => s.id === input.id) : undefined;
+    // sales-only extra: pieces added while the order stays «لم يتم الصرف» are in the order (sales) but not in stock
+    const norm = (v: unknown) => String(v ?? '').trim().toLowerCase();
+    const keepsNP = !!pre && pre.order_status === 'لم يتم الصرف' && input.status === 'لم يتم الصرف';
+    const extras = [1, 2, 3, 4, 5].map(i => {
+      const o = pre as unknown as Record<string, unknown> | undefined;
+      const ns = input.slots[i - 1];
+      if (!keepsNP || !o || !ns || !o[`model${i}_code`] || norm(o[`model${i}_code`]) !== norm(ns.code) || norm(o[`model${i}_color`]) !== norm(ns.color)) return 0;
+      return Math.max(0, (Number(o[`model${i}_extra_qty`]) || 0) + (ns.qty - (Number(o[`model${i}_qty`]) || 0)));
+    });
+    const stockSlots = input.slots.map((sl, i) => ({ ...sl, qty: sl.qty - extras[i] })).filter(sl => sl.qty > 0);
     const preEff = pre ? effectiveStatus(pre) : undefined;
     const unpaidShipped = !!preEff && ['لم يتم الصرف', 'حساب عميل'].includes(preEff.order_status) && preEff.shipping_collected === 0;
-    if (!input.legacy && isStockDeducting(input.status) && (!input.id || (preEff && (!isStockDeducting(preEff.order_status) || unpaidShipped)))) {
+    if (!input.legacy && isStockDeducting(input.status) && (!input.id || (preEff && (!isStockDeducting(preEff.order_status) || (unpaidShipped && input.status === 'لم يتم الصرف'))))) {
       const ctx0 = await loadStockContext(this.tx, input.season ?? 1, input.id);
-      const problem = validateShipment(ctx0, input.slots, pre ? increasingKeys(ctx0, outsideSlots(pre), input.slots) : undefined);
+      const problem = validateShipment(ctx0, stockSlots, pre ? increasingKeys(ctx0, outsideSlots(pre), stockSlots) : undefined);
       if (problem) {
         if (input.status === 'لم يتم الصرف') awaiting = true; else heldFor = input.status;
         input = { ...input, status: 'تم الحجز', collected: 0 };
@@ -166,6 +176,7 @@ export class World {
       mobile: '', warehouse: '', shipping_collected: 0, shipping_collected_date: null, created_at: new Date('2026-10-01T09:00:00Z'),
       model1_code: '', model1_qty: 0, model1_color: '', model2_code: '', model2_qty: 0, model2_color: '', model3_code: '', model3_qty: 0, model3_color: '',
       model4_code: '', model4_qty: 0, model4_color: '', model5_code: '', model5_qty: 0, model5_color: '', cancel_disposition: null, requested_status: null, awaiting_stock: false,
+      model1_extra_qty: 0, model2_extra_qty: 0, model3_extra_qty: 0, model4_extra_qty: 0, model5_extra_qty: 0,
       model1_unreturned_qty: null, model2_unreturned_qty: null, model3_unreturned_qty: null, model4_unreturned_qty: null, model5_unreturned_qty: null,
     });
     // Same rule as the routes: «يتم التجهيز» is always accepted; goods leaving the factory must exist
@@ -173,7 +184,7 @@ export class World {
     if (!input.legacy && isStockDeducting(input.status)) {
       const ctx = await loadStockContext(this.tx, season, existing?.id);
       const oldShipped = existing ? outsideSlots(existing) : [];
-      const problem = validateShipment(ctx, input.slots, increasingKeys(ctx, oldShipped, input.slots));
+      const problem = validateShipment(ctx, stockSlots, increasingKeys(ctx, oldShipped, stockSlots));
       if (problem) throw new Error(problem);
     }
     const lineQty = [1, 2, 3, 4, 5].map(i => (input.slots[i - 1]?.code ? input.slots[i - 1].qty : 0));
@@ -190,7 +201,7 @@ export class World {
     });
     for (let i = 1; i <= 5; i++) {
       const s = input.slots[i - 1];
-      Object.assign(row, { [`model${i}_code`]: s?.code ?? '', [`model${i}_qty`]: s?.qty ?? 0, [`model${i}_color`]: s?.color ?? '' });
+      Object.assign(row, { [`model${i}_code`]: s?.code ?? '', [`model${i}_qty`]: s?.qty ?? 0, [`model${i}_color`]: s?.color ?? '', [`model${i}_extra_qty`]: extras[i - 1] });
     }
     if (!willBeCancelled) for (let i = 1; i <= 5; i++) Object.assign(row, { [`model${i}_unreturned_qty`]: null });
     else if (unreturned) unreturned.forEach((u, i) => Object.assign(row, { [`model${i + 1}_unreturned_qty`]: u }));

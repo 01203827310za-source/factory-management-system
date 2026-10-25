@@ -137,12 +137,14 @@ test('6c. editing an already-shipped order is not blocked unless it ships MORE',
   const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: slot(10), invoice: 1000 });   // stock now 0
   await w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: slot(10), invoice: 1200 });   // unrelated edit: fine
   await w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: slot(8), invoice: 1000 });    // shipping less: fine
-  // shipping MORE than exists: the unpaid shipped order goes back to «يتم التجهيز» (shipment reversed at the recorded cost), edit kept
-  await w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: slot(12), invoice: 1000 });
-  notShipped(w.sales[0]);
+  // raising the quantity of a «لم يتم الصرف» order is a SALES-ONLY change: the order becomes 12 but stock keeps seeing the 8 it already shipped
+  await w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: slot(12), invoice: 1200 });
+  assert.equal(w.sales[0].order_status, NOT_PAID_OUT);
   assert.equal(w.sales[0].model1_qty, 12);
-  assert.equal(w.cogs(), 0);
-  assert.equal(w.stock().physicalQty, 10);                 // the 8 shipped pieces are back in physical stock (12 wanted: 10 reserved, 2 pending)
+  assert.equal(w.sales[0].model1_extra_qty, 4);
+  assert.deepEqual(w.movements.map(m => [m.movement_type, m.qty]), [['SHIP', 10], ['SHIP_REVERSAL', 2]]);   // the 12 added no stock movement
+  assert.equal(w.cogs(), 8 * 600);
+  assert.equal(w.stock().physicalQty, 2);                  // 10 − 8 shipped; the extra 4 never touched stock
 });
 
 test('7. repeated saves of an under-stocked prepared order change nothing', async () => {

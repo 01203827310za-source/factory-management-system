@@ -172,6 +172,12 @@ model Sale {
   requested_status   String?
   // «لم يتم الصرف» saved while the pieces are not available: status kept, but nothing shipped (see migration 20261021100000).
   awaiting_stock     Boolean  @default(false)
+  // Pieces added while «لم يتم الصرف» that stock never sees (see migration 20261022100000): stock qty = modelN_qty - modelN_extra_qty.
+  model1_extra_qty   Int      @default(0)
+  model2_extra_qty   Int      @default(0)
+  model3_extra_qty   Int      @default(0)
+  model4_extra_qty   Int      @default(0)
+  model5_extra_qty   Int      @default(0)
   // Cancellation of a shipped order, per order line: pieces that are STILL OUTSIDE the sellable stock
   // (not returned / damaged). NULL = the order was cancelled before this column existed (the whole-order
   // disposition then decides, and the shipped cost was fully reversed). Non-NULL (all five set) = the
