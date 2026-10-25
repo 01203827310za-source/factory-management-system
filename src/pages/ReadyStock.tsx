@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import { readyStockStore } from '../data/store';
-import { printOrdersApi } from '../services/api';
+import { dashboardApi, printOrdersApi } from '../services/api';
+import { matchesSearch, modelCodesOf, rowsForView, type StockView } from '../utils/readyStockViews';
+import type { MissingStockSummaryData } from '../types';
 import type { ReadyStock, ComputedReadyStock, PrintOrder } from '../types';
 import Modal from '../components/Modal';
 import { useToast } from '../components/Toast';
@@ -35,6 +37,12 @@ export default function ReadyStock() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editItem, setEditItem] = useState<ReadyStock | null>(null);
   const [search, setSearch] = useState('');
+  // Menus above the table (view only — they never change a balance or a reservation)
+  const [view, setView] = useState<StockView>('all');
+  const [model, setModel] = useState('');
+  const [modelSearch, setModelSearch] = useState('');
+  const [shortage, setShortage] = useState<MissingStockSummaryData | null>(null);
+  const [shortageError, setShortageError] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
   const emptyForm = { model_code: '', product_name: '', color: '', opening_balance: 0, cost_per_piece: 0, location: '', reserved_quantity: 0 };
   const [form, setForm] = useState(emptyForm);
@@ -61,6 +69,11 @@ export default function ReadyStock() {
     }
     catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'خطأ'); }
     finally { setLoading(false); }
+    // Order-level detail of the shortages comes from the same summary the Dashboard shows (read-only).
+    if (can('dashboard.view')) {
+      try { setShortage((await dashboardApi.getMetrics()).missing_stock ?? null); setShortageError(''); }
+      catch { setShortage(null); setShortageError('تعذر تحميل تفاصيل الأوردرات للنواقص'); }
+    }
   };
   useEffect(() => { loadData(); }, []);
 
@@ -160,14 +173,34 @@ export default function ReadyStock() {
     }
   };
 
-  const filtered = useMemo(() => {
-    if (!search) return items;
-    const q = search.toLowerCase();
-    return items.filter(r => r.model_code.toLowerCase().includes(q) || r.product_name.toLowerCase().includes(q) || r.color.toLowerCase().includes(q));
-  }, [items, search]);
+  const modelCodes = useMemo(() => modelCodesOf(items), [items]);
+  const visibleCodes = useMemo(() => modelCodes.filter(m => !modelSearch || m.code.toLowerCase().includes(modelSearch.trim().toLowerCase())), [modelCodes, modelSearch]);
+  // a model menu whose code disappeared (deleted / renamed) falls back to all inventory
+  useEffect(() => { if (view === 'model' && !modelCodes.some(m => m.code.toLowerCase() === model.toLowerCase())) { setView('all'); setModel(''); } }, [modelCodes, view, model]);
+
+  const counts = useMemo(() => ({
+    all: items.length,
+    available: rowsForView(items, 'available').length,
+    shortages: shortage ? shortage.rows.length : rowsForView(items, 'shortages').length,
+  }), [items, shortage]);
+
+  // Table rows: the selected menu, then the search field on top of it.
+  const filtered = useMemo(() => rowsForView(items, view === 'shortages' ? 'all' : view, model).filter(r => matchesSearch(r, search)), [items, view, model, search]);
+  // Shortages menu: the existing shortage summary rows (model + colour, with their orders); falls back to stock rows with a pending quantity.
+  const shortageRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return (shortage?.rows ?? []).filter(r => !q || `${r.model_code} ${r.model_name} ${r.color} ${r.orders.map(o => `${o.order_number} ${o.client}`).join(' ')}`.toLowerCase().includes(q));
+  }, [shortage, search]);
+  const fallbackShortage = useMemo(() => rowsForView(items, 'shortages').filter(r => matchesSearch(r, search)), [items, search]);
 
   const exportExcel = () => {
-    const ws = XLSX.utils.json_to_sheet(items.map(r => ({ 'كود الموديل': r.model_code, 'اسم الصنف': r.product_name, 'اللون': r.color, 'رصيد أول': r.opening_balance, 'إنتاج جديد': r.new_production, 'إجمالي المبيعات': r.total_sales, 'المرتجعات': r.total_returns, 'الرصيد الفعلي': r.actual_balance, 'محجوز': r.reserved_quantity, 'المتاح': r.available_quantity, 'تكلفة القطعة': r.cost_per_piece, 'قيمة المخزون (الفعلي)': Math.max(0, r.actual_balance) * r.cost_per_piece, 'المكان': r.location })));
+    if (view === 'shortages') {
+      const rows = shortage ? shortageRows.map(r => ({ 'كود الموديل': r.model_code, 'اسم الصنف': r.model_name, 'اللون': r.color, 'المطلوب': r.required, 'المحجوز': r.reserved, 'الناقص': r.missing, 'الأوردرات': r.orders.map(o => `${o.order_number} (${o.missing})`).join('، ') }))
+        : fallbackShortage.map(r => ({ 'كود الموديل': r.model_code, 'اسم الصنف': r.product_name, 'اللون': r.color, 'الناقص': r.pending_quantity ?? 0 }));
+      const wb2 = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb2, XLSX.utils.json_to_sheet(rows), 'النواقص'); XLSX.writeFile(wb2, 'ready_stock_shortages.xlsx');
+      return;
+    }
+    const ws = XLSX.utils.json_to_sheet(filtered.map(r => ({ 'كود الموديل': r.model_code, 'اسم الصنف': r.product_name, 'اللون': r.color, 'رصيد أول': r.opening_balance, 'إنتاج جديد': r.new_production, 'إجمالي المبيعات': r.total_sales, 'المرتجعات': r.total_returns, 'الرصيد الفعلي': r.actual_balance, 'محجوز': r.reserved_quantity, 'المتاح': r.available_quantity, 'تكلفة القطعة': r.cost_per_piece, 'قيمة المخزون (الفعلي)': Math.max(0, r.actual_balance) * r.cost_per_piece, 'المكان': r.location })));
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'الاستوك'); XLSX.writeFile(wb, 'ready_stock_export.xlsx');
   };
 
@@ -189,6 +222,75 @@ export default function ReadyStock() {
 
       <div className="relative max-w-md"><Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="بحث بالكود، الاسم، اللون..." className={`w-full pr-10 ${ic}`} /></div>
 
+      {/* Inventory menus: view-only filters over the rows below (no balance or reservation is ever changed here) */}
+      <div className="space-y-2" aria-label="قوائم المخزون">
+        <div role="tablist" className="flex gap-1 overflow-x-auto border-b border-gray-200">
+          {([
+            { key: 'all', label: 'كل المخزون', n: counts.all },
+            { key: 'available', label: 'المتاح', n: counts.available },
+            { key: 'shortages', label: 'النواقص', n: counts.shortages },
+          ] as const).map(t => (
+            <button key={t.key} role="tab" aria-selected={view === t.key} type="button" onClick={() => { setView(t.key); setModel(''); }}
+              className={`whitespace-nowrap px-4 py-2 text-sm font-semibold border-b-2 -mb-px transition ${view === t.key ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-800'}`}>
+              {t.label} <span className={`text-xs rounded-full px-1.5 py-0.5 ${t.key === 'shortages' && t.n > 0 ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-600'}`}>{t.n.toLocaleString('ar-EG')}</span>
+            </button>
+          ))}
+        </div>
+        {modelCodes.length > 0 && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500 whitespace-nowrap">قائمة لكل كود:</span>
+            {modelCodes.length > 12 && (
+              <input value={modelSearch} onChange={e => setModelSearch(e.target.value)} placeholder="ابحث عن كود..." className="border border-gray-300 rounded-lg px-2 py-1 text-xs w-32" aria-label="بحث عن كود موديل" />
+            )}
+            <div role="tablist" aria-label="أكواد الموديلات" className="flex gap-1.5 overflow-x-auto pb-1">
+              {visibleCodes.length === 0 && <span className="text-xs text-gray-400">لا يوجد كود مطابق</span>}
+              {visibleCodes.map(m => (
+                <button key={m.code} role="tab" aria-selected={view === 'model' && model.toLowerCase() === m.code.toLowerCase()} type="button" onClick={() => { setView('model'); setModel(m.code); }}
+                  className={`whitespace-nowrap rounded-full px-3 py-1 text-xs font-semibold border transition ${view === 'model' && model.toLowerCase() === m.code.toLowerCase() ? 'bg-[#1e3a5f] text-white border-[#1e3a5f]' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>
+                  {m.code} <span className="opacity-70">({m.count.toLocaleString('ar-EG')})</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {view === 'shortages' && (
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+          <p className="px-4 py-2 text-xs text-gray-500 border-b border-gray-100">النواقص الفعلية فقط: كميات مطلوبة لأوردرات «يتم التجهيز» ولا يغطيها المخزون الحالي. فتح هذه القائمة لا يُنشئ أي سجل.</p>
+          {shortageError && <p className="px-4 py-2 text-xs text-amber-700">{shortageError}</p>}
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="bg-[#1e3a5f] text-white">{['كود الموديل', 'اسم الصنف', 'اللون', 'المطلوب', 'محجوز', 'الناقص', 'الأوردرات'].map(h => <th key={h} className="px-3 py-3 text-center font-semibold whitespace-nowrap">{h}</th>)}</tr></thead>
+              <tbody>
+                {loading && <tr><td colSpan={7} className="text-center py-8 text-gray-400"><RefreshCw size={16} className="animate-spin inline mr-2" />جارٍ التحميل...</td></tr>}
+                {!loading && shortage && shortageRows.length === 0 && <tr><td colSpan={7} className="text-center py-8 text-gray-400">لا توجد نواقص مطابقة</td></tr>}
+                {!loading && shortage && shortageRows.map(r => (
+                  <tr key={`${r.model_code}|${r.color}`} className="border-t border-gray-100 align-top">
+                    <td className="px-3 py-3 font-medium">{r.model_code}</td>
+                    <td className="px-3 py-3">{r.model_name || '—'}{!r.has_card && <span className="block text-[11px] text-amber-700">لا يوجد كارت مخزون</span>}</td>
+                    <td className="px-3 py-3 text-center">{r.color || '—'}</td>
+                    <td className="px-3 py-3 text-center">{r.required.toLocaleString('ar-EG')}</td>
+                    <td className="px-3 py-3 text-center text-orange-700">{r.reserved.toLocaleString('ar-EG')}</td>
+                    <td className="px-3 py-3 text-center font-bold text-red-700">{r.missing.toLocaleString('ar-EG')}</td>
+                    <td className="px-3 py-3 text-xs text-gray-600">{r.orders.map(o => `${o.order_number} — ${o.client} (ناقص ${o.missing})`).join('، ')}</td>
+                  </tr>
+                ))}
+                {!loading && !shortage && fallbackShortage.length === 0 && <tr><td colSpan={7} className="text-center py-8 text-gray-400">لا توجد نواقص</td></tr>}
+                {!loading && !shortage && fallbackShortage.map(r => (
+                  <tr key={r.id} className="border-t border-gray-100">
+                    <td className="px-3 py-3 font-medium">{r.model_code}</td><td className="px-3 py-3">{r.product_name}</td><td className="px-3 py-3 text-center">{r.color || '—'}</td>
+                    <td className="px-3 py-3 text-center text-gray-300">—</td><td className="px-3 py-3 text-center text-orange-700">{r.reserved_quantity.toLocaleString('ar-EG')}</td>
+                    <td className="px-3 py-3 text-center font-bold text-red-700">{(r.pending_quantity ?? 0).toLocaleString('ar-EG')}</td><td className="px-3 py-3 text-xs text-gray-400">غير متاحة لصلاحيتك</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {view !== 'shortages' && (
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full text-sm whitespace-nowrap">
@@ -236,6 +338,7 @@ export default function ReadyStock() {
           </table>
         </div>
       </div>
+      )}
 
       {/* Add / Edit modal */}
       <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title={editItem ? 'تعديل الصنف' : 'إضافة صنف جديد'}>

@@ -327,6 +327,9 @@ async function main() {
   check('NP. every report that reads orders still works with an order awaiting stock (200)', smoke.every(([, st]) => st === 200), smoke);
   const fcNp = (await api('GET', '/financial-center')).body;
   check('NP. Financial Center agrees with the Dashboard: no receivable and the full stock value (nothing deducted)', fcNp.money_owed_to_us === 0 && fcNp.stock_value === (await dash()).stock_value, { fc: fcNp.stock_value, dash: (await dash()).stock_value });
+  const rsRows = (await api('GET', '/ready-stock')).body as { model_code: string; color: string; available_quantity?: number; reserved_quantity: number; pending_quantity: number }[];
+  const rsPending = rsRows.reduce((n, r) => n + (r.pending_quantity || 0), 0);
+  check('MENUS. the Ready Stock endpoint and the Dashboard shortage summary agree on the outstanding shortage (the النواقص menu uses both); opening them changes nothing', rsPending === (await dash()).missing_stock?.total_missing_units && rsPending === 8 && rsRows.every(r => (r.pending_quantity || 0) >= 0), { rsPending });
   const listed = (await api('GET', '/sales')).body as Json[];
   const listedNp = listed.find(x => x.id === npCreate.body.id);
   check('NP. the Sales list API returns the saved status «لم يتم الصرف» (awaiting_stock) with the shortage shown separately (pending 8)', listedNp?.order_status === NOT_PAID_OUT && listedNp?.awaiting_stock === true && listedNp?.fulfillment?.pending === 8 && npEdit.body.order_status === NOT_PAID_OUT, listedNp);

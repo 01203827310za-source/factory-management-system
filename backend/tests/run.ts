@@ -11,5 +11,6 @@ import './cancellation.test';
 import './cashLedger.test';
 import './monthlySales.test';
 import './shortageOrders.test';
+import './readyStockViews.test';
 
 runAll();
