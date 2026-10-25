@@ -321,6 +321,8 @@ model ModelProduction {
   cost_per_piece       Float       @default(0)
   warehouse_entry_date String      @default("")
   created_at           DateTime    @default(now())
+  // Set only when the entry was recorded from the Ready Stock page: a repeated submission returns the same entry.
+  idempotency_key      String?     @unique
   parts                ModelPart[]
 
   @@map("model_productions")

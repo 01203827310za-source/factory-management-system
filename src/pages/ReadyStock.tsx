@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { readyStockStore } from '../data/store';
-import { dashboardApi, printOrdersApi } from '../services/api';
+import { dashboardApi, printOrdersApi, readyStockApi, type ProductionInfo, type ReservationBreakdown } from '../services/api';
 import { matchesSearch, modelCodesOf, rowsForView, type StockView } from '../utils/readyStockViews';
 import type { MissingStockSummaryData } from '../types';
 import type { ReadyStock, ComputedReadyStock, PrintOrder } from '../types';
@@ -44,6 +44,19 @@ export default function ReadyStock() {
   const [shortage, setShortage] = useState<MissingStockSummaryData | null>(null);
   const [shortageError, setShortageError] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
+
+  // ── reserved / production editing (nothing is typed into a balance: reservations come from orders, stock from production entries) ──
+  const [resItem, setResItem] = useState<ComputedReadyStock | null>(null);
+  const [resData, setResData] = useState<ReservationBreakdown | null>(null);
+  const [resBusy, setResBusy] = useState(false);
+  const [resConfirm, setResConfirm] = useState(false);
+  const [prodItem, setProdItem] = useState<ComputedReadyStock | null>(null);
+  const [prodData, setProdData] = useState<ProductionInfo | null>(null);
+  const [prodMode, setProdMode] = useState<'new' | 'correct'>('new');
+  const [prodStep, setProdStep] = useState<1 | 2>(1);
+  const [prodBusy, setProdBusy] = useState(false);
+  const [prodKey, setProdKey] = useState('');
+  const [prodForm, setProdForm] = useState({ qty: '', cut: '', reason: '', entryId: 0, newQty: '' });
   const emptyForm = { model_code: '', product_name: '', color: '', opening_balance: 0, cost_per_piece: 0, location: '', reserved_quantity: 0 };
   const [form, setForm] = useState(emptyForm);
 
@@ -76,6 +89,60 @@ export default function ReadyStock() {
     }
   };
   useEffect(() => { loadData(); }, []);
+
+  const openReservation = async (item: ComputedReadyStock) => {
+    setResItem(item); setResData(null); setResConfirm(false);
+    try { setResData(await readyStockApi.getReservations(item.id)); } catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'تعذر جلب الحجوزات'); setResItem(null); }
+  };
+  const reconcileReservation = async () => {
+    if (!resItem || resBusy) return;
+    setResBusy(true);
+    try {
+      const r = await readyStockApi.reconcileReservations(resItem.id);
+      toast('success', r.changed ? `تمت المطابقة: المحجوز ${r.before.toLocaleString('ar-EG')} ← ${r.after.toLocaleString('ar-EG')}` : 'الحجز مطابق للأوردرات — لا تغيير');
+      setResItem(null); await loadData();
+    } catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'خطأ في مطابقة الحجز'); }
+    finally { setResBusy(false); }
+  };
+
+  const openProduction = async (item: ComputedReadyStock) => {
+    setProdItem(item); setProdData(null); setProdMode('new'); setProdStep(1);
+    setProdForm({ qty: '', cut: '', reason: '', entryId: 0, newQty: '' }); setProdKey(crypto.randomUUID());
+    try { setProdData(await readyStockApi.getProduction(item.id)); } catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'تعذر جلب الإنتاج'); setProdItem(null); }
+  };
+  const prodProblem = (): string => {
+    if (prodMode === 'new') {
+      const q = Number(prodForm.qty);
+      if (!Number.isInteger(q) || q <= 0) return 'كمية الإنتاج يجب أن تكون عددًا صحيحًا أكبر من صفر';
+      if (!prodForm.cut) return 'اختر رقم القص';
+      return '';
+    }
+    const entry = prodData?.entries.find(e => e.id === prodForm.entryId);
+    if (!entry) return 'اختر إدخال الإنتاج المراد تصحيحه';
+    const q = Number(prodForm.newQty);
+    if (prodForm.newQty === '' || !Number.isInteger(q) || q < 0) return 'الكمية المستلمة يجب أن تكون عددًا صحيحًا صفرًا أو أكبر';
+    if (q > entry.qty_from_cutting) return `المستلم لا يتجاوز الخارج من القص (${entry.qty_from_cutting})`;
+    if (q === entry.qty_received) return 'لم تتغير الكمية';
+    if (prodForm.reason.trim().length < 3) return 'سبب التصحيح مطلوب';
+    return '';
+  };
+  const submitProduction = async () => {
+    if (!prodItem || prodBusy) return;
+    const problem = prodProblem();
+    if (problem) { toast('error', problem); return; }
+    setProdBusy(true);
+    try {
+      if (prodMode === 'new') {
+        const r = await readyStockApi.addProduction(prodItem.id, { qty: Number(prodForm.qty), cut_number: Number(prodForm.cut), reason: prodForm.reason.trim() || undefined, idempotency_key: prodKey });
+        toast('success', r.duplicate ? 'هذا الإدخال مسجّل مسبقًا' : 'تم تسجيل الإنتاج');
+      } else {
+        const r = await readyStockApi.correctProduction(prodItem.id, prodForm.entryId, { qty_received: Number(prodForm.newQty), reason: prodForm.reason.trim() });
+        toast('success', r.changed ? 'تم تصحيح الكمية المستلمة' : 'لا تغيير');
+      }
+      setProdItem(null); await loadData();
+    } catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'خطأ في حفظ الإنتاج'); setProdStep(1); }
+    finally { setProdBusy(false); }
+  };
 
   const openAdd = () => { setEditItem(null); setForm(emptyForm); setModalOpen(true); };
   const openEdit = (item: ReadyStock) => {
@@ -307,7 +374,10 @@ export default function ReadyStock() {
                   <td className="px-3 py-3">{item.product_name}</td>
                   <td className="px-3 py-3 text-center">{item.color}</td>
                   <td className="px-3 py-3 text-center">{item.opening_balance.toLocaleString('ar-EG')}</td>
-                  <td className="px-3 py-3 text-center font-semibold text-emerald-600">{item.new_production.toLocaleString('ar-EG')}</td>
+                  <td className="px-3 py-3 text-center font-semibold text-emerald-600">
+                    {item.new_production.toLocaleString('ar-EG')}
+                    {can('ready_stock.create') && can('model_prod.create') && <button type="button" onClick={() => openProduction(item)} title="إدخال / تصحيح الإنتاج" aria-label="إدخال أو تصحيح الإنتاج" className="mr-1 p-1 text-emerald-700 hover:bg-emerald-100 rounded"><Edit2 size={13} /></button>}
+                  </td>
                   <td className="px-3 py-3 text-center text-red-600">{item.total_sales.toLocaleString('ar-EG')}</td>
                   <td className="px-3 py-3 text-center text-emerald-600 font-semibold">{item.total_returns.toLocaleString('ar-EG')}</td>
                   <td className="px-3 py-3 text-center font-bold text-gray-700">{item.actual_balance.toLocaleString('ar-EG')}</td>
@@ -315,6 +385,7 @@ export default function ReadyStock() {
                     {item.reserved_quantity > 0
                       ? <span className="inline-block bg-orange-100 text-orange-700 text-xs font-semibold px-2 py-0.5 rounded-full">{item.reserved_quantity.toLocaleString('ar-EG')}</span>
                       : <span className="text-gray-300">—</span>}
+                    {can('ready_stock.edit') && <button type="button" onClick={() => openReservation(item)} title="عرض / مطابقة الحجز" aria-label="عرض أو مطابقة الحجز" className="mr-1 p-1 text-orange-700 hover:bg-orange-100 rounded"><Edit2 size={13} /></button>}
                   </td>
                   <td className={`px-3 py-3 text-center font-bold ${item.available_quantity < 0 ? 'text-red-700 font-extrabold' : item.available_quantity < 3 ? 'text-red-600' : item.available_quantity <= 10 ? 'text-amber-700' : 'text-emerald-700'}`}>
                     {item.available_quantity.toLocaleString('ar-EG')}
@@ -339,6 +410,96 @@ export default function ReadyStock() {
         </div>
       </div>
       )}
+
+      {/* Reserved quantity: derived from orders — shown, explained and reconciled, never typed over */}
+      <Modal isOpen={!!resItem} onClose={() => setResItem(null)} title={resItem ? `الحجز — ${resItem.model_code} ${resItem.color || ''}` : 'الحجز'} size="lg">
+        {!resData ? <p className="text-center py-6 text-gray-400"><RefreshCw size={16} className="animate-spin inline mr-2" />جارٍ التحميل...</p> : (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+              <div className="bg-gray-50 rounded-lg p-3"><p className="text-xs text-gray-500">الرصيد الفعلي</p><p className="font-bold">{resData.actual.toLocaleString('ar-EG')}</p></div>
+              <div className="bg-orange-50 rounded-lg p-3"><p className="text-xs text-orange-700">المحجوز الحالي</p><p className="font-bold text-orange-800">{resData.reserved.toLocaleString('ar-EG')}</p></div>
+              <div className="bg-emerald-50 rounded-lg p-3"><p className="text-xs text-emerald-700">المتاح (الفعلي − المحجوز)</p><p className="font-bold text-emerald-800">{resData.available.toLocaleString('ar-EG')}</p></div>
+              <div className="bg-red-50 rounded-lg p-3"><p className="text-xs text-red-700">الناقص لأوردرات</p><p className="font-bold text-red-800">{resData.pending.toLocaleString('ar-EG')}</p></div>
+            </div>
+            <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3">الحجز مشتق من أوردرات «يتم التجهيز» (الأقدم أولًا) ولا يُكتب يدويًا حتى لا يتعارض مع حجوزات الأوردرات الأخرى. لتغيير الحجز عدّل كمية الأوردر أو حالته. هنا يمكنك مطابقة الرقم المخزَّن مع الأوردرات.</p>
+            {resData.orders.length === 0 ? <p className="text-center text-sm text-gray-400">لا توجد أوردرات تحجز هذا الصنف</p> : (
+              <div className="overflow-x-auto border border-gray-100 rounded-lg"><table className="w-full text-sm">
+                <thead className="bg-gray-50 text-gray-600"><tr>{['الأوردر', 'العميل', 'المطلوب', 'محجوز', 'ناقص'].map(h => <th key={h} className="px-3 py-2 text-right font-semibold">{h}</th>)}</tr></thead>
+                <tbody>{resData.orders.map(o => <tr key={o.sale_id} className="border-t border-gray-100"><td className="px-3 py-2 font-medium">{o.order_number}</td><td className="px-3 py-2 text-gray-600">{o.client}</td><td className="px-3 py-2">{o.requested.toLocaleString('ar-EG')}</td><td className="px-3 py-2 text-orange-700">{o.reserved.toLocaleString('ar-EG')}</td><td className="px-3 py-2 text-red-700">{o.pending.toLocaleString('ar-EG')}</td></tr>)}</tbody>
+              </table></div>
+            )}
+            {resData.stored_reserved !== resData.reserved && <p className="text-xs text-red-700">الرقم المخزَّن ({resData.stored_reserved.toLocaleString('ar-EG')}) يختلف عن المحسوب من الأوردرات ({resData.reserved.toLocaleString('ar-EG')}) — المطابقة ستصحّحه.</p>}
+            <div className="flex justify-end gap-3 pt-3 border-t border-gray-200">
+              <button onClick={() => setResItem(null)} className="px-5 py-2 text-sm border border-gray-300 rounded-lg">إغلاق</button>
+              {!resConfirm
+                ? <button onClick={() => setResConfirm(true)} className="px-5 py-2 text-sm bg-orange-600 text-white rounded-lg hover:bg-orange-700">مطابقة الحجز مع الأوردرات</button>
+                : <button onClick={reconcileReservation} disabled={resBusy} className="px-5 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-60">{resBusy ? 'جارٍ المطابقة...' : 'تأكيد المطابقة'}</button>}
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Production: a new production entry, or a correction of an earlier one — never a typed-over stock balance */}
+      <Modal isOpen={!!prodItem} onClose={() => !prodBusy && setProdItem(null)} title={prodItem ? `الإنتاج — ${prodItem.model_code} ${prodItem.color || ''}` : 'الإنتاج'} size="lg">
+        {!prodData ? <p className="text-center py-6 text-gray-400"><RefreshCw size={16} className="animate-spin inline mr-2" />جارٍ التحميل...</p> : (
+          <div className="space-y-4">
+            <div className="flex gap-2">
+              {([['new', 'إدخال إنتاج جديد'], ['correct', 'تصحيح إدخال سابق']] as const).map(([k, label]) => (
+                <button key={k} type="button" disabled={prodBusy} onClick={() => { setProdMode(k); setProdStep(1); }} className={`px-4 py-1.5 text-sm rounded-lg border ${prodMode === k ? 'bg-[#1e3a5f] text-white border-[#1e3a5f]' : 'bg-white text-gray-600 border-gray-300'}`}>{label}</button>
+              ))}
+            </div>
+            {prodStep === 1 && prodMode === 'new' && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div><label className={lc}>الكمية المنتَجة *</label><input type="number" min={1} className={ic} value={prodForm.qty} onChange={e => setProdForm({ ...prodForm, qty: e.target.value })} /></div>
+                <div><label className={lc}>رقم القص *</label>
+                  <select className={ic} value={prodForm.cut} onChange={e => setProdForm({ ...prodForm, cut: e.target.value })}>
+                    <option value="">اختر...</option>
+                    {[...new Map(prodData.cuts.map(c => [c.cut_number, c])).values()].map(c => <option key={c.cut_number} value={c.cut_number}>قصة {c.cut_number} — {c.description || c.color} ({c.total_pieces.toLocaleString('ar-EG')} قطعة)</option>)}
+                  </select>
+                  {prodData.cuts.length === 0 && <p className="text-xs text-amber-700 mt-1">لا يوجد أمر قص بهذا اللون — سجّل القص أولًا.</p>}
+                </div>
+                <div className="md:col-span-2"><label className={lc}>ملاحظة (اختياري)</label><input className={ic} value={prodForm.reason} onChange={e => setProdForm({ ...prodForm, reason: e.target.value })} /></div>
+                <p className="md:col-span-2 text-xs text-gray-500">يُسجَّل كإدخال إنتاج جديد (مستلم بالكامل) يخصم من القطع المتبقية في القصة، ويزيد الرصيد الفعلي مرة واحدة، ثم يُعاد توزيع الحجوزات تلقائيًا.</p>
+              </div>
+            )}
+            {prodStep === 1 && prodMode === 'correct' && (
+              <div className="space-y-3">
+                {prodData.entries.length === 0 ? <p className="text-center text-sm text-gray-400">لا توجد إدخالات إنتاج لهذا الصنف</p> : (
+                  <div className="overflow-x-auto border border-gray-100 rounded-lg"><table className="w-full text-sm">
+                    <thead className="bg-gray-50 text-gray-600"><tr>{['', 'التاريخ', 'القصة', 'الحالة', 'خرج من القص', 'المستلم', 'الهالك'].map(h => <th key={h} className="px-3 py-2 text-right font-semibold">{h}</th>)}</tr></thead>
+                    <tbody>{prodData.entries.map(e => (
+                      <tr key={e.id} className={`border-t border-gray-100 cursor-pointer ${prodForm.entryId === e.id ? 'bg-blue-50' : ''}`} onClick={() => setProdForm({ ...prodForm, entryId: e.id, newQty: String(e.qty_received) })}>
+                        <td className="px-3 py-2"><input type="radio" readOnly checked={prodForm.entryId === e.id} aria-label={`اختيار إدخال ${e.id}`} /></td>
+                        <td className="px-3 py-2">{e.date}</td><td className="px-3 py-2">{e.cut_number}</td><td className="px-3 py-2">{e.status}</td>
+                        <td className="px-3 py-2">{e.qty_from_cutting.toLocaleString('ar-EG')}</td><td className="px-3 py-2 font-bold text-emerald-700">{e.qty_received.toLocaleString('ar-EG')}</td><td className="px-3 py-2">{e.wastage.toLocaleString('ar-EG')}</td>
+                      </tr>))}</tbody>
+                  </table></div>
+                )}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div><label className={lc}>الكمية المستلمة الصحيحة *</label><input type="number" min={0} className={ic} value={prodForm.newQty} onChange={e => setProdForm({ ...prodForm, newQty: e.target.value })} /></div>
+                  <div><label className={lc}>سبب التصحيح *</label><input className={ic} value={prodForm.reason} onChange={e => setProdForm({ ...prodForm, reason: e.target.value })} /></div>
+                </div>
+                <p className="text-xs text-gray-500">التصحيح يعدّل الكمية المستلمة في سجل الإنتاج نفسه (لا يُنشئ إدخالًا جديدًا ولا يكتب فوق الرصيد) ويُسجَّل في سجل التعديلات بالقيمة القديمة والجديدة. لا يُسمح به إن جعل الرصيد الفعلي سالبًا.</p>
+              </div>
+            )}
+            {prodStep === 2 && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm space-y-1">
+                <p className="font-semibold text-amber-900">تأكيد الحفظ</p>
+                {prodMode === 'new'
+                  ? <p>إدخال إنتاج جديد: <strong>{Number(prodForm.qty).toLocaleString('ar-EG')}</strong> قطعة من {prodItem?.model_code} ({prodItem?.color || '—'}) من القصة {prodForm.cut}.</p>
+                  : <p>تصحيح المستلم من <strong>{prodData.entries.find(e => e.id === prodForm.entryId)?.qty_received.toLocaleString('ar-EG')}</strong> إلى <strong>{Number(prodForm.newQty).toLocaleString('ar-EG')}</strong> — {prodForm.reason}</p>}
+                <p className="text-xs text-amber-800">سيُعاد حساب المتاح والنواقص والحجوزات تلقائيًا.</p>
+              </div>
+            )}
+            <div className="flex justify-between gap-3 pt-3 border-t border-gray-200">
+              <button onClick={() => (prodStep === 2 ? setProdStep(1) : setProdItem(null))} disabled={prodBusy} className="px-5 py-2 text-sm border border-gray-300 rounded-lg disabled:opacity-60">{prodStep === 2 ? 'رجوع' : 'إلغاء'}</button>
+              {prodStep === 1
+                ? <button onClick={() => { const p = prodProblem(); if (p) toast('error', p); else setProdStep(2); }} className="px-5 py-2 text-sm bg-[#1e3a5f] text-white rounded-lg hover:bg-[#16304d]">متابعة</button>
+                : <button onClick={submitProduction} disabled={prodBusy} className="px-5 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-60">{prodBusy ? 'جارٍ الحفظ...' : 'تأكيد وحفظ'}</button>}
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* Add / Edit modal */}
       <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title={editItem ? 'تعديل الصنف' : 'إضافة صنف جديد'}>

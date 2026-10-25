@@ -77,7 +77,7 @@ export class World {
     this.modelProds.push({
       id: this.modelProds.length + 1, season_id: season, date: '2026-10-10', cut_number: 1, model_code: code, qty_from_cutting: qty,
       model_description: code, color, sizes: '', status: 'تام', wastage: 0, qty_received: qty, cost_per_piece: 0,
-      warehouse_entry_date: '', created_at: new Date(),
+      warehouse_entry_date: '', created_at: new Date(), idempotency_key: null,
     });
   }
   /** Re-derive and store reserved_quantity, as resyncReservations() does after production / returns. */

@@ -391,7 +391,7 @@ function normalizeParts(parts: unknown, fallbackCut: unknown, fallbackColor: unk
   }));
 }
 
-async function validateProductionParts(
+export async function validateProductionParts(
   seasonId: number,
   cleanParts: CleanPartInput[],
   qty: number,

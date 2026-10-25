@@ -151,3 +151,11 @@ test('cash report permissions: reading needs dashboard.view; counts / adjustment
   assert.equal(permissionForRequest('POST', '/cash-report/counts'), 'expenses.create');
   assert.equal(permissionForRequest('POST', '/cash-report/adjustments'), 'expenses.create');
 });
+
+test('ready stock actions: reading needs ready_stock.view; production entry needs .create, correction / reconciliation .edit', () => {
+  assert.equal(permissionForRequest('GET', '/ready-stock/5/reservations'), 'ready_stock.view');
+  assert.equal(permissionForRequest('GET', '/ready-stock/5/production'), 'ready_stock.view');
+  assert.equal(permissionForRequest('POST', '/ready-stock/5/production'), 'ready_stock.create');
+  assert.equal(permissionForRequest('PUT', '/ready-stock/5/production/9'), 'ready_stock.edit');
+  assert.equal(permissionForRequest('PUT', '/ready-stock/5/reconcile-reservations'), 'ready_stock.edit');
+});

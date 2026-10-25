@@ -242,7 +242,23 @@ export type ExpenseRecord = {
 };
 
 // ===== READY STOCK =====
+export interface ReservationBreakdown {
+  stock_id: number; model_code: string; color: string; actual: number; reserved: number; available: number; pending: number; stored_reserved: number;
+  orders: { sale_id: number; order_number: string; client: string; status: string; requested: number; reserved: number; pending: number }[];
+}
+export interface ProductionInfo {
+  stock_id: number; model_code: string; color: string; cost_per_piece: number;
+  entries: { id: number; date: string; cut_number: number; status: string; qty_from_cutting: number; qty_received: number; wastage: number }[];
+  cuts: { cut_number: number; color: string; total_pieces: number; description: string }[];
+}
 export const readyStockApi = {
+  getReservations: (id: number) => get<ReservationBreakdown>(`/ready-stock/${id}/reservations`),
+  reconcileReservations: (id: number) => put<{ before: number; after: number; changed: boolean }>(`/ready-stock/${id}/reconcile-reservations`, {}),
+  getProduction: (id: number) => get<ProductionInfo>(`/ready-stock/${id}/production`),
+  addProduction: (id: number, body: { qty: number; cut_number: number; reason?: string; idempotency_key: string }) =>
+    post<{ duplicate: boolean }>(`/ready-stock/${id}/production`, body),
+  correctProduction: (id: number, prodId: number, body: { qty_received: number; reason: string }) =>
+    put<{ changed: boolean }>(`/ready-stock/${id}/production/${prodId}`, body),
   getAll: () => get<ReadyStockRecord[]>('/ready-stock'),
   add: (data: Omit<ReadyStockRecord, 'id'>) => post<ReadyStockRecord>('/ready-stock', data),
   update: (id: number, data: Partial<ReadyStockRecord>) => put<ReadyStockRecord>(`/ready-stock/${id}`, data),
