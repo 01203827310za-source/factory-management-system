@@ -168,6 +168,8 @@ model Sale {
   //   returned_damaged   → back in the building but not sellable (inspection)
   // NULL for never-shipped cancellations and for orders cancelled before this column existed.
   cancel_disposition String?
+  // Status the user asked for while the pieces were not available (held as «يتم التجهيز» meanwhile); NULL otherwise.
+  requested_status   String?
   // Cancellation of a shipped order, per order line: pieces that are STILL OUTSIDE the sellable stock
   // (not returned / damaged). NULL = the order was cancelled before this column existed (the whole-order
   // disposition then decides, and the shipped cost was fully reversed). Non-NULL (all five set) = the

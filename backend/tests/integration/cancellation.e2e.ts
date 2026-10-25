@@ -321,6 +321,14 @@ async function main() {
   check('NP. EDIT of a reserved order with status «لم يتم الصرف» and the same payload: SAVED (200), shortage still exactly 8', npEdit.status === 200 && (await dash()).missing_stock?.total_missing_units === 8, npEdit.body);
   const npAgain = await api('PUT', `/sales/${npCreate.body.id}`, npBody(npCreate.body, 8));
   check('NP. saving again: no extra shortage, no movement, no collection, order A still holds 100', npAgain.status === 200 && (await dash()).missing_stock?.total_missing_units === 8 && (await prisma.inventoryMovement.count()) === 0 && (await prisma.shippingCollection.count()) === 0 && (await prisma.readyStock.findFirst({ where: { model_code: 'M1', color: 'أسود' } }))?.reserved_quantity === 100 && (await dash()).cash_on_hand === 0);
+  const listed = (await api('GET', '/sales')).body as Json[];
+  const listedNp = listed.find(x => x.id === npCreate.body.id);
+  check('NP. the saved order is stored as «يتم التجهيز» but REMEMBERS the requested «لم يتم الصرف» (returned by the list the Sales screen reads)', listedNp?.order_status === PREPARED && listedNp?.requested_status === NOT_PAID_OUT && npCreate.body.requested_status === NOT_PAID_OUT && npEdit.body.requested_status === NOT_PAID_OUT, listedNp);
+  await prisma.modelProduction.create({ data: { season_id: npCreate.body.season_id, date: '2026-10-10', cut_number: 1, model_code: 'M1', qty_from_cutting: 8, model_description: 'M1', color: 'أسود', sizes: '', status: 'تام', wastage: 0, qty_received: 8, cost_per_piece: 0 } });
+  // the hold on the first order covers 100 of 108 → 8 free
+  const npShip = await api('PUT', `/sales/${npCreate.body.id}`, npBody(npCreate.body, 8));
+  check('NP. once the pieces exist, the same plain Save (status «لم يتم الصرف») really ships it: one SHIP row, request cleared', npShip.status === 200 && npShip.body.order_status === NOT_PAID_OUT && npShip.body.requested_status === null && (await rows(npCreate.body.id)).movements.filter(m => m.movement_type === 'SHIP').length === 1, npShip.body);
+  await prisma.modelProduction.deleteMany({});
   void hold;
   // a genuinely shipped order: shipping with stock works and deducts once; a PAID-OUT order that collected money keeps the strict rule
   await reset();

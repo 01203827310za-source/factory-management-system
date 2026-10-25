@@ -155,7 +155,9 @@ readyStock.forEach((s: any) => {
       model5_code: sale.model5_code, model5_qty: sale.model5_qty, model5_color: sale.model5_color,
       invoice_value: sale.invoice_value, deposit_paid: sale.deposit_paid,
       deposit_receiver: sale.deposit_receiver || '',
-      shipping_number: sale.shipping_number, order_status: sale.order_status,
+      shipping_number: sale.shipping_number,
+      // An order held for missing pieces reopens with the status the user chose, so a plain Save retries the shipment.
+      order_status: ((sale.order_status === 'تم الحجز' && sale.requested_status) ? sale.requested_status : sale.order_status) as Sale['order_status'],
       delivery_method: sale.delivery_method, warehouse: sale.warehouse, shipping_collected: sale.shipping_collected,
       shipping_collected_date: sale.shipping_collected_date || '',
     });
@@ -481,6 +483,9 @@ await loadData();(returnForm);
                       sale.order_status === 'لم يتم الصرف' ? 'bg-yellow-100 text-yellow-700' :
                       'bg-amber-100 text-amber-700'
                     }`}>{statusLabel(sale.order_status)}</span>
+                    {sale.order_status === 'تم الحجز' && sale.requested_status && (
+                      <span className="block mt-1 text-[11px] font-semibold text-red-700" title="الأوردر محجوز ويُشحن عند توفر الكمية">طُلب «{statusLabel(sale.requested_status)}» — بانتظار توفر المخزون</span>
+                    )}
                     {sale.order_status === 'تم الإلغاء' && sale.cancel_disposition && (
                       <span className="block mt-1 text-xs text-gray-500" title="حالة البضاعة بعد إلغاء أوردر مشحون">
                         {sale.cancel_disposition === 'returned_resalable' ? 'البضاعة رجعت' : sale.cancel_disposition === 'not_returned' ? 'البضاعة لم ترجع' : 'البضاعة تالفة'}

@@ -239,3 +239,45 @@ test('E5. cancelling an edited order with an outstanding shortage still clears t
   assert.equal(w.allocation(w.sales[0].id)!.reserved, 8);
   assert.equal(w.stock().physicalQty, 8);
 });
+
+// ───────── the status the user chose is remembered while the order is held ─────────
+test('R1. an order saved as «لم يتم الصرف» with no stock keeps that request visible; it is held as «يتم التجهيز» with the shortage tracked', async () => {
+  const w = world(0); w.readyStock[0].opening_balance = 8;
+  await w.saveOrder({ order_number: 'A', status: PREPARED, slots: [line('M1', 8)], invoice: 800 });                       // holds all 8
+  const b = await w.saveOrder({ order_number: 'B', status: NOT_PAID_OUT, slots: [line('M1', 8)], invoice: 800, collected: 800 });   // UI pre-fills the amount
+  assert.equal(w.sales[1].order_status, PREPARED);
+  assert.equal(w.sales[1].requested_status, NOT_PAID_OUT);
+  assert.deepEqual(missing(w), [['M1', 'أسود', 8]]);
+  assert.equal(w.movements.length, 0);
+  assert.equal(w.collections.length, 0);
+  for (let i = 0; i < 3; i++) await w.saveOrder({ id: b.id, status: NOT_PAID_OUT, slots: [line('M1', 8)], invoice: 800, collected: 800 });   // the form reopens with the requested status
+  assert.equal(w.sales[1].requested_status, NOT_PAID_OUT);
+  assert.deepEqual(missing(w), [['M1', 'أسود', 8]]);
+  assert.equal(w.movements.length, 0);
+});
+
+test('R2. when the pieces arrive, the same Save really ships the order and the remembered request is cleared', async () => {
+  const w = world(0); w.readyStock[0].opening_balance = 8;
+  await w.saveOrder({ order_number: 'A', status: PREPARED, slots: [line('M1', 8)], invoice: 800 });
+  const b = await w.saveOrder({ order_number: 'B', status: NOT_PAID_OUT, slots: [line('M1', 8)], invoice: 800 });
+  w.addProduction('M1', 'أسود', 8);
+  await w.resync();
+  assert.equal(w.sales[1].order_status, PREPARED);                          // not shipped automatically
+  await w.saveOrder({ id: b.id, status: NOT_PAID_OUT, slots: [line('M1', 8)], invoice: 800 });
+  assert.equal(w.sales[1].order_status, NOT_PAID_OUT);
+  assert.equal(w.sales[1].requested_status, null);
+  assert.equal(w.movements.filter(m => m.movement_type === 'SHIP').length, 1);
+  invariant(w);
+});
+
+test('R3. choosing «يتم التجهيز» or cancelling clears the remembered request', async () => {
+  const w = world(0); w.readyStock[0].opening_balance = 0;
+  const b = await w.saveOrder({ order_number: 'B', status: NOT_PAID_OUT, slots: [line('M1', 8)], invoice: 800 });
+  assert.equal(w.sales[0].requested_status, NOT_PAID_OUT);
+  await w.saveOrder({ id: b.id, status: PREPARED, slots: [line('M1', 8)], invoice: 800 });
+  assert.equal(w.sales[0].requested_status, null);
+  await w.saveOrder({ id: b.id, status: NOT_PAID_OUT, slots: [line('M1', 8)], invoice: 800 });
+  assert.equal(w.sales[0].requested_status, NOT_PAID_OUT);
+  await w.saveOrder({ id: b.id, status: CANCELED, slots: [line('M1', 8)], invoice: 800 });
+  assert.equal(w.sales[0].requested_status, null);
+});

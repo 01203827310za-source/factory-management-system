@@ -127,12 +127,13 @@ export class World {
     // Same rule as POST /sales and PUT /sales/:id: an order that has NOT shipped yet (new, «يتم التجهيز» or cancelled) saved with a
     // shipped status while the pieces are not available is kept as «يتم التجهيز» with its full quantity (nothing deducted); it is
     // refused only if shipping-company money was already entered. An order that already shipped keeps the strict rule.
+    let heldFor: string | null = null;   // status the user asked for while the order is held for missing pieces
     const pre = input.id ? this.sales.find(s => s.id === input.id) : undefined;
     const unpaidShipped = !!pre && ['لم يتم الصرف', 'حساب عميل'].includes(pre.order_status) && pre.shipping_collected === 0;
     if (!input.legacy && isStockDeducting(input.status) && (!input.id || (pre && (!isStockDeducting(pre.order_status) || unpaidShipped)))) {
       const ctx0 = await loadStockContext(this.tx, input.season ?? 1, input.id);
       const problem = validateShipment(ctx0, input.slots, pre ? increasingKeys(ctx0, outsideSlots(pre), input.slots) : undefined);
-      if (problem) input = { ...input, status: 'تم الحجز', collected: 0 };   // the pre-filled received amount is not recorded: nothing shipped
+      if (problem) { heldFor = input.status; input = { ...input, status: 'تم الحجز', collected: 0 }; }   // the pre-filled received amount is not recorded: nothing shipped
     }
     const season = input.season ?? 1;
     const existing = input.id ? this.sales.find(s => s.id === input.id) : undefined;
@@ -159,7 +160,7 @@ export class World {
       invoice_value: 0, deposit_paid: 0, deposit_receiver: '', remaining: 0, shipping_number: '', order_status: '', delivery_method: '',
       mobile: '', warehouse: '', shipping_collected: 0, shipping_collected_date: null, created_at: new Date('2026-10-01T09:00:00Z'),
       model1_code: '', model1_qty: 0, model1_color: '', model2_code: '', model2_qty: 0, model2_color: '', model3_code: '', model3_qty: 0, model3_color: '',
-      model4_code: '', model4_qty: 0, model4_color: '', model5_code: '', model5_qty: 0, model5_color: '', cancel_disposition: null,
+      model4_code: '', model4_qty: 0, model4_color: '', model5_code: '', model5_qty: 0, model5_color: '', cancel_disposition: null, requested_status: null,
       model1_unreturned_qty: null, model2_unreturned_qty: null, model3_unreturned_qty: null, model4_unreturned_qty: null, model5_unreturned_qty: null,
     });
     // Same rule as the routes: «يتم التجهيز» is always accepted; goods leaving the factory must exist
@@ -180,7 +181,7 @@ export class World {
 
     Object.assign(row, {
       order_status: input.status, invoice_value: input.invoice, deposit_paid: deposit, remaining: input.invoice - deposit,
-      shipping_collected: collected, cancel_disposition: disposition,
+      shipping_collected: collected, cancel_disposition: disposition, requested_status: heldFor,
     });
     for (let i = 1; i <= 5; i++) {
       const s = input.slots[i - 1];

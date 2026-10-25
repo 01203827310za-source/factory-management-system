@@ -20,6 +20,8 @@ export interface Sale {
   order_status: 'تم الصرف' | 'لم يتم الصرف' | 'حساب عميل' | 'تم الحجز' | 'تم الإلغاء';
   /** Only for a SHIPPED order that was cancelled: what happened to the goods. */
   cancel_disposition?: 'returned_resalable' | 'not_returned' | 'returned_damaged' | null;
+  /** Status the user asked for while the pieces were not available; the order is held as «يتم التجهيز» meanwhile. */
+  requested_status?: string | null;
   model1_unreturned_qty?: number | null;
   model2_unreturned_qty?: number | null;
   model3_unreturned_qty?: number | null;

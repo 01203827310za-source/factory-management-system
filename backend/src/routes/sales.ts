@@ -184,6 +184,7 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
     const data = req.body as Record<string, unknown>;
     delete data.cancel_reason;          // lives on the cancellation record, not on the order
     data.cancel_disposition = null;     // set only when a shipped order is cancelled
+    delete data.requested_status;       // server-managed: set below only when a shipped status had to be held
     const status = (data.order_status as string) || '';
     const remaining = (Number(data.invoice_value) || 0) - (Number(data.deposit_paid) || 0);
 
@@ -231,6 +232,7 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
         data: {
           ...saleData,
           order_status: effectiveStatus,
+          requested_status: downgradeReason ? status : null,
           season_id: seasonId,
           remaining,
           shipping_collected: reserve ? 0 : resolved.value,
@@ -340,6 +342,7 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
       : goodsOutsideBefore ? 'returned_resalable'
       : ((oldSale.cancel_disposition as CancelDisposition | null) ?? null);
     data.cancel_disposition = disposition;
+    data.requested_status = downgradeReason ? requestedStatus : null;   // remembered only while the order is held for missing pieces
     const restoredQty = cancelEvent0 && cancellingShipped ? lineQty.reduce((a, b) => a + b, 0)
       : goodsOutsideBefore ? outsideSlots(oldSale).reduce((n, o) => n + o.qty, 0) : 0;
     if (!willBeCancelled) unretKeys.forEach(k => { data[k] = null; });                  // reopening: back to a normal order
@@ -641,7 +644,7 @@ router.post('/:id/convert-reservation', requireManager, async (req: Request, res
       // Physical stock drops once status leaves the reservation state; the reservation is released with it.
       const upd = await tx.sale.update({
         where: { id },
-        data: { order_status: 'تم الصرف', shipping_collected: resolved.value, shipping_collected_date: cairoToday() },
+        data: { order_status: 'تم الصرف', shipping_collected: resolved.value, shipping_collected_date: cairoToday(), requested_status: null },
       });
       await syncReserved(tx, seasonId, slots);
       await syncCollections(tx, upd, { previousCached: current.shipping_collected, desired: resolved.value, date: cairoToday(), user: req.user?.username });
@@ -679,7 +682,7 @@ router.post('/:id/cancel-reservation', requireManager, async (req: Request, res:
       await lockStock(tx, seasonId);
       const current = await tx.sale.findFirst({ where: { id, season_id: seasonId } });
       if (!current || current.order_status !== STATUS_RESERVED) throw new StockError('هذا الطلب ليس حجزاً');
-      const upd = await tx.sale.update({ where: { id }, data: { order_status: STATUS_CANCELED, cancel_disposition: null } });
+      const upd = await tx.sale.update({ where: { id }, data: { order_status: STATUS_CANCELED, cancel_disposition: null, requested_status: null } });
       await syncReserved(tx, seasonId, slots);
       await recordCancellation(tx, {
         seasonId, sale: upd, statusBefore: STATUS_RESERVED, wasShipped: false, disposition: null, reason: '',
