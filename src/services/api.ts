@@ -213,6 +213,8 @@ export type SaleRecord = {
   mobile: string;
   warehouse: string;
   shipping_collected: number;
+  /** Day the shipping company payout was recorded (set when the order reaches «تم الصرف»). */
+  shipping_collected_date?: string | null;
   created_at: string;
 };
 

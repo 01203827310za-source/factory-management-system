@@ -17,7 +17,11 @@ import CharitySection from '../components/CharitySection';
 import { statusLabel } from '../utils/orderStatus';
 import ReceivablesAuditModal from '../components/ReceivablesAuditModal';
 import CashReconciliationModal from '../components/CashReconciliationModal';
-import MonthlyModelSales from '../components/MonthlyModelSales';
+import SalesReportsTab from '../components/dashboard/SalesReportsTab';
+import InventoryReportsTab from '../components/dashboard/InventoryReportsTab';
+import ProductionTab from '../components/dashboard/ProductionTab';
+import DelayedCollectionsTab from '../components/dashboard/DelayedCollectionsTab';
+import { Panel, ExportButton, exportRows } from '../components/dashboard/reportKit';
 import MissingStockSummary from '../components/MissingStockSummary';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -38,12 +42,21 @@ type CategoryKey = 'fabric' | 'stock' | 'accessories' | 'cutting' | 'wip' | 'rec
 
 const PAGE_SIZE = 10;
 
+type TabKey = 'overview' | 'financial' | 'sales' | 'inventory' | 'production' | 'collections';
+const TAB_STORE = 'dashboard_tab';
+const readTab = (): TabKey => {
+  try { const v = sessionStorage.getItem(TAB_STORE); if (v && ['overview', 'financial', 'sales', 'inventory', 'production', 'collections'].includes(v)) return v as TabKey; } catch { /* storage unavailable */ }
+  return 'overview';
+};
+
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<DashboardMetrics>(EMPTY);
   const [loading, setLoading] = useState(true);
   const [cardBreakdown, setCardBreakdown] = useState<BreakdownKind | null>(null);
   const { can } = useAuth();
   const canDetails = can('dashboard.view');
+  const [tab, setTabState] = useState<TabKey>(readTab);
+  const setTab = (t: TabKey) => { setTabState(t); try { sessionStorage.setItem(TAB_STORE, t); } catch { /* ignore */ } };
   const [auditOpen, setAuditOpen] = useState(false);
   const [cashOpen, setCashOpen] = useState(false);
   const [breakdownOpen, setBreakdownOpen] = useState(false);
@@ -155,6 +168,22 @@ export default function Dashboard() {
   const recon = metrics.assets_reconciliation;
   const reconDiffs = recon ? Object.entries(recon.differences).filter(([, d]) => Math.abs(d) >= 0.01) : [];
 
+  const canSales = can('sales.view');
+  const tabs: { key: TabKey; label: string }[] = [
+    { key: 'overview', label: 'نظرة عامة' },
+    { key: 'financial', label: 'التقارير المالية' },
+    ...(canSales ? [{ key: 'sales' as TabKey, label: 'تقارير المبيعات' }] : []),
+    { key: 'inventory', label: 'المخزون والخامات' },
+    ...(can('model_prod.view') ? [{ key: 'production' as TabKey, label: 'الإنتاج والتجهيز' }] : []),
+    ...(canSales ? [{ key: 'collections' as TabKey, label: 'التحصيلات المتأخرة' }] : []),
+  ];
+  const activeTab: TabKey = tabs.some(t => t.key === tab) ? tab : 'overview';
+  const attentionItems: { label: string; value: string; hint: string; tab: TabKey; alert: boolean }[] = [
+    ...(canSales ? [{ label: 'مستحق عند شركة الشحن', value: `${fmt(metrics.shipping_receivable ?? 0)} ج.م`, hint: 'التحصيلات المتأخرة', tab: 'collections' as TabKey, alert: (metrics.shipping_receivable ?? 0) > 0 }] : []),
+    { label: 'قطع ناقصة لأوردرات التجهيز', value: `${fmt(metrics.pending_units ?? 0)} قطعة`, hint: 'النواقص والمخزون', tab: 'inventory' as TabKey, alert: (metrics.pending_units ?? 0) > 0 },
+    ...(can('model_prod.view') ? [{ label: 'أوردرات التجهيز', value: `${fmt(metrics.reserved_orders_count ?? 0)} أوردر`, hint: 'الإنتاج والتجهيز', tab: 'production' as TabKey, alert: (metrics.pending_orders?.length ?? 0) > 0 }] : []),
+    { label: 'المتبقي من الديون', value: `${fmt(metrics.remaining_debts)} ج.م`, hint: 'التقارير المالية', tab: 'financial' as TabKey, alert: metrics.remaining_debts > 0 },
+  ];
   const totalPages = Math.max(1, Math.ceil(detailData.rows.length / PAGE_SIZE));
   const pagedRows = detailData.rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const categoryLabel = assetBreakdown.find(a => a.key === detailCategory)?.label || '';
@@ -181,6 +210,32 @@ export default function Dashboard() {
       )}
 
       {!loading && <>
+        {/* Dashboard sections */}
+        <div role="tablist" aria-label="أقسام لوحة التحكم" className="flex gap-1 overflow-x-auto border-b border-gray-200 -mb-2">
+          {tabs.map(t => (
+            <button key={t.key} role="tab" id={`tab-${t.key}`} aria-selected={activeTab === t.key} aria-controls="dashboard-panel" type="button" onClick={() => setTab(t.key)}
+              className={`whitespace-nowrap px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition ${activeTab === t.key ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-800'}`}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        <div id="dashboard-panel" role="tabpanel" aria-labelledby={`tab-${activeTab}`} className="space-y-6">
+        {activeTab === 'overview' && <>
+
+        {/* Needs attention: every item opens the report that explains it */}
+        <section aria-label="تنبيهات تحتاج متابعة" className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+          <h2 className="text-base font-bold text-gray-800 mb-3">يحتاج متابعة</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+            {attentionItems.map(a => (
+              <button key={a.label} type="button" onClick={() => setTab(a.tab)} className={`text-right rounded-lg border p-3 hover:shadow-sm transition ${a.alert ? 'border-amber-300 bg-amber-50' : 'border-gray-200 bg-gray-50'}`}>
+                <span className="block text-xs text-gray-500">{a.label}</span>
+                <span className={`block font-bold ${a.alert ? 'text-amber-800' : 'text-gray-700'}`}>{a.value}</span>
+                <span className="block text-[11px] text-blue-700 mt-1">{a.hint} ←</span>
+              </button>
+            ))}
+          </div>
+        </section>
         {/* Top Stats */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard title="إجمالي المبيعات" value={metrics.total_sales} icon={<ShoppingCart size={22} />} color="blue" onDetails={canDetails ? () => setCardBreakdown('sales') : undefined} />
@@ -234,6 +289,9 @@ export default function Dashboard() {
           </div>
         )}
 
+        </>}
+
+        {activeTab === 'financial' && <>
         {/* Sales recognition, cost, receivables and advances — separate metrics, none of them added to cash */}
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
           <h2 className="text-base font-bold text-gray-800 mb-1">المبيعات والتكلفة والمستحقات</h2>
@@ -298,14 +356,10 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Pieces sold per model this month (orders currently «تم الصرف») */}
-        <MonthlyModelSales />
-
         {/* Summary Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <StatCard title="الكاش المتاح" value={metrics.cash_available} subtitle="الوارد الكلي − الديون − المصاريف" icon={<Wallet size={22} />} color={metrics.cash_available >= 0 ? 'green' : 'red'} />
           <StatCard title="الفلوس اللي لنا برا" value={metrics.money_owed_to_us} subtitle="مبيعات غير مصروفة + حسابات عملاء" icon={<DollarSign size={22} />} color="purple" alert={metrics.money_owed_to_us > 0} />
-          <StatCard title="المتبقي من الديون" value={metrics.remaining_debts} subtitle="المستحقات علينا" icon={<AlertTriangle size={22} />} color="yellow" alert={metrics.remaining_debts > 0} />
           <StatCard title="إجمالي الحجوزات" value={metrics.total_reservations} subtitle="قيمة الأوردرات المحجوزة" icon={<ShoppingCart size={22} />} color="orange" alert={metrics.total_reservations > 0} />
         </div>
 
@@ -689,6 +743,30 @@ export default function Dashboard() {
         {/* Profit by Period */}
         <ProfitByPeriod />
 
+
+        {/* Cash in / out by item — the lines behind إجمالي الوارد والمنصرف (same numbers as the summary above) */}
+        {(metrics.cash_items?.length ?? 0) > 0 && (
+          <Panel title="الوارد والمنصرف حسب البند" hint="نفس مصادر «الصافي»؛ اضغط على «الصافي» أعلاه لدفتر الحركات الكامل"
+            actions={<ExportButton onClick={() => exportRows('الوارد_والمنصرف', 'البنود', (metrics.cash_items ?? []).map(c => ({ 'البند': c.label, 'النوع': c.direction === 'in' ? 'وارد' : 'منصرف', 'المبلغ': c.amount })))} />}>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm min-w-[420px]">
+                <thead className="bg-gray-50 text-gray-600"><tr><th className="text-right px-3 py-2 font-semibold">البند</th><th className="text-right px-3 py-2 font-semibold">النوع</th><th className="text-center px-3 py-2 font-semibold">المبلغ</th></tr></thead>
+                <tbody>
+                  {(metrics.cash_items ?? []).map(c => (
+                    <tr key={c.key} className="border-t border-gray-100"><td className="px-3 py-2">{c.label}</td>
+                      <td className={`px-3 py-2 ${c.direction === 'in' ? 'text-emerald-700' : 'text-red-700'}`}>{c.direction === 'in' ? 'وارد' : 'منصرف'}</td>
+                      <td className={`px-3 py-2 text-center font-bold ${c.direction === 'in' ? 'text-emerald-700' : 'text-red-700'}`}>{fmt(c.amount)}</td></tr>
+                  ))}
+                </tbody>
+                <tfoot><tr className="border-t-2 bg-gray-50 font-bold"><td className="px-3 py-2" colSpan={2}>الصافي</td><td className="px-3 py-2 text-center">{fmt(metrics.net_profit)}</td></tr></tfoot>
+              </table>
+            </div>
+          </Panel>
+        )}
+        </>}
+
+        {activeTab === 'sales' && <>
+          <SalesReportsTab />
         {/* Charts */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
@@ -722,6 +800,12 @@ export default function Dashboard() {
               ) : <div className="flex items-center justify-center h-full text-gray-400">لا توجد بيانات</div>}
             </div>
           </div>
+        </div>
+        </>}
+
+        {activeTab === 'inventory' && <InventoryReportsTab metrics={metrics} />}
+        {activeTab === 'production' && <ProductionTab metrics={metrics} />}
+        {activeTab === 'collections' && <DelayedCollectionsTab dashboardReceivable={metrics.shipping_receivable} />}
         </div>
       </>}
     </div>

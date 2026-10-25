@@ -329,6 +329,7 @@ test('Dashboard cancellation: an unshipped cancellation leaves no goods outside 
 
 // ───────────── cancellation restores inventory exactly once (Dashboard + Ready Stock page sources) ─────────────
 import { outsideSlots as backendOutside } from '../src/services/readyStockPositions';
+import { outstandingShippingReceivable } from '../src/services/receivablesAudit';
 // the frontend file lives outside this package (and is an ES module): transpile it here so the two rules can be compared
 import fs from 'node:fs';
 import ts from 'typescript';
@@ -405,4 +406,20 @@ test('The Ready Stock page rule (frontend) and the server rule agree for every s
       }
     }
   }
+});
+
+test('Delayed-collections rule (frontend) equals the server receivable rule for every status; days are whole and never negative', () => {
+  const src = fs.readFileSync(path.resolve(__dirname, '../../src/utils/collections.ts'), 'utf8');
+  const js = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
+  const mod = { exports: {} as { outstandingCollection: (s: unknown) => number; daysBetween: (iso: string, today: string) => number } };
+  new Function('module', 'exports', js)(mod, mod.exports);
+  for (const order_status of [PREPARED, NOT_PAID_OUT, PAID_OUT, 'حساب عميل', CANCELLED]) {
+    for (const [remaining, shipping_collected] of [[0, 0], [7500, 0], [7500, 7500], [7500, 5000], [-300, 0], [100, 150]]) {
+      const sale = { order_status, remaining, shipping_collected };
+      assert.equal(mod.exports.outstandingCollection(sale), outstandingShippingReceivable(sale as never), JSON.stringify(sale));
+    }
+  }
+  assert.equal(mod.exports.daysBetween('2026-10-01T23:30:00.000Z', '2026-10-11'), 10);
+  assert.equal(mod.exports.daysBetween('2026-10-11', '2026-10-11'), 0);
+  assert.equal(mod.exports.daysBetween('2026-10-20', '2026-10-11'), 0);
 });
