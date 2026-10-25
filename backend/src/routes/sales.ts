@@ -280,7 +280,27 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     if (!oldSale) return res.status(404).json({ message: 'الطلب غير موجود' });
 
     const wasReservation = oldSale.order_status === 'تم الحجز';
-    const newStatus = (data.order_status as string | undefined) ?? oldSale.order_status;
+    let newStatus = (data.order_status as string | undefined) ?? oldSale.order_status;
+
+    // Saving an edit is not a shipment. When an order that has NOT shipped yet (يتم التجهيز / cancelled) is saved with a shipped
+    // status while its pieces are not available, the edit is kept (requested quantities untouched), the order stays «يتم التجهيز»
+    // and the missing pieces are tracked as a shortage — nothing is deducted and no pieces held for other orders are used.
+    // Shipping-company money entered with the save cannot be dropped silently, and an order that already shipped keeps the
+    // existing rule (its shipped quantity cannot grow beyond what exists) — both still fail below with the original message.
+    let downgradeReason = '';
+    let requestedStatus = '';
+    if (isStockDeducting(newStatus) && !isStockDeducting(oldSale.order_status)) {
+      const wanted = extractModels({ ...oldSale, ...data } as unknown as Record<string, unknown>);
+      const pre = await loadStockContext(prisma as unknown as Prisma.TransactionClient, seasonId, id);
+      const problem = validateShipment(pre, wanted, increasingKeys(pre, outsideSlots(oldSale), wanted));
+      const moneyEntered = newStatus === 'تم الصرف' && Number(data.shipping_collected) > 0;
+      if (problem && !moneyEntered) {
+        requestedStatus = newStatus;
+        newStatus = STATUS_RESERVED;
+        data.order_status = STATUS_RESERVED;
+        downgradeReason = problem;
+      }
+    }
     const willBeReservation = newStatus === 'تم الحجز';
 
     // ── Cancellation ──
@@ -440,7 +460,7 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
       deposit_held: cancelEvent ? oldSale.deposit_paid : sale.deposit_paid,        // amounts reversed with the order
       collected_held: cancelEvent ? oldSale.shipping_collected : sale.shipping_collected,
     };
-    const description = cancelEvent
+    const baseDescription = cancelEvent
       ? `إلغاء أوردر ${sale.client} - ${sale.order_number} (كان: ${oldSale.order_status})${cancellingShipped ? ` — البضاعة: ${DISPOSITION_LABELS[disposition!]} — ${cancelSummary.goods_qty} قطعة بتكلفة مسجلة ${cancelSummary.goods_cost}` : ''} — عُكس العربون ${oldSale.deposit_paid} ج وتحصيل شركة الشحن ${oldSale.shipping_collected} ج بقيود عكسية${cancelReason ? ` — السبب: ${cancelReason}` : ''}`
       : reopenEvent ? `إعادة فتح أوردر ملغى ${sale.client} - ${sale.order_number} إلى «${sale.order_status}»`
       : dispositionEvent ? `تغيير حالة بضاعة أوردر ملغى ${sale.order_number}: ${oldSale.cancel_disposition ? DISPOSITION_LABELS[oldSale.cancel_disposition as CancelDisposition] : '—'} ← ${disposition ? DISPOSITION_LABELS[disposition] : '—'}`
@@ -450,6 +470,7 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
         ? `تعديل عملية بيع — إلغاء حالة الصرف وعكس المبلغ المستلم سابقًا (${oldSale.shipping_collected}): ${sale.client} - ${sale.order_number}`
         : `تعديل عملية بيع: ${sale.client} - ${sale.order_number}`);
 
+    const description = baseDescription + (downgradeReason ? ` — حُفظ «يتم التجهيز» لأن الكمية غير متوفرة للشحن (${downgradeReason})` : '');
     logAudit({ user: req.user, module: 'Sales', action, record_id: id,
       before_data: oldSale, after_data: { ...sale, collection_difference, ...(cancelEvent ? { cancellation: { ...cancelSummary, reason: cancelReason } } : {}) }, description });
     if (cancellingShipped && !wasCancelled) {
@@ -462,6 +483,9 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
       ...sale, collection_difference,
       fulfillment: (await fulfillmentOf(seasonId, id)).one,
       cancellation: willBeCancelled ? cancelSummary : null,
+      status_downgraded: !!downgradeReason,
+      requested_status: requestedStatus || null,
+      downgrade_reason: downgradeReason || null,
     });
   } catch (err) {
     if (err instanceof StockError || isRefundError(err)) return res.status(400).json({ message: (err as Error).message });

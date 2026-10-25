@@ -86,8 +86,10 @@ test('5. new production fulfils pending quantities with no duplicate reservation
 test('6. shipping is blocked when the quantity is not physically available / allocated', async () => {
   const w = worldWithStock(4);
   const o = await w.saveOrder({ status: PREPARED, slots: slot(10), invoice: 8500 });
-  await assert.rejects(() => w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: slot(10), invoice: 8500 }), /المتاح فعليًا 4.*الناقص 6/);
-  assert.equal(w.sales[0].order_status, PREPARED);        // unchanged
+  // saving it as shipped is not a shipment: the edit is kept, the order stays «يتم التجهيز» (full quantity, 6 missing), nothing is deducted
+  await w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: slot(10), invoice: 8500 });
+  assert.equal(w.sales[0].order_status, PREPARED);
+  assert.equal(w.sales[0].model1_qty, 10);
   assert.equal(w.stock().physicalQty, 4);
   assert.equal(w.movements.length, 0);
   // a NEW order entered directly as shipped while the stock is short is not refused: it is saved as «يتم التجهيز», nothing deducted
@@ -118,7 +120,10 @@ test('6b. units held for another prepared order cannot be shipped by a different
   const other = await w.saveOrder({ status: NOT_PAID_OUT, slots: slot(2), invoice: 1 });   // new order: saved, but as «يتم التجهيز» (nothing free to ship)
   assert.equal(other.order_status, PREPARED);
   assert.equal(w.allocation(other.id)!.reserved, 0);
-  await assert.rejects(() => w.saveOrder({ id: other.id, status: NOT_PAID_OUT, slots: slot(2), invoice: 1 }), /المحجوز لأوردرات أخرى 4/);   // explicit shipping is still blocked
+  await w.saveOrder({ id: other.id, status: NOT_PAID_OUT, slots: slot(2), invoice: 1 });   // the pieces held for the other order are never used
+  assert.equal(w.sales[1].order_status, PREPARED);
+  assert.equal(w.allocation(a.id)!.reserved, 4);
+  assert.equal(w.movements.length, 0);
   await w.saveOrder({ id: other.id, status: CANCELED, slots: slot(2), invoice: 1 });
   // the owner can ship them
   await w.saveOrder({ id: a.id, status: NOT_PAID_OUT, slots: slot(4), invoice: 1 });

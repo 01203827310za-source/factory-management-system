@@ -127,9 +127,90 @@ test('11. shipping-company money already entered for goods that do not exist is 
   assert.equal(w.sales.length, 0);
 });
 
-test('12. shipping an EXISTING under-stocked order is still blocked (only creation is relaxed)', async () => {
-  const w = world(0); w.readyStock[0].opening_balance = 4;
-  const o = await w.saveOrder({ status: PREPARED, slots: [line('M1', 10)], invoice: 1000 });
-  await assert.rejects(() => w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: [line('M1', 10)], invoice: 1000 }), /./);
-  assert.equal(w.sales[0].order_status, PREPARED);
+test('12. an order that already SHIPPED keeps the strict rule: its shipped quantity cannot grow beyond what exists', async () => {
+  const w = world(0); w.readyStock[0].opening_balance = 10;
+  const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: [line('M1', 10)], invoice: 1000 });
+  assert.equal(w.sales[0].order_status, NOT_PAID_OUT);
+  await assert.rejects(() => w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: [line('M1', 15)], invoice: 1500 }), /./);
+  assert.equal(w.sales[0].model1_qty, 10);
+  assert.equal(w.movements.filter(m => m.movement_type === 'SHIP').length, 1);
+});
+
+// ───────── editing: the screenshot case — 8 black pieces, nothing available, 8 held for another order ─────────
+function editWorld() {
+  const w = new World();
+  w.addStock('1002', 'أسود', 8, 600);
+  return w;
+}
+const black = (qty: number) => [line('1002', qty, 'أسود')];
+
+test('E1. editing an order to ship 8 black pieces when 0 are available (8 held for another order) is SAVED, not rejected', async () => {
+  const w = editWorld();
+  const a = await w.saveOrder({ order_number: 'A', status: PREPARED, slots: black(8), invoice: 800 });         // holds all 8
+  const b = await w.saveOrder({ order_number: 'B', status: PREPARED, slots: black(8), invoice: 800 });         // waits: 8 pending
+  assert.deepEqual(w.missingSummary().rows.map(r => r.missing), [8]);
+  await w.saveOrder({ id: b.id, status: NOT_PAID_OUT, slots: black(8), invoice: 800 });                         // the failing edit
+  assert.equal(w.sales[1].order_status, PREPARED);                          // not shipped, not collected
+  assert.equal(w.sales[1].model1_qty, 8);                                   // requested quantity kept
+  assert.deepEqual(w.missingSummary().rows.map(r => [r.model_code, r.color, r.missing]), [['1002', 'أسود', 8]]);
+  assert.equal(w.allocation(a.id)!.reserved, 8);                            // the other order's reservation is untouched
+  assert.equal(w.allocation(b.id)!.reserved, 0);
+  assert.equal(w.movements.length, 0);                                      // no stock movement for pieces that do not exist
+  assert.equal(w.stock().physicalQty, 8);
+  invariant(w);
+});
+
+test('E2. repeated saves never duplicate the shortage or any movement; the quantity can go up and down', async () => {
+  const w = editWorld();
+  await w.saveOrder({ order_number: 'A', status: PREPARED, slots: black(8), invoice: 800 });
+  const b = await w.saveOrder({ order_number: 'B', status: PREPARED, slots: black(8), invoice: 800 });
+  const snap = () => JSON.stringify([w.missingSummary().rows.map(r => r.missing), w.readyStock.map(r => r.reserved_quantity), w.movements.length, w.collections.length]);
+  await w.saveOrder({ id: b.id, status: NOT_PAID_OUT, slots: black(8), invoice: 800 });
+  const first = snap();
+  for (let i = 0; i < 4; i++) await w.saveOrder({ id: b.id, status: NOT_PAID_OUT, slots: black(8), invoice: 800 });
+  assert.equal(snap(), first);
+  await w.saveOrder({ id: b.id, status: NOT_PAID_OUT, slots: black(12), invoice: 1200 });
+  assert.deepEqual(w.missingSummary().rows.map(r => r.missing), [12]);
+  await w.saveOrder({ id: b.id, status: NOT_PAID_OUT, slots: black(5), invoice: 500 });
+  assert.deepEqual(w.missingSummary().rows.map(r => r.missing), [5]);
+  assert.equal(w.sales[1].order_status, PREPARED);
+  assert.equal(w.movements.length, 0);
+});
+
+test('E3. shipping-company money entered with the edit is not silently dropped: the edit is refused', async () => {
+  const w = editWorld();
+  await w.saveOrder({ order_number: 'A', status: PREPARED, slots: black(8), invoice: 800 });
+  const b = await w.saveOrder({ order_number: 'B', status: PREPARED, slots: black(8), invoice: 800 });
+  await assert.rejects(() => w.saveOrder({ id: b.id, status: PAID_OUT, slots: black(8), invoice: 800, collected: 800, date: '2026-10-05' }), /./);
+  assert.equal(w.sales[1].order_status, PREPARED);
+  assert.equal(w.collections.length, 0);
+});
+
+test('E4. actual shipment still follows the stock rules: once the pieces exist the same save really ships, deducting exactly once', async () => {
+  const w = editWorld();
+  await w.saveOrder({ order_number: 'A', status: PREPARED, slots: black(8), invoice: 800 });
+  const b = await w.saveOrder({ order_number: 'B', status: PREPARED, slots: black(8), invoice: 800 });
+  await w.saveOrder({ id: b.id, status: NOT_PAID_OUT, slots: black(8), invoice: 800 });
+  assert.equal(w.sales[1].order_status, PREPARED);
+  w.addProduction('1002', 'أسود', 8);
+  await w.resync();
+  assert.deepEqual(w.missingSummary().rows, []);
+  await w.saveOrder({ id: b.id, status: NOT_PAID_OUT, slots: black(8), invoice: 800 });
+  assert.equal(w.sales[1].order_status, NOT_PAID_OUT);
+  assert.equal(w.movements.filter(m => m.movement_type === 'SHIP').length, 1);
+  assert.equal(w.stock().physicalQty, 8);                                   // 16 in total − 8 shipped
+  await w.saveOrder({ id: b.id, status: NOT_PAID_OUT, slots: black(8), invoice: 800 });
+  assert.equal(w.movements.filter(m => m.movement_type === 'SHIP').length, 1);
+  invariant(w);
+});
+
+test('E5. cancelling an edited order with an outstanding shortage still clears the shortage and the reservation', async () => {
+  const w = editWorld();
+  await w.saveOrder({ order_number: 'A', status: PREPARED, slots: black(8), invoice: 800 });
+  const b = await w.saveOrder({ order_number: 'B', status: PREPARED, slots: black(8), invoice: 800 });
+  await w.saveOrder({ id: b.id, status: NOT_PAID_OUT, slots: black(8), invoice: 800 });
+  await w.saveOrder({ id: b.id, status: CANCELED, slots: black(8), invoice: 800 });
+  assert.deepEqual(w.missingSummary().rows, []);
+  assert.equal(w.allocation(w.sales[0].id)!.reserved, 8);
+  assert.equal(w.stock().physicalQty, 8);
 });

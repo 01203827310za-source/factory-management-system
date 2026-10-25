@@ -173,8 +173,8 @@ async function main() {
   check('«يتم التجهيز» accepted for a model with NO stock card (all pending)', prep.status === 201 && prep.body.fulfillment?.reserved === 0 && prep.body.fulfillment?.pending === 10 && prep.body.fulfillment?.slots?.[0]?.has_card === false, prep);
   const pid = prep.body.id as number;
   const shipEarly = await api('PUT', `/sales/${pid}`, modalPayload({ order_number: 'P-9', model1_code: 'M9', model1_qty: 10, model1_color: 'أسود', invoice_value: 5000, deposit_paid: 500, order_status: 'لم يتم الصرف' }));
-  check('shipping goods that were never produced is refused with an Arabic explanation (400)', shipEarly.status === 400 && /لا يمكن شحن/.test(String(shipEarly.body.message)), shipEarly);
-  check('the refused shipment changed nothing', (await counts(pid)).status === 'تم الحجز' && (await counts(pid)).movements === 0);
+  check('saving an edit that asks to ship goods that were never produced is accepted but NOT shipped: it stays «يتم التجهيز» and says why (200)', shipEarly.status === 200 && shipEarly.body.order_status === 'تم الحجز' && shipEarly.body.status_downgraded === true && /لا يمكن شحن/.test(String(shipEarly.body.downgrade_reason)), shipEarly);
+  check('…and nothing was shipped or deducted', (await counts(pid)).status === 'تم الحجز' && (await counts(pid)).movements === 0);
   const dashPending = await api('GET', '/dashboard');
   const po = (dashPending.body.pending_orders as { order_number: string; pending: number }[] | undefined)?.find(o => o.order_number === 'P-9');
   check('Dashboard lists the order as pending (10) and not as an asset', po?.pending === 10 && dashPending.body.assets_reconciliation?.reconciled === true, po);

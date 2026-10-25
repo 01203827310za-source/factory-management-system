@@ -248,7 +248,7 @@ async function main() {
   const shRefused = await api('POST', '/sales', payload({ order_status: PAID_OUT, invoice_value: 500, shipping_collected: 500, shipping_collected_date: '2026-10-05', lines: [{ code: 'M1', qty: 500, color: 'أسود' }] }));
   check('SHORTAGE. shipping-company money entered for goods that do not exist is refused (400), never dropped', shRefused.status === 400 && (await prisma.sale.count()) === 1, shRefused.body);
   const shShip = await api('PUT', `/sales/${sh.body.id}`, payload({ order_number: sh.body.order_number, order_status: NOT_PAID_OUT, invoice_value: 15000, lines: big }));
-  check('SHORTAGE. explicitly shipping the under-stocked order is still refused (400) and nothing changes', shShip.status === 400 && (await rows(sh.body.id)).sale?.order_status === PREPARED && (await rows(sh.body.id)).movements.length === 0, shShip.body);
+  check('SHORTAGE. asking to ship the under-stocked order only saves it: it stays «يتم التجهيز», nothing is shipped', shShip.status === 200 && shShip.body.order_status === PREPARED && (await rows(sh.body.id)).movements.length === 0, shShip.body);
   for (let i = 0; i < 3; i++) await api('PUT', `/sales/${sh.body.id}`, payload({ order_number: sh.body.order_number, order_status: PREPARED, invoice_value: 15000, lines: big }));
   check('SHORTAGE. saving it again does not duplicate the shortage or the reservation', (await dash()).missing_stock?.total_missing_units === 50 && (await prisma.readyStock.findFirst({ where: { model_code: 'M1', color: 'أسود' } }))?.reserved_quantity === 100);
   await api('PUT', `/sales/${sh.body.id}`, payload({ order_number: sh.body.order_number, order_status: PREPARED, invoice_value: 12000, lines: [{ code: 'M1', qty: 120, color: 'أسود' }] }));
@@ -261,6 +261,32 @@ async function main() {
   check('SHORTAGE. a second short order (M2: 80 vs 50) is tracked on its own row', sh2.status === 201 && (await dash()).missing_stock?.rows.some((r: Json) => r.model_code === 'M2' && r.missing === 30), (await dash()).missing_stock);
   await api('PUT', `/sales/${sh2.body.id}`, payload({ order_number: sh2.body.order_number, order_status: CANCELED, invoice_value: 1000, lines: [{ code: 'M2', qty: 80, color: 'أبيض' }] }));
   check('SHORTAGE. cancelling an order with a shortage removes it; stock never went negative', !(await dash()).missing_stock?.rows.some((r: Json) => r.model_code === 'M2') && (await stockQty('M2', 'أبيض')) === 50);
+
+  // ───────── EDIT. saving an edited order is not a shipment ─────────
+  await reset();
+  const holdAll: Line[] = [{ code: 'M1', qty: 100, color: 'أسود' }];
+  const eA = (await api('POST', '/sales', payload({ order_status: PREPARED, invoice_value: 10000, lines: holdAll }))).body;
+  const small: Line[] = [{ code: 'M1', qty: 8, color: 'أسود' }];
+  const eB = (await api('POST', '/sales', payload({ order_status: PREPARED, invoice_value: 800, lines: small }))).body;
+  const shipEdit = await api('PUT', `/sales/${eB.id}`, payload({ order_number: eB.order_number, order_status: NOT_PAID_OUT, invoice_value: 800, lines: small }));
+  check('EDIT. saving order B as shipped when 0 are available (all 100 held for order A) is SAVED (200), not rejected', shipEdit.status === 200, shipEdit.body);
+  check('EDIT. it stays «يتم التجهيز» with the full quantity 8, flagged for the UI; not shipped, no revenue, no receivable', shipEdit.body.order_status === PREPARED && shipEdit.body.model1_qty === 8 && shipEdit.body.status_downgraded === true && shipEdit.body.requested_status === NOT_PAID_OUT && shipEdit.body.fulfillment?.pending === 8, shipEdit.body);
+  let ed = await dash();
+  check('EDIT. the 8 missing pieces are in the existing shortage summary; order A still holds all 100; no movements; stock 100', ed.missing_stock?.total_missing_units === 8 && (await prisma.readyStock.findFirst({ where: { model_code: 'M1', color: 'أسود' } }))?.reserved_quantity === 100 && (await rows(eB.id)).movements.length === 0 && (await rows(eA.id)).movements.length === 0 && (await stockQty('M1', 'أسود')) === 100 && ed.money_owed_to_us === 0, ed.missing_stock);
+  for (let i = 0; i < 3; i++) await api('PUT', `/sales/${eB.id}`, payload({ order_number: eB.order_number, order_status: NOT_PAID_OUT, invoice_value: 800, lines: small }));
+  check('EDIT. repeated saves add no shortage, reservation or movement', (await dash()).missing_stock?.total_missing_units === 8 && (await prisma.inventoryMovement.count()) === 0);
+  await api('PUT', `/sales/${eB.id}`, payload({ order_number: eB.order_number, order_status: NOT_PAID_OUT, invoice_value: 1200, lines: [{ code: 'M1', qty: 12, color: 'أسود' }] }));
+  check('EDIT. raising the quantity to 12 raises the shortage to 12; lowering to 5 lowers it to 5', (await dash()).missing_stock?.total_missing_units === 12);
+  await api('PUT', `/sales/${eB.id}`, payload({ order_number: eB.order_number, order_status: NOT_PAID_OUT, invoice_value: 500, lines: [{ code: 'M1', qty: 5, color: 'أسود' }] }));
+  check('EDIT. …and lowering it to 5 gives 5', (await dash()).missing_stock?.total_missing_units === 5);
+  const moneyEdit = await api('PUT', `/sales/${eB.id}`, payload({ order_number: eB.order_number, order_status: PAID_OUT, invoice_value: 500, shipping_collected: 500, shipping_collected_date: '2026-10-05', lines: [{ code: 'M1', qty: 5, color: 'أسود' }] }));
+  check('EDIT. shipping-company money entered with the save is refused (400), never dropped silently', moneyEdit.status === 400 && (await rows(eB.id)).sale?.order_status === PREPARED && (await prisma.shippingCollection.count()) === 0, moneyEdit.body);
+  await api('PUT', `/sales/${eB.id}`, payload({ order_number: eB.order_number, order_status: CANCELED, invoice_value: 500, lines: [{ code: 'M1', qty: 5, color: 'أسود' }] }));
+  check('EDIT. cancelling the edited order clears its shortage', (await dash()).missing_stock?.total_missing_units === 0);
+  await api('PUT', `/sales/${eA.id}`, payload({ order_number: eA.order_number, order_status: NOT_PAID_OUT, invoice_value: 10000, lines: holdAll }));
+  check('EDIT. order A, now the only one, really ships its 100 pieces: exactly one SHIP row, stock 0', (await rows(eA.id)).sale?.order_status === NOT_PAID_OUT && (await rows(eA.id)).movements.filter(m => m.movement_type === 'SHIP').length === 1 && (await stockQty('M1', 'أسود')) === 0);
+  const growShipped = await api('PUT', `/sales/${eA.id}`, payload({ order_number: eA.order_number, order_status: NOT_PAID_OUT, invoice_value: 12000, lines: [{ code: 'M1', qty: 120, color: 'أسود' }] }));
+  check('EDIT. growing an ALREADY shipped order beyond what exists keeps the shipment rule (400)', growShipped.status === 400 && (await rows(eA.id)).sale?.model1_qty === 100, growShipped.body);
 
   // ───────── seasons + authorisation ─────────
   o = reopenedOrder;
