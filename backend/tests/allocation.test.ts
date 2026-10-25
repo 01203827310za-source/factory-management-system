@@ -135,7 +135,12 @@ test('6c. editing an already-shipped order is not blocked unless it ships MORE',
   const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: slot(10), invoice: 1000 });   // stock now 0
   await w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: slot(10), invoice: 1200 });   // unrelated edit: fine
   await w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: slot(8), invoice: 1000 });    // shipping less: fine
-  await assert.rejects(() => w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: slot(12), invoice: 1000 }), /لا يمكن شحن/);
+  // shipping MORE than exists: the unpaid shipped order goes back to «يتم التجهيز» (shipment reversed at the recorded cost), edit kept
+  await w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: slot(12), invoice: 1000 });
+  assert.equal(w.sales[0].order_status, PREPARED);
+  assert.equal(w.sales[0].model1_qty, 12);
+  assert.equal(w.cogs(), 0);
+  assert.equal(w.stock().physicalQty, 10);                 // the 8 shipped pieces are back in physical stock (12 wanted: 10 reserved, 2 pending)
 });
 
 test('7. repeated saves of an under-stocked prepared order change nothing', async () => {

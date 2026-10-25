@@ -131,13 +131,31 @@ test('11. money pre-filled for goods that do not exist is not recorded as receiv
   assert.deepEqual(missing(w), [['M1', 'أسود', 8]]);
 });
 
-test('12. an order that already SHIPPED keeps the strict rule: its shipped quantity cannot grow beyond what exists', async () => {
+test('12. an unpaid SHIPPED order (لم يتم الصرف) edited to need more pieces than exist goes back to «يتم التجهيز»: shipment reversed once, edit kept, shortage tracked', async () => {
   const w = world(0); w.readyStock[0].opening_balance = 10;
-  const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: [line('M1', 10)], invoice: 1000 });
+  const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: [line('M1', 8)], invoice: 800 });
   assert.equal(w.sales[0].order_status, NOT_PAID_OUT);
-  await assert.rejects(() => w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: [line('M1', 15)], invoice: 1500 }), /./);
-  assert.equal(w.sales[0].model1_qty, 10);
-  assert.equal(w.movements.filter(m => m.movement_type === 'SHIP').length, 1);
+  assert.equal(w.cogs(), 4800);
+  await w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: [line('M1', 15)], invoice: 1500 });
+  assert.equal(w.sales[0].order_status, PREPARED);
+  assert.equal(w.sales[0].model1_qty, 15);                                  // requested quantity kept
+  assert.equal(w.cogs(), 0);                                                // the old shipment was reversed at its recorded cost…
+  assert.deepEqual(w.movements.map(m => [m.movement_type, m.qty, m.unit_cost]), [['SHIP', 8, 600], ['SHIP_REVERSAL', 8, 600]]);   // …once
+  assert.deepEqual(missing(w), [['M1', 'أسود', 5]]);
+  assert.equal(w.stock().physicalQty, 10);
+  const snap = JSON.stringify([w.movements.length, missing(w)]);
+  for (let i = 0; i < 3; i++) await w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: [line('M1', 15)], invoice: 1500 });
+  assert.equal(JSON.stringify([w.movements.length, missing(w)]), snap);
+  invariant(w);
+});
+
+test('12b. a PAID-OUT order that collected money is never un-shipped by an edit: it keeps the strict shipment rule', async () => {
+  const w = world(0); w.readyStock[0].opening_balance = 10;
+  const o = await w.saveOrder({ status: PAID_OUT, slots: [line('M1', 8)], invoice: 800, collected: 800, date: '2026-10-05' });
+  await assert.rejects(() => w.saveOrder({ id: o.id, status: PAID_OUT, slots: [line('M1', 15)], invoice: 1500, collected: 800, date: '2026-10-05' }), /./);
+  assert.equal(w.sales[0].order_status, PAID_OUT);
+  assert.equal(w.sales[0].model1_qty, 8);
+  assert.equal(w.cash().cash, 800);
 });
 
 // ───────── editing: the screenshot case — 8 black pieces, nothing available, 8 held for another order ─────────

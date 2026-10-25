@@ -286,12 +286,16 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     // Saving an edit is not a shipment. When an order that has NOT shipped yet (يتم التجهيز / cancelled) is saved with a shipped
     // status while its pieces are not available, the edit is kept (requested quantities untouched), the order stays «يتم التجهيز»
     // and the missing pieces are tracked as a shortage — nothing is deducted and no pieces held for other orders are used.
-    // Shipping-company money entered with the save cannot be dropped silently, and an order that already shipped keeps the
-    // existing rule (its shipped quantity cannot grow beyond what exists) — both still fail below with the original message.
+    // An order already marked «لم يتم الصرف» / «حساب عميل» (shipped, nothing collected yet) whose edit needs MORE pieces than exist
+    // cannot be shipped for the extra pieces either (partial shipment is unsupported): it goes back to «يتم التجهيز», its shipment
+    // is reversed through the ledgers (stock and cost at the recorded cost, revenue, receivable) and the edit is kept. A paid-out
+    // order that already collected money is never un-shipped this way and keeps the strict rule below.
     let downgradeReason = '';
     let requestedStatus = '';
     let ignoredCollected = 0;
-    if (isStockDeducting(newStatus) && !isStockDeducting(oldSale.order_status)) {
+    let shipmentReversed = false;
+    const unpaidShipped = ['لم يتم الصرف', 'حساب عميل'].includes(oldSale.order_status) && oldSale.shipping_collected === 0;
+    if (isStockDeducting(newStatus) && (!isStockDeducting(oldSale.order_status) || unpaidShipped)) {
       const wanted = extractModels({ ...oldSale, ...data } as unknown as Record<string, unknown>);
       const pre = await loadStockContext(prisma as unknown as Prisma.TransactionClient, seasonId, id);
       const problem = validateShipment(pre, wanted, increasingKeys(pre, outsideSlots(oldSale), wanted));
@@ -300,6 +304,7 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
         // does the same), so an amount arrives with almost every such save. The order is NOT shipped, so nothing is received yet:
         // it is not recorded, and the amount is returned so the screen can say so.
         ignoredCollected = newStatus === 'تم الصرف' ? Math.max(0, Number(data.shipping_collected) || 0) : 0;
+        shipmentReversed = isStockDeducting(oldSale.order_status);
         requestedStatus = newStatus;
         newStatus = STATUS_RESERVED;
         data.order_status = STATUS_RESERVED;
@@ -491,6 +496,7 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
       status_downgraded: !!downgradeReason,
       requested_status: requestedStatus || null,
       ignored_collected: ignoredCollected,
+      shipment_reversed: shipmentReversed,
       downgrade_reason: downgradeReason || null,
     });
   } catch (err) {

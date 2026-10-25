@@ -128,7 +128,8 @@ export class World {
     // shipped status while the pieces are not available is kept as «يتم التجهيز» with its full quantity (nothing deducted); it is
     // refused only if shipping-company money was already entered. An order that already shipped keeps the strict rule.
     const pre = input.id ? this.sales.find(s => s.id === input.id) : undefined;
-    if (!input.legacy && isStockDeducting(input.status) && (!input.id || (pre && !isStockDeducting(pre.order_status)))) {
+    const unpaidShipped = !!pre && ['لم يتم الصرف', 'حساب عميل'].includes(pre.order_status) && pre.shipping_collected === 0;
+    if (!input.legacy && isStockDeducting(input.status) && (!input.id || (pre && (!isStockDeducting(pre.order_status) || unpaidShipped)))) {
       const ctx0 = await loadStockContext(this.tx, input.season ?? 1, input.id);
       const problem = validateShipment(ctx0, input.slots, pre ? increasingKeys(ctx0, outsideSlots(pre), input.slots) : undefined);
       if (problem) input = { ...input, status: 'تم الحجز', collected: 0 };   // the pre-filled received amount is not recorded: nothing shipped
