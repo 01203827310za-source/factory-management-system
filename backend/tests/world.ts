@@ -11,6 +11,7 @@ import {
 import { markReopened, recordCancellation, shippedSnapshot, updateDisposition, cancelledObligations, refundsByOrderNumber, refundsFor } from '../src/services/orderCancellation';
 import { computeDashboardCashFlow, computeMoneyOwedToUs } from '../src/services/financialMetrics';
 import { costOfGoodsShipped, returnsCostCredit, type MovementRow } from '../src/services/inventoryMovements';
+import { planExtras } from '../src/services/salesOnlyExtra';
 import { FuzzyKeyIndex } from '../src/utils/textMatch';
 import { ledgerTotal } from '../src/services/shippingCollections';
 import { summarizeMissingStock } from '../src/services/missingStock';
@@ -133,12 +134,12 @@ export class World {
     // sales-only extra: pieces added while the order stays «لم يتم الصرف» are in the order (sales) but not in stock
     const norm = (v: unknown) => String(v ?? '').trim().toLowerCase();
     const keepsNP = !!pre && ['لم يتم الصرف', 'تم الصرف'].includes(pre.order_status) && ['لم يتم الصرف', 'تم الصرف'].includes(input.status);
-    const extras = [1, 2, 3, 4, 5].map(i => {
-      const o = pre as unknown as Record<string, unknown> | undefined;
-      const ns = input.slots[i - 1];
-      if (!keepsNP || !o || !ns || !o[`model${i}_code`] || norm(o[`model${i}_code`]) !== norm(ns.code) || norm(o[`model${i}_color`]) !== norm(ns.color)) return 0;
-      return Math.max(0, (Number(o[`model${i}_extra_qty`]) || 0) + (ns.qty - (Number(o[`model${i}_qty`]) || 0)));
-    });
+    const preRec = pre as unknown as Record<string, unknown> | undefined;
+    const keyOf = (await loadStockContext(this.tx, input.season ?? 1, input.id)).keyOf;
+    const extras = !keepsNP || !preRec ? [0, 0, 0, 0, 0] : planExtras(
+      [1, 2, 3, 4, 5].map(i => ({ code: String(preRec[`model${i}_code`] ?? ''), color: String(preRec[`model${i}_color`] ?? ''), qty: Number(preRec[`model${i}_qty`]) || 0, extra: Number(preRec[`model${i}_extra_qty`]) || 0 })),
+      [1, 2, 3, 4, 5].map(i => ({ code: input.slots[i - 1]?.code ?? '', color: input.slots[i - 1]?.color ?? '', qty: input.slots[i - 1]?.qty ?? 0 })),
+      keyOf);
     const stockSlots = input.slots.map((sl, i) => ({ ...sl, qty: sl.qty - extras[i] })).filter(sl => sl.qty > 0);
     const preEff = pre ? effectiveStatus(pre) : undefined;
     const unpaidShipped = !!preEff && ['لم يتم الصرف', 'حساب عميل'].includes(preEff.order_status) && preEff.shipping_collected === 0;

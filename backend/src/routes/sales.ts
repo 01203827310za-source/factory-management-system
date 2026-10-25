@@ -15,6 +15,7 @@ import {
   type RefundKind,
 } from '../services/orderCancellation';
 import { lockStock } from '../services/reservationSync';
+import { planExtras } from '../services/salesOnlyExtra';
 import { ledgerTotal } from '../services/shippingCollections';
 import { collectionDate, loadStockContext, syncCollections, syncShipMovements } from '../services/orderLedgers';
 import { outstandingShippingReceivable } from '../services/receivablesAudit';
@@ -302,16 +303,14 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     // any other status change (e.g. back to «يتم التجهيز» and shipped again) resets it to 0, so the whole quantity is validated and shipped.
     const SHIPPED_STATUSES = ['لم يتم الصرف', 'تم الصرف'];
     const keepsNotPaidOut = SHIPPED_STATUSES.includes(oldRaw.order_status) && SHIPPED_STATUSES.includes(newStatus);
-    const norm = (v: unknown) => String(v ?? '').trim().toLowerCase();
-    for (let i = 1; i <= 5; i++) {
+    {
       const rec = oldRaw as unknown as Record<string, unknown>;
-      const oldQty = Number(rec[`model${i}_qty`]) || 0;
-      const oldExtra = Number(rec[`model${i}_extra_qty`]) || 0;
-      const newQty = data[`model${i}_qty`] !== undefined ? Number(data[`model${i}_qty`]) || 0 : oldQty;
-      const sameItem = !!rec[`model${i}_code`]
-        && norm(data[`model${i}_code`] ?? rec[`model${i}_code`]) === norm(rec[`model${i}_code`])
-        && norm(data[`model${i}_color`] ?? rec[`model${i}_color`]) === norm(rec[`model${i}_color`]);
-      data[`model${i}_extra_qty`] = keepsNotPaidOut && sameItem ? Math.max(0, oldExtra + (newQty - oldQty)) : 0;
+      const line = (src: Record<string, unknown>, i: number) => ({ code: String(src[`model${i}_code`] ?? ''), color: String(src[`model${i}_color`] ?? ''), qty: Number(src[`model${i}_qty`]) || 0 });
+      const existing = [1, 2, 3, 4, 5].map(i => ({ ...line(rec, i), extra: Number(rec[`model${i}_extra_qty`]) || 0 }));
+      const wanted = [1, 2, 3, 4, 5].map(i => line({ ...rec, ...data }, i));
+      const keyOf = keepsNotPaidOut ? (await loadStockContext(prisma as unknown as Prisma.TransactionClient, seasonId, id)).keyOf : (() => '');
+      const extras = keepsNotPaidOut ? planExtras(existing, wanted, keyOf) : [0, 0, 0, 0, 0];
+      extras.forEach((e, idx) => { data[`model${idx + 1}_extra_qty`] = e; });
     }
 
     // Saving an edit is not a shipment. When an order that has NOT shipped yet (يتم التجهيز / cancelled) is saved with a shipped

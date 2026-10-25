@@ -382,6 +382,42 @@ async function main() {
   check('PAID. lowering to 6 removes the extra first and returns 2 real pieces: one SHIP_REVERSAL of 2, stock back to 94 − ... = 94', p2.status === 200 && p2.body.model1_extra_qty === 0 && (await rows(paid0.id)).movements.map(m => m.movement_type + m.qty).join() === 'SHIP8,SHIP_REVERSAL2' && (await stockQty('M1', 'أسود')) === 94, p2.body);
   void paidRes;
 
+  // ───────── SHOT. the screenshot: model 1001 / شانيه, 40 requested, 28 available, 60 reserved for other orders ─────────
+  const shotForm = (no: string, lines: [string, number, string][], status: string, invoice: number, collected: number) => {
+    const o: Record<string, unknown> = { order_number: no, marketer: 'm', client: 'c', mobile: '', invoice_value: invoice, deposit_paid: 0, deposit_receiver: '', shipping_number: '', order_status: status, delivery_method: 'ايرجنت', warehouse: '', shipping_collected: collected, shipping_collected_date: '2026-10-05', row_number: 1 };
+    for (let i = 1; i <= 5; i++) { const l = lines[i - 1]; o[`model${i}_code`] = l?.[0] ?? ''; o[`model${i}_qty`] = l?.[1] ?? 0; o[`model${i}_color`] = l?.[2] ?? ''; }
+    return o;
+  };
+  const variants: [string, [string, number, string][]][] = [
+    ['same line 30 → 40', [['1001', 40, 'شانيه']]],
+    ['colour re-picked as شانية', [['1001', 40, 'شانية']]],
+    ['second line of the same model and colour (30 + 10)', [['1001', 30, 'شانيه'], ['1001', 10, 'شانيه']]],
+    ['the line moved to row 2', [['', 0, ''], ['1001', 40, 'شانيه']]],
+  ];
+  for (const [label, lines] of variants) {
+    await reset();
+    await prisma.readyStock.deleteMany({});
+    await api('POST', '/ready-stock', { model_code: '1001', product_name: 'M', color: 'شانيه', opening_balance: 88, cost_per_piece: 100, location: '' });
+    const sx = (await api('POST', '/sales', shotForm('SX', [['1001', 30, 'شانيه']], PAID_OUT, 3000, 3000))).body;
+    await api('POST', '/sales', shotForm('SR', [['1001', 60, 'شانيه']], PREPARED, 6000, 0));
+    const cashBefore = (await dash()).cash_on_hand;
+    const resBefore = (await prisma.readyStock.findFirst({ where: { model_code: '1001' } }))?.reserved_quantity;
+    const edit = await api('PUT', `/sales/${sx.id}`, shotForm('SX', lines, PAID_OUT, 4000, 3000));
+    const after = await rows(sx.id);
+    const totalQty = [1, 2, 3, 4, 5].reduce((n, i) => n + ((after.sale as unknown as Record<string, number>)?.[`model${i}_qty`] ?? 0), 0);
+    check(`SHOT (${label}). editing the «تم الصرف» order to 40 with 28 available / 60 reserved for others is SAVED (200)`, edit.status === 200, edit.body);
+    const dShot = await dash();
+    check(`SHOT (${label}). quantity 40 and value 4,000 recorded, status stays «تم الصرف»; stock side unchanged (one SHIP of 30, one collection, no cash change, no new reservation, no shortage entry)`,
+      totalQty === 40 && after.sale?.invoice_value === 4000 && after.sale?.order_status === PAID_OUT && after.movements.length === 1 && after.movements[0].qty === 30 && after.collections.length === 1 && dShot.cash_on_hand === cashBefore && (await prisma.readyStock.findFirst({ where: { model_code: '1001' } }))?.reserved_quantity === resBefore, { totalQty, mov: after.movements.length, col: after.collections.length });
+    for (let i = 0; i < 2; i++) await api('PUT', `/sales/${sx.id}`, shotForm('SX', lines, PAID_OUT, 4000, 3000));
+    const again = await rows(sx.id);
+    check(`SHOT (${label}). repeated saves duplicate nothing`, again.movements.length === 1 && again.collections.length === 1);
+  }
+  // actual shipment of a reservation is still validated
+  const shipY = (await api('POST', '/sales', shotForm('SY', [['1001', 40, 'شانيه']], PREPARED, 4000, 0))).body;
+  const shipTry = await api('PUT', `/sales/${shipY.id}`, shotForm('SY', [['1001', 40, 'شانيه']], PAID_OUT, 4000, 0));
+  check('SHOT. a reservation of 40 is NOT shipped when only part of it exists (stays «يتم التجهيز», no SHIP row)', shipTry.status === 200 && shipTry.body.order_status === PREPARED && (await rows(shipY.id)).movements.length === 0, shipTry.body);
+
   // ───────── seasons + authorisation ─────────
   o = reopenedOrder;
   await reset();

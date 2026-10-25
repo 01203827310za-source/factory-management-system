@@ -449,3 +449,50 @@ test('P4. cancelling a «تم الصرف» order with a sales-only extra restore
   assert.equal(w.shippingReceivable(), 0);
   invariant(w);
 });
+
+// ───────── the screenshot: model 1001, colour شانيه, 40 requested, 28 available, 60 reserved for other orders ─────────
+function shotWorld() {
+  const w = new World();
+  w.addStock('1001', 'شانيه', 88, 100);
+  return w;
+}
+const sh = (qty: number, color = 'شانيه') => [line('1001', qty, color)];
+
+async function shotSetup() {
+  const w = shotWorld();
+  const x = await w.saveOrder({ order_number: 'X', status: PAID_OUT, slots: sh(30), invoice: 3000, collected: 3000, date: '2026-10-05' });
+  const r = await w.saveOrder({ order_number: 'R', status: PREPARED, slots: sh(60), invoice: 6000 });
+  return { w, x, r };
+}
+
+for (const [label, slots] of [
+  ['same line, quantity 30 → 40', sh(40)],
+  ['colour re-picked with another spelling (شانية)', sh(40, 'شانية')],
+  ['a second line of the same model and colour (30 + 10)', [line('1001', 30, 'شانيه'), line('1001', 10, 'شانيه')]],
+  ['the line moved to another row', [line('', 0, ''), line('1001', 40, 'شانيه')]],
+] as const) {
+  test(`SHOT. «تم الصرف» order edited to 40 (${label}) with 28 available / 60 reserved for others: SAVED as a sales-only change`, async () => {
+    const { w, x, r } = await shotSetup();
+    const before = { mov: w.movements.length, col: w.collections.length, cash: w.cash().cash, alloc: w.allocation(r.id)!.reserved, res: w.readyStock[0].reserved_quantity, miss: JSON.stringify(missing(w)), cogs: w.cogs(), phys: w.stock().physicalQty };
+    await w.saveOrder({ id: x.id, status: PAID_OUT, slots: slots.filter(s => s.code) as never, invoice: 4000, collected: 3000, date: '2026-10-05' });
+    const row = w.sales.find(s => s.id === x.id)!;
+    const total = [1, 2, 3, 4, 5].reduce((n, i) => n + (row as unknown as Record<string, number>)[`model${i}_qty`], 0);
+    const extra = [1, 2, 3, 4, 5].reduce((n, i) => n + (row as unknown as Record<string, number>)[`model${i}_extra_qty`], 0);
+    assert.deepEqual([row.order_status, total, extra, row.invoice_value], [PAID_OUT, 40, 10, 4000]);     // quantity and value follow the edit; 30 still shipped
+    assert.deepEqual({ mov: w.movements.length, col: w.collections.length, cash: w.cash().cash, alloc: w.allocation(r.id)!.reserved, res: w.readyStock[0].reserved_quantity, miss: JSON.stringify(missing(w)), cogs: w.cogs(), phys: w.stock().physicalQty }, before);
+    const snap = () => JSON.stringify([w.movements, w.collections, w.readyStock.map(s => s.reserved_quantity), w.sales.map(s => [s.invoice_value, s.model1_qty, s.model2_qty, s.model1_extra_qty, s.model2_extra_qty])]);
+    const first = snap();
+    for (let i = 0; i < 3; i++) await w.saveOrder({ id: x.id, status: PAID_OUT, slots: slots.filter(s => s.code) as never, invoice: 4000, collected: 3000, date: '2026-10-05' });
+    assert.equal(snap(), first);                                                                          // repeated saves duplicate nothing
+  });
+}
+
+test('SHOT. actual shipment is still validated: a reservation (يتم التجهيز) of 40 cannot be shipped with 28 available / 60 held for others', async () => {
+  const { w, r } = await shotSetup();
+  const y = await w.saveOrder({ order_number: 'Y', status: PREPARED, slots: sh(40), invoice: 4000 });
+  await w.saveOrder({ id: y.id, status: PAID_OUT, slots: sh(40), invoice: 4000, collected: 0 });
+  assert.equal(w.sales.find(s => s.id === y.id)!.order_status, PREPARED);                                 // not shipped
+  assert.equal(w.movements.filter(m => m.movement_type === 'SHIP').length, 1);                           // only X's original shipment
+  assert.equal(w.allocation(r.id)!.reserved >= 0, true);
+  invariant(w);
+});
