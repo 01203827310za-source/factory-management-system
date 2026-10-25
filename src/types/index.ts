@@ -22,6 +22,8 @@ export interface Sale {
   cancel_disposition?: 'returned_resalable' | 'not_returned' | 'returned_damaged' | null;
   /** Status the user asked for while the pieces were not available; the order is held as «يتم التجهيز» meanwhile. */
   requested_status?: string | null;
+  /** «لم يتم الصرف» saved while the pieces are not available: the status is kept, but nothing has shipped. */
+  awaiting_stock?: boolean;
   model1_unreturned_qty?: number | null;
   model2_unreturned_qty?: number | null;
   model3_unreturned_qty?: number | null;

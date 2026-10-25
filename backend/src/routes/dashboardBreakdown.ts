@@ -8,6 +8,7 @@
 // feeds GET /api/dashboard, so totals reconcile with the cards by construction.
 // ============================================
 
+import { effectiveSales } from '../services/readyStockPositions';
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate } from '../middleware/auth';
@@ -37,7 +38,7 @@ const forbid = (res: Response, permission: string) => res.status(403).json({ mes
 async function loadSeasonData(req: Request) {
   const seasonId = await getSeasonId(req);
   const [sales, expenses, returns_, paymentLogs] = await Promise.all([
-    prisma.sale.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'asc' } }),
+    prisma.sale.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'asc' } }).then(effectiveSales),
     prisma.expenseRevenue.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'asc' } }),
     prisma.returnItem.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'asc' } }),
     prisma.paymentLog.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'asc' } }),
@@ -236,7 +237,7 @@ router.get('/sales/records', async (req: Request, res: Response) => {
     if (group !== 'all' && !(GROUPS as readonly string[]).includes(group)) return res.status(400).json({ message: 'مجموعة غير معروفة' });
 
     const seasonId = await getSeasonId(req);
-    let sales = await prisma.sale.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'desc' } });
+    let sales = await prisma.sale.findMany({ where: seasonWhere(seasonId), orderBy: { id: 'desc' } }).then(effectiveSales);
     if (group !== 'all') {
       const field = ({ status: 'order_status', marketer: 'marketer', delivery_method: 'delivery_method' } as const)[group as Group];
       sales = sales.filter(s => (s[field] || 'غير محدد') === value);
@@ -269,7 +270,7 @@ router.get('/receivables-audit', async (req: Request, res: Response) => {
     const seasonId = await getSeasonId(req);
     const where = seasonWhere(seasonId);
     const [sales, readyStock, modelProds, returns_, clientAccts, clientInvoices, movements, collections] = await Promise.all([
-      prisma.sale.findMany({ where, orderBy: { id: 'asc' } }),
+      prisma.sale.findMany({ where, orderBy: { id: 'asc' } }).then(effectiveSales),
       prisma.readyStock.findMany({ where, orderBy: { id: 'asc' } }),
       prisma.modelProduction.findMany({ where }),
       prisma.returnItem.findMany({ where }),

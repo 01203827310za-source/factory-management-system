@@ -8,6 +8,8 @@ const NOT_PAID_OUT = 'لم يتم الصرف';
 const PAID_OUT = 'تم الصرف';
 const CANCELED = 'تم الإلغاء';
 const slot = (qty: number) => [{ code: 'M1', qty, color: 'أسود' }];
+const notShipped = (s: { order_status: string; awaiting_stock: boolean }) =>
+  assert.equal(s.order_status === PREPARED || (s.order_status === NOT_PAID_OUT && s.awaiting_stock), true, `${s.order_status} / awaiting=${s.awaiting_stock}`);   // «لم يتم الصرف» is kept while awaiting pieces
 
 function worldWithStock(qty: number) {
   const w = new World();
@@ -18,7 +20,7 @@ function worldWithStock(qty: number) {
 test('1. an order can be saved as «يتم التجهيز» when stock is zero', async () => {
   const w = worldWithStock(0);
   const o = await w.saveOrder({ status: PREPARED, slots: slot(10), invoice: 8500, deposit: 1000 });
-  assert.equal(o.order_status, PREPARED);
+  notShipped(o);
   assert.equal(o.model1_qty, 10);                         // requested quantity preserved
   const a = w.allocation(o.id)!;
   assert.deepEqual([a.requested, a.reserved, a.pending], [10, 0, 10]);
@@ -79,7 +81,7 @@ test('5. new production fulfils pending quantities with no duplicate reservation
   a = w.allocation(o.id)!;
   assert.deepEqual([a.reserved, a.pending], [10, 0]);     // fully held, not more than requested
   assert.equal(w.stock().availableQty, 27 - 10);          // the rest stays available to others
-  assert.equal(w.sales[0].order_status, PREPARED);        // fulfilment never ships the order by itself
+  notShipped(w.sales[0]);        // fulfilment never ships the order by itself
   assert.equal(w.movements.length, 0);
 });
 
@@ -88,15 +90,15 @@ test('6. shipping is blocked when the quantity is not physically available / all
   const o = await w.saveOrder({ status: PREPARED, slots: slot(10), invoice: 8500 });
   // saving it as shipped is not a shipment: the edit is kept, the order stays «يتم التجهيز» (full quantity, 6 missing), nothing is deducted
   await w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: slot(10), invoice: 8500 });
-  assert.equal(w.sales[0].order_status, PREPARED);
+  notShipped(w.sales[0]);
   assert.equal(w.sales[0].model1_qty, 10);
   assert.equal(w.stock().physicalQty, 4);
   assert.equal(w.movements.length, 0);
   // a NEW order entered directly as shipped while the stock is short is not refused: it is saved as «يتم التجهيز», nothing deducted
   const direct = await w.saveOrder({ status: NOT_PAID_OUT, slots: slot(1), invoice: 100 });
-  assert.equal(direct.order_status, PREPARED);
+  notShipped(direct);
   const noCard = await w.saveOrder({ status: NOT_PAID_OUT, slots: [{ code: 'ZZ', qty: 1, color: '' }], invoice: 100 });
-  assert.equal(noCard.order_status, PREPARED);            // …even with no stock card at all (all pending)
+  notShipped(noCard);            // …even with no stock card at all (all pending)
   assert.equal(w.movements.length, 0);
   assert.equal(w.stock().physicalQty, 4);
   await w.saveOrder({ id: direct.id, status: CANCELED, slots: slot(1), invoice: 100 });   // keep the following numbers simple
@@ -118,10 +120,10 @@ test('6b. units held for another prepared order cannot be shipped by a different
   const w = worldWithStock(4);
   const a = await w.saveOrder({ status: PREPARED, slots: slot(4), invoice: 1 });   // holds all 4
   const other = await w.saveOrder({ status: NOT_PAID_OUT, slots: slot(2), invoice: 1 });   // new order: saved, but as «يتم التجهيز» (nothing free to ship)
-  assert.equal(other.order_status, PREPARED);
+  notShipped(other);
   assert.equal(w.allocation(other.id)!.reserved, 0);
   await w.saveOrder({ id: other.id, status: NOT_PAID_OUT, slots: slot(2), invoice: 1 });   // the pieces held for the other order are never used
-  assert.equal(w.sales[1].order_status, PREPARED);
+  notShipped(w.sales[1]);
   assert.equal(w.allocation(a.id)!.reserved, 4);
   assert.equal(w.movements.length, 0);
   await w.saveOrder({ id: other.id, status: CANCELED, slots: slot(2), invoice: 1 });
@@ -137,7 +139,7 @@ test('6c. editing an already-shipped order is not blocked unless it ships MORE',
   await w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: slot(8), invoice: 1000 });    // shipping less: fine
   // shipping MORE than exists: the unpaid shipped order goes back to «يتم التجهيز» (shipment reversed at the recorded cost), edit kept
   await w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: slot(12), invoice: 1000 });
-  assert.equal(w.sales[0].order_status, PREPARED);
+  notShipped(w.sales[0]);
   assert.equal(w.sales[0].model1_qty, 12);
   assert.equal(w.cogs(), 0);
   assert.equal(w.stock().physicalQty, 10);                 // the 8 shipped pieces are back in physical stock (12 wanted: 10 reserved, 2 pending)

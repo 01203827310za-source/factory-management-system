@@ -1,3 +1,4 @@
+import { effectiveSales } from './readyStockPositions';
 import prisma from '../lib/prisma';
 import { FuzzyKeyIndex } from '../utils/textMatch';
 import { holdsCollectedCash, leavesStock, outsideSlots, valueStockRow } from '../services/readyStockPositions';
@@ -18,7 +19,7 @@ export async function computeSnapshot(seasonId: number): Promise<SnapshotData> {
     paymentLogs, fabric, readyStock, accessories,
     cuttingOrders, modelProds,
   ] = await Promise.all([
-    prisma.sale.findMany({ where: { season_id: seasonId } }),
+    prisma.sale.findMany({ where: { season_id: seasonId } }).then(effectiveSales),
     prisma.expenseRevenue.findMany({ where: { season_id: seasonId } }),
     prisma.debt.findMany({ where: { season_id: seasonId } }),
     prisma.clientAccount.findMany({ where: { season_id: seasonId } }),

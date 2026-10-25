@@ -1,7 +1,8 @@
 // What the shipping company still owes us for an order. Mirrors backend/src/services/receivablesAudit.ts
 // (outstandingShippingReceivable) — a parity test in backend/tests compares the two.
-export const outstandingCollection = (s: { order_status: string; remaining: number; shipping_collected: number }): number =>
-  s.order_status === 'لم يتم الصرف' ? Math.max(0, s.remaining)
+export const outstandingCollection = (s: { order_status: string; remaining: number; shipping_collected: number; awaiting_stock?: boolean | null }): number =>
+  s.awaiting_stock && s.order_status === 'لم يتم الصرف' ? 0   // not shipped yet: nothing is owed by the shipping company
+  : s.order_status === 'لم يتم الصرف' ? Math.max(0, s.remaining)
   : s.order_status === 'تم الصرف' ? Math.max(0, s.remaining - s.shipping_collected)
   : 0;
 

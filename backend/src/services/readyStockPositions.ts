@@ -21,6 +21,21 @@ import { FuzzyKeyIndex } from '../utils/textMatch';
 export const STATUS_RESERVED = 'تم الحجز';
 export const STATUS_CANCELED = 'تم الإلغاء';
 
+export const STATUS_NOT_PAID_OUT = 'لم يتم الصرف';
+
+/**
+ * An order saved as «لم يتم الصرف» while its pieces were not available keeps that status but has NOT shipped
+ * (sales.awaiting_stock). Stock-wise and money-wise it behaves exactly like a reservation until it really ships.
+ */
+export const isAwaitingStock = (s: { order_status: string; awaiting_stock?: boolean | null }) =>
+  !!s.awaiting_stock && s.order_status === STATUS_NOT_PAID_OUT;
+
+/** The status every stock / cash / receivable rule must see: an awaiting order counts as «يتم التجهيز». */
+export function effectiveStatus<T extends { order_status: string; awaiting_stock?: boolean | null }>(s: T): T {
+  return isAwaitingStock(s) ? { ...s, order_status: STATUS_RESERVED } : s;
+}
+export const effectiveSales = <T extends { order_status: string; awaiting_stock?: boolean | null }>(list: T[]): T[] => list.map(effectiveStatus);
+
 /** True when the order's goods have physically left the factory (stock is deducted). */
 export const isStockDeducting = (status: string) => status !== STATUS_RESERVED && status !== STATUS_CANCELED;
 
@@ -53,6 +68,7 @@ export const hasLineReturns = (s: SaleOutsideFields) =>
  *   • everything else (reserved, never shipped, legacy cancelled with no disposition) → nothing
  */
 export function outsideSlots(s: SaleOutsideFields): Slot[] {
+  if (isAwaitingStock(s)) return [];
   const all = saleSlots({
     model1_code: s.model1_code ?? '', model1_qty: s.model1_qty ?? 0, model1_color: s.model1_color ?? '',
     model2_code: s.model2_code ?? '', model2_qty: s.model2_qty ?? 0, model2_color: s.model2_color ?? '',
@@ -84,7 +100,7 @@ export const holdsGoodsOutside = (s: SaleOutsideFields) =>
   s.order_status === STATUS_CANCELED && outsideSlots(s).length > 0;
 
 /** The order's goods count as OUT of sellable stock (shipped, or cancelled-but-not-back). */
-export const leavesStock = (s: SaleOutsideFields) => isStockDeducting(s.order_status) || holdsGoodsOutside(s);
+export const leavesStock = (s: SaleOutsideFields) => !isAwaitingStock(s) && (isStockDeducting(s.order_status) || holdsGoodsOutside(s));
 
 /**
  * Pieces whose COST stays recognised in the cost ledger (cost of goods sold):
@@ -94,6 +110,7 @@ export const leavesStock = (s: SaleOutsideFields) => isStockDeducting(s.order_st
  * The cost of returned, resalable pieces is reversed at the cost recorded when they shipped.
  */
 export function costSlots(s: SaleOutsideFields): Slot[] {
+  if (isAwaitingStock(s)) return [];
   if (isStockDeducting(s.order_status)) return outsideSlots(s);
   if (s.order_status === STATUS_CANCELED && s.cancel_disposition && hasLineReturns(s)) return outsideSlots(s);
   return [];
@@ -208,6 +225,7 @@ export function computeStockPositions(
   const index = new FuzzyKeyIndex(['model', 'color']);
   const keyOf = (code: string, color: string) => index.resolve([code, color || '']);
   const counted = (s: Sale) => s.id !== opts.excludeSaleId;
+  input = { ...input, sales: effectiveSales(input.sales) };   // «لم يتم الصرف» orders still awaiting pieces hold a reservation, they do not ship
 
   const produced = new Map<string, number>();
   input.modelProds.forEach(mp => {

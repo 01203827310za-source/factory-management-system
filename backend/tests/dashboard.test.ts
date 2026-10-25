@@ -330,6 +330,7 @@ test('Dashboard cancellation: an unshipped cancellation leaves no goods outside 
 // ───────────── cancellation restores inventory exactly once (Dashboard + Ready Stock page sources) ─────────────
 import { outsideSlots as backendOutside } from '../src/services/readyStockPositions';
 import { outstandingShippingReceivable } from '../src/services/receivablesAudit';
+import { effectiveStatus } from '../src/services/readyStockPositions';
 // the frontend file lives outside this package (and is an ES module): transpile it here so the two rules can be compared
 import fs from 'node:fs';
 import ts from 'typescript';
@@ -400,8 +401,8 @@ test('The Ready Stock page rule (frontend) and the server rule agree for every s
   const base = { model1_code: 'M1', model1_qty: 10, model1_color: 'أسود', model2_code: 'M2', model2_qty: 4, model2_color: 'أبيض', model3_code: '', model3_qty: 0, model3_color: '', model4_code: '', model4_qty: 0, model4_color: '', model5_code: '', model5_qty: 0, model5_color: '' };
   for (const order_status of [PREPARED, NOT_PAID_OUT, PAID_OUT, 'حساب عميل', CANCELLED]) {
     for (const cancel_disposition of [null, 'returned_resalable', 'not_returned', 'returned_damaged']) {
-      for (const un of [[null, null], [0, 0], [3, 0], [10, 4]]) {
-        const sale = { ...base, order_status, cancel_disposition, model1_unreturned_qty: un[0], model2_unreturned_qty: un[1], model3_unreturned_qty: null, model4_unreturned_qty: null, model5_unreturned_qty: null };
+      for (const un of [[null, null], [0, 0], [3, 0], [10, 4]]) for (const awaiting_stock of [false, true]) {
+        const sale = { ...base, order_status, awaiting_stock, cancel_disposition, model1_unreturned_qty: un[0], model2_unreturned_qty: un[1], model3_unreturned_qty: null, model4_unreturned_qty: null, model5_unreturned_qty: null };
         assert.deepEqual(pageOutside(sale as never), backendOutside(sale as never), JSON.stringify([order_status, cancel_disposition, un]));
       }
     }
@@ -414,9 +415,10 @@ test('Delayed-collections rule (frontend) equals the server receivable rule for 
   const mod = { exports: {} as { outstandingCollection: (s: unknown) => number; daysBetween: (iso: string, today: string) => number } };
   new Function('module', 'exports', js)(mod, mod.exports);
   for (const order_status of [PREPARED, NOT_PAID_OUT, PAID_OUT, 'حساب عميل', CANCELLED]) {
-    for (const [remaining, shipping_collected] of [[0, 0], [7500, 0], [7500, 7500], [7500, 5000], [-300, 0], [100, 150]]) {
-      const sale = { order_status, remaining, shipping_collected };
-      assert.equal(mod.exports.outstandingCollection(sale), outstandingShippingReceivable(sale as never), JSON.stringify(sale));
+    for (const awaiting_stock of [false, true]) for (const [remaining, shipping_collected] of [[0, 0], [7500, 0], [7500, 7500], [7500, 5000], [-300, 0], [100, 150]]) {
+      const sale = { order_status, remaining, shipping_collected, awaiting_stock };
+      // the server sees an order awaiting pieces as «يتم التجهيز» (nothing shipped, nothing owed)
+      assert.equal(mod.exports.outstandingCollection(sale), outstandingShippingReceivable(effectiveStatus(sale) as never), JSON.stringify(sale));
     }
   }
   assert.equal(mod.exports.daysBetween('2026-10-01T23:30:00.000Z', '2026-10-11'), 10);

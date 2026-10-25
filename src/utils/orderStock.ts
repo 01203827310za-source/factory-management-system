@@ -17,7 +17,7 @@ export function outsideSlots(s: Sale): OutsideSlot[] {
     { code: s.model5_code, qty: s.model5_qty, color: s.model5_color, un: s.model5_unreturned_qty },
   ];
   const all = lines.filter(l => l.code && l.qty > 0).map(l => ({ code: l.code, qty: l.qty, color: l.color }));
-  if (s.order_status === 'تم الحجز') return [];
+  if (s.order_status === 'تم الحجز' || (s.order_status === 'لم يتم الصرف' && s.awaiting_stock)) return [];   // held for missing pieces: nothing shipped
   if (s.order_status !== 'تم الإلغاء') return all;
   if (!s.cancel_disposition) return [];
   if (lines.every(l => l.un == null)) return s.cancel_disposition === 'returned_resalable' ? [] : all;

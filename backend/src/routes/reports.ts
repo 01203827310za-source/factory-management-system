@@ -1,3 +1,4 @@
+import { effectiveSales } from '../services/readyStockPositions';
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate } from '../middleware/auth';
@@ -13,7 +14,7 @@ type AllData = Awaited<ReturnType<typeof fetchAll>>;
 
 async function fetchAll(seasonId: number) {
   const [sales, expenses, debts, clientAccts, returns_, paymentLogs, fabric, readyStock, accessories, modelProds, cuttingOrders] = await Promise.all([
-    prisma.sale.findMany({ where: seasonWhere(seasonId), orderBy: { created_at: 'asc' } }),
+    prisma.sale.findMany({ where: seasonWhere(seasonId), orderBy: { created_at: 'asc' } }).then(effectiveSales),
     prisma.expenseRevenue.findMany({ where: seasonWhere(seasonId), orderBy: { date: 'asc' } }),
     prisma.debt.findMany({ where: seasonWhere(seasonId), orderBy: { date: 'asc' } }),
     prisma.clientAccount.findMany({ where: seasonWhere(seasonId), orderBy: { date: 'asc' } }),
@@ -288,7 +289,7 @@ router.get('/employee-movements', async (req: Request, res: Response) => {
     const toDate   = (req.query.to_date   as string) || today;
 
     const [sales, expenses, paymentLogs, returns_] = await Promise.all([
-      prisma.sale.findMany({ where: seasonWhere(seasonId), orderBy: { created_at: 'asc' } }),
+      prisma.sale.findMany({ where: seasonWhere(seasonId), orderBy: { created_at: 'asc' } }).then(effectiveSales),
       prisma.expenseRevenue.findMany({ where: seasonWhere(seasonId), orderBy: { date: 'asc' } }),
       prisma.paymentLog.findMany({ where: seasonWhere(seasonId), orderBy: { date: 'asc' } }),
       prisma.returnItem.findMany({ where: seasonWhere(seasonId), orderBy: { date: 'asc' } }),

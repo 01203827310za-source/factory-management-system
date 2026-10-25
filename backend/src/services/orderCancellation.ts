@@ -16,7 +16,7 @@
 import type { Prisma } from '@prisma/client';
 import { ledgerTotal, planCollectionChange, round2 } from './shippingCollections';
 import { costOfGoodsShipped, netMovements } from './inventoryMovements';
-import { holdsGoodsOutside, isStockDeducting, outsideSlots, saleSlots, type CancelDisposition } from './readyStockPositions';
+import { effectiveStatus, holdsGoodsOutside, isStockDeducting, outsideSlots, saleSlots, type CancelDisposition } from './readyStockPositions';
 import { outstandingShippingReceivable } from './receivablesAudit';
 
 type Tx = Prisma.TransactionClient;
@@ -264,8 +264,9 @@ type Db = Pick<Tx, 'sale' | 'inventoryMovement' | 'returnItem' | 'clientAccountI
 
 /** Everything the cancellation form shows, computed from the database (never from values sent by the browser). */
 export async function buildCancellationPreview(db: Db, seasonId: number, saleId: number) {
-  const sale = await db.sale.findFirst({ where: { id: saleId, season_id: seasonId } });
-  if (!sale) return null;
+  const rawSale = await db.sale.findFirst({ where: { id: saleId, season_id: seasonId } });
+  if (!rawSale) return null;
+  const sale = effectiveStatus(rawSale);   // an order still awaiting pieces has not shipped
   const [movements, returns_, invoices] = await Promise.all([
     db.inventoryMovement.findMany({ where: { sale_id: saleId }, orderBy: { id: 'asc' } }),
     db.returnItem.findMany({ where: { season_id: seasonId, order_number: sale.order_number } }),

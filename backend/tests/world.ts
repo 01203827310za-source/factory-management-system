@@ -5,7 +5,7 @@ import type { Prisma } from '@prisma/client';
 import type { InventoryMovement, ModelProduction, OrderCancellation, ReadyStock, ReturnItem, Sale, ShippingCollection } from '@prisma/client';
 import { collectionDate, loadStockContext, syncCollections, syncShipMovements } from '../src/services/orderLedgers';
 import {
-  STATUS_CANCELED, computeStockPositions, hasLineReturns, holdsGoodsOutside, increasingKeys, isStockDeducting, outsideSlots, reservedSyncUpdates, validateShipment, valueStockRow,
+  effectiveSales, effectiveStatus, STATUS_CANCELED, computeStockPositions, hasLineReturns, holdsGoodsOutside, increasingKeys, isStockDeducting, outsideSlots, reservedSyncUpdates, validateShipment, valueStockRow,
   type CancelDisposition, type Slot,
 } from '../src/services/readyStockPositions';
 import { markReopened, recordCancellation, shippedSnapshot, updateDisposition, cancelledObligations, refundsByOrderNumber, refundsFor } from '../src/services/orderCancellation';
@@ -127,20 +127,25 @@ export class World {
     // Same rule as POST /sales and PUT /sales/:id: an order that has NOT shipped yet (new, «يتم التجهيز» or cancelled) saved with a
     // shipped status while the pieces are not available is kept as «يتم التجهيز» with its full quantity (nothing deducted); it is
     // refused only if shipping-company money was already entered. An order that already shipped keeps the strict rule.
-    let heldFor: string | null = null;   // status the user asked for while the order is held for missing pieces
+    let heldFor: string | null = null;
+    let awaiting = false;                // «لم يتم الصرف» kept while the pieces are missing (nothing ships)   // status the user asked for while the order is held for missing pieces
     const pre = input.id ? this.sales.find(s => s.id === input.id) : undefined;
-    const unpaidShipped = !!pre && ['لم يتم الصرف', 'حساب عميل'].includes(pre.order_status) && pre.shipping_collected === 0;
-    if (!input.legacy && isStockDeducting(input.status) && (!input.id || (pre && (!isStockDeducting(pre.order_status) || unpaidShipped)))) {
+    const preEff = pre ? effectiveStatus(pre) : undefined;
+    const unpaidShipped = !!preEff && ['لم يتم الصرف', 'حساب عميل'].includes(preEff.order_status) && preEff.shipping_collected === 0;
+    if (!input.legacy && isStockDeducting(input.status) && (!input.id || (preEff && (!isStockDeducting(preEff.order_status) || unpaidShipped)))) {
       const ctx0 = await loadStockContext(this.tx, input.season ?? 1, input.id);
       const problem = validateShipment(ctx0, input.slots, pre ? increasingKeys(ctx0, outsideSlots(pre), input.slots) : undefined);
-      if (problem) { heldFor = input.status; input = { ...input, status: 'تم الحجز', collected: 0 }; }   // the pre-filled received amount is not recorded: nothing shipped
+      if (problem) {
+        if (input.status === 'لم يتم الصرف') awaiting = true; else heldFor = input.status;
+        input = { ...input, status: 'تم الحجز', collected: 0 };
+      }   // the pre-filled received amount is not recorded: nothing shipped
     }
     const season = input.season ?? 1;
     const existing = input.id ? this.sales.find(s => s.id === input.id) : undefined;
     const wasCancelled = existing?.order_status === STATUS_CANCELED;
     const willBeCancelled = input.status === STATUS_CANCELED;
     const cancelEvent = !!existing && willBeCancelled && !wasCancelled;
-    const cancellingShipped = !!existing && willBeCancelled && isStockDeducting(existing.order_status);
+    const cancellingShipped = !!existing && willBeCancelled && isStockDeducting(effectiveStatus(existing).order_status);
     // Cancelling reverses the whole order: the deposit and every collection are taken back with append-only rows
     // (the amounts stay on the cancellation record); a later save of the cancelled order changes nothing.
     // An order cancelled by an earlier version may still hold goods outside / money: saving it finishes the reversal once.
@@ -160,7 +165,7 @@ export class World {
       invoice_value: 0, deposit_paid: 0, deposit_receiver: '', remaining: 0, shipping_number: '', order_status: '', delivery_method: '',
       mobile: '', warehouse: '', shipping_collected: 0, shipping_collected_date: null, created_at: new Date('2026-10-01T09:00:00Z'),
       model1_code: '', model1_qty: 0, model1_color: '', model2_code: '', model2_qty: 0, model2_color: '', model3_code: '', model3_qty: 0, model3_color: '',
-      model4_code: '', model4_qty: 0, model4_color: '', model5_code: '', model5_qty: 0, model5_color: '', cancel_disposition: null, requested_status: null,
+      model4_code: '', model4_qty: 0, model4_color: '', model5_code: '', model5_qty: 0, model5_color: '', cancel_disposition: null, requested_status: null, awaiting_stock: false,
       model1_unreturned_qty: null, model2_unreturned_qty: null, model3_unreturned_qty: null, model4_unreturned_qty: null, model5_unreturned_qty: null,
     });
     // Same rule as the routes: «يتم التجهيز» is always accepted; goods leaving the factory must exist
@@ -180,7 +185,7 @@ export class World {
     const oldDisposition = existing?.cancel_disposition ?? null;   // captured before the row is mutated
 
     Object.assign(row, {
-      order_status: input.status, invoice_value: input.invoice, deposit_paid: deposit, remaining: input.invoice - deposit,
+      order_status: awaiting ? 'لم يتم الصرف' : input.status, awaiting_stock: awaiting, invoice_value: input.invoice, deposit_paid: deposit, remaining: input.invoice - deposit,
       shipping_collected: collected, cancel_disposition: disposition, requested_status: heldFor,
     });
     for (let i = 1; i <= 5; i++) {
@@ -251,7 +256,7 @@ export class World {
     return { ...cf, cash: cf.totalIn - cf.totalOut };
   }
   shippingReceivable(season = 1) {
-    return computeMoneyOwedToUs({ sales: this.sales.filter(s => s.season_id === season), clientAccts: [] });
+    return computeMoneyOwedToUs({ sales: effectiveSales(this.sales.filter(s => s.season_id === season)), clientAccts: [] });
   }
   stock(season = 1) {
     const ctx = computeStockPositions({

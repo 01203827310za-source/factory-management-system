@@ -1,3 +1,4 @@
+import { effectiveSales } from '../services/readyStockPositions';
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate } from '../middleware/auth';
@@ -38,7 +39,7 @@ router.get('/', async (req: Request, res: Response) => {
   try {
     const seasonId = await getSeasonId(req);
     const [sales, expenses, debts, clientAccts, returns_, paymentLogs, fabric, readyStock, accessories] = await Promise.all([
-      prisma.sale.findMany({ where: seasonWhere(seasonId) }),
+      prisma.sale.findMany({ where: seasonWhere(seasonId) }).then(effectiveSales),
       prisma.expenseRevenue.findMany({ where: seasonWhere(seasonId) }),
       prisma.debt.findMany({ where: seasonWhere(seasonId) }),
       prisma.clientAccount.findMany({ where: seasonWhere(seasonId) }),

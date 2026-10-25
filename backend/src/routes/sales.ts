@@ -7,7 +7,7 @@ import { getSeasonId, seasonWhere } from '../services/seasonContext';
 import { cairoToday, isValidDate } from '../services/charity';
 import {
   STATUS_CANCELED, STATUS_RESERVED, computeStockPositions, hasLineReturns, increasingKeys, isCancelDisposition, isStockDeducting,
-  holdsGoodsOutside, outsideSlots, reservedSyncUpdates, validateShipment, type CancelDisposition,
+  effectiveStatus, holdsGoodsOutside, isAwaitingStock, outsideSlots, reservedSyncUpdates, validateShipment, type CancelDisposition,
 } from '../services/readyStockPositions';
 import {
   REFUND_KINDS, applyRefund, buildCancellationPreview, cancelledObligations, computeUnreturned, isRefundError, markReopened,
@@ -185,6 +185,7 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
     delete data.cancel_reason;          // lives on the cancellation record, not on the order
     data.cancel_disposition = null;     // set only when a shipped order is cancelled
     delete data.requested_status;       // server-managed: set below only when a shipped status had to be held
+    delete data.awaiting_stock;         // server-managed too
     const status = (data.order_status as string) || '';
     const remaining = (Number(data.invoice_value) || 0) - (Number(data.deposit_paid) || 0);
 
@@ -210,6 +211,7 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
     const newSlots = extractModels(data);
     const explicitDate = data.shipping_collected_date;
     let downgradeReason = '';
+    let awaitingReason = '';
     let ignoredCollected = 0;
     const sale = await prisma.$transaction(async (tx) => {
       await lockStock(tx, seasonId);
@@ -218,20 +220,25 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
       // shipped while the stock is short is not rejected: it is saved as «يتم التجهيز» with its FULL quantity (what exists is
       // reserved, the rest is a tracked shortage) and nothing is deducted. If money from the shipping company was already
       // entered, that cannot be dropped silently, so the order is refused with an explanation instead.
-      let effectiveStatus = status;
+      // «لم يتم الصرف» keeps its status while the pieces are missing (awaiting_stock: nothing ships, a reservation + shortage is tracked);
+      // the other shipped statuses are held as «يتم التجهيز» with the request remembered.
+      let logicStatus = status;
+      let awaitingStock = false;
       if (isStockDeducting(status)) {
         const problem = validateShipment(await loadStockContext(tx, seasonId), newSlots);
         if (problem) {
-          effectiveStatus = STATUS_RESERVED;
-          downgradeReason = problem;
-          ignoredCollected = resolved.value;   // nothing shipped, so nothing received: not recorded, reported back to the screen
+          logicStatus = STATUS_RESERVED;
+          ignoredCollected = status === 'تم الصرف' ? resolved.value : 0;   // nothing shipped, so nothing received: not recorded
+          if (status === 'لم يتم الصرف') { awaitingStock = true; awaitingReason = problem; }
+          else downgradeReason = problem;
         }
       }
-      const reserve = effectiveStatus === STATUS_RESERVED;
+      const reserve = logicStatus === STATUS_RESERVED;
       const created = await tx.sale.create({
         data: {
           ...saleData,
-          order_status: effectiveStatus,
+          order_status: awaitingStock ? status : logicStatus,
+          awaiting_stock: awaitingStock,
           requested_status: downgradeReason ? status : null,
           season_id: seasonId,
           remaining,
@@ -245,11 +252,11 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
       return created;
     });
 
-    const savedAsReservation = sale.order_status === STATUS_RESERVED;
+    const savedAsReservation = sale.order_status === STATUS_RESERVED || isAwaitingStock(sale);
     if (savedAsReservation) logStockMovement(req.user, 'STOCK_RESERVED', sale, newSlots, downgradeReason ? 'حجز مخزون (الكمية غير متوفرة للشحن)' : 'حجز مخزون');
     else if (isStockDeducting(status)) logStockMovement(req.user, 'STOCK_SHIPPED', sale, newSlots, 'خروج مخزون (شحن)');
 
-    const isDispatched = sale.order_status === 'تم الصرف';
+    const isDispatched = sale.order_status === 'تم الصرف' && !isAwaitingStock(sale);
     const collection_difference = isDispatched ? Math.max(0, remaining - resolved.value) : 0;
     logAudit({
       user: req.user, module: 'Sales', action: isDispatched ? 'SHIPPING_PAYOUT_CONFIRMED' : 'CREATE', record_id: sale.id,
@@ -258,7 +265,7 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
         ? `إضافة عملية بيع (تم الصرف مباشرة): ${sale.client} - ${sale.order_number} — المتبقي: ${remaining} — المستلم فعليًا: ${resolved.value} — الفرق غير المحصل: ${collection_difference}`
         : `إضافة عملية بيع: ${sale.client} - ${sale.order_number}`,
     });
-    return res.status(201).json({ ...sale, collection_difference, fulfillment: (await fulfillmentOf(seasonId, sale.id)).one, status_downgraded: !!downgradeReason, requested_status: status, downgrade_reason: downgradeReason || null, ignored_collected: ignoredCollected });
+    return res.status(201).json({ ...sale, collection_difference, fulfillment: (await fulfillmentOf(seasonId, sale.id)).one, status_downgraded: !!downgradeReason, requested_status: status, downgrade_reason: downgradeReason || null, ignored_collected: ignoredCollected, awaiting_stock: !!awaitingReason, awaiting_reason: awaitingReason || null });
   } catch (err) {
     if (err instanceof StockError) return res.status(400).json({ message: err.message });
     console.error(err);
@@ -279,11 +286,13 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     const id = parseInt(req.params.id as string);
     const data = req.body as Record<string, unknown>;
 
-    const oldSale = await prisma.sale.findFirst({ where: { id, season_id: seasonId } });
-    if (!oldSale) return res.status(404).json({ message: 'الطلب غير موجود' });
+    const oldRaw = await prisma.sale.findFirst({ where: { id, season_id: seasonId } });
+    if (!oldRaw) return res.status(404).json({ message: 'الطلب غير موجود' });
+    // An order held for missing pieces («لم يتم الصرف» + awaiting_stock) has not shipped: every stock / money rule sees it as «يتم التجهيز».
+    const oldSale = effectiveStatus(oldRaw);
 
     const wasReservation = oldSale.order_status === 'تم الحجز';
-    let newStatus = (data.order_status as string | undefined) ?? oldSale.order_status;
+    let newStatus = (data.order_status as string | undefined) ?? oldRaw.order_status;
 
     // Saving an edit is not a shipment. When an order that has NOT shipped yet (يتم التجهيز / cancelled) is saved with a shipped
     // status while its pieces are not available, the edit is kept (requested quantities untouched), the order stays «يتم التجهيز»
@@ -296,12 +305,21 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     let requestedStatus = '';
     let ignoredCollected = 0;
     let shipmentReversed = false;
+    let holdAwaiting = false;
+    let awaitingReason = '';
     const unpaidShipped = ['لم يتم الصرف', 'حساب عميل'].includes(oldSale.order_status) && oldSale.shipping_collected === 0;
     if (isStockDeducting(newStatus) && (!isStockDeducting(oldSale.order_status) || unpaidShipped)) {
       const wanted = extractModels({ ...oldSale, ...data } as unknown as Record<string, unknown>);
       const pre = await loadStockContext(prisma as unknown as Prisma.TransactionClient, seasonId, id);
       const problem = validateShipment(pre, wanted, increasingKeys(pre, outsideSlots(oldSale), wanted));
-      if (problem) {
+      if (problem && newStatus === 'لم يتم الصرف') {
+        // Keep «لم يتم الصرف»: the order is saved with its full quantity but has NOT shipped (awaiting_stock) — a reservation + shortage
+        // is tracked, nothing is deducted, no cost/revenue/receivable. A shipment it already had is reversed through the ledgers.
+        holdAwaiting = true;
+        awaitingReason = problem;
+        shipmentReversed = isStockDeducting(oldSale.order_status);
+        newStatus = STATUS_RESERVED;           // rules below see an unshipped order; data.order_status keeps the user's choice
+      } else if (problem) {
         // The Edit Order form pre-fills the received amount with the remaining balance as soon as «تم الصرف» is selected («صرف الحجز»
         // does the same), so an amount arrives with almost every such save. The order is NOT shipped, so nothing is received yet:
         // it is not recorded, and the amount is returned so the screen can say so.
@@ -343,6 +361,7 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
       : ((oldSale.cancel_disposition as CancelDisposition | null) ?? null);
     data.cancel_disposition = disposition;
     data.requested_status = downgradeReason ? requestedStatus : null;   // remembered only while the order is held for missing pieces
+    data.awaiting_stock = holdAwaiting;
     const restoredQty = cancelEvent0 && cancellingShipped ? lineQty.reduce((a, b) => a + b, 0)
       : goodsOutsideBefore ? outsideSlots(oldSale).reduce((n, o) => n + o.qty, 0) : 0;
     if (!willBeCancelled) unretKeys.forEach(k => { data[k] = null; });                  // reopening: back to a normal order
@@ -404,7 +423,7 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
 
       // Re-read under the lock so a concurrent edit/cancel can't be applied twice.
       const current = await tx.sale.findFirst({ where: { id, season_id: seasonId } });
-      if (!current || current.order_status !== oldSale.order_status || current.shipping_collected !== oldSale.shipping_collected) {
+      if (!current || effectiveStatus(current).order_status !== oldSale.order_status || current.shipping_collected !== oldSale.shipping_collected) {
         throw new StockError('تم تعديل هذا الأوردر من مستخدم آخر — أعد تحميل الصفحة وحاول مرة أخرى');
       }
 
@@ -485,7 +504,7 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
 
     const description = baseDescription + (downgradeReason ? ` — حُفظ «يتم التجهيز» لأن الكمية غير متوفرة للشحن (${downgradeReason})` : '');
     logAudit({ user: req.user, module: 'Sales', action, record_id: id,
-      before_data: oldSale, after_data: { ...sale, collection_difference, ...(cancelEvent ? { cancellation: { ...cancelSummary, reason: cancelReason } } : {}) }, description });
+      before_data: oldRaw, after_data: { ...sale, collection_difference, ...(cancelEvent ? { cancellation: { ...cancelSummary, reason: cancelReason } } : {}) }, description });
     if (cancellingShipped && !wasCancelled) {
       logStockMovement(req.user, 'STOCK_RELEASED', sale, oldSlots,
         disposition === 'returned_resalable'
@@ -498,6 +517,8 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
       cancellation: willBeCancelled ? cancelSummary : null,
       status_downgraded: !!downgradeReason,
       requested_status: requestedStatus || null,
+      awaiting_stock: holdAwaiting,
+      awaiting_reason: awaitingReason || null,
       ignored_collected: ignoredCollected,
       shipment_reversed: shipmentReversed,
       downgrade_reason: downgradeReason || null,

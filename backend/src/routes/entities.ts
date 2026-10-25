@@ -4,6 +4,7 @@
 // ClientAccounts, Returns, PaymentLog, Marketers)
 // ============================================
 
+import { effectiveSales } from '../services/readyStockPositions';
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate, requireManager } from '../middleware/auth';
@@ -1377,7 +1378,7 @@ printOrdersRouter.use(authenticate);
 async function computeAvailable(seasonId: number, stock: { id: number; model_code: string; color: string; opening_balance: number; reserved_quantity: number }): Promise<number> {
   const [modelProds, sales, returns_] = await Promise.all([
     prisma.modelProduction.findMany({ where: seasonWhere(seasonId) }),
-    prisma.sale.findMany({ where: seasonWhere(seasonId) }),
+    prisma.sale.findMany({ where: seasonWhere(seasonId) }).then(effectiveSales),
     prisma.returnItem.findMany({ where: seasonWhere(seasonId) }),
   ]);
 

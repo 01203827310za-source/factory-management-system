@@ -227,8 +227,12 @@ readyStock.forEach((s: any) => {
     };
     try {
       const result = editSale ? await salesApi.update(editSale.id, data as any) : await salesApi.add(data as any);
-      const downgraded = result as { status_downgraded?: boolean; requested_status?: string; ignored_collected?: number; shipment_reversed?: boolean };
-      if (downgraded.status_downgraded) {
+      const downgraded = result as { status_downgraded?: boolean; requested_status?: string; ignored_collected?: number; shipment_reversed?: boolean; awaiting_stock?: boolean };
+      if (downgraded.awaiting_stock) {
+        // Status kept exactly as chosen; the pieces are missing, so nothing ships and the shortage is tracked separately.
+        const f = result.fulfillment;
+        toast('info', `تم حفظ الأوردر بحالة «${statusLabel(form.order_status)}» — بانتظار توفر المخزون${f ? `: محجوز ${f.reserved.toLocaleString('ar-EG')} من ${f.requested.toLocaleString('ar-EG')} والناقص ${f.pending.toLocaleString('ar-EG')}` : ''}.${downgraded.shipment_reversed ? ' وعُكس شحنه السابق لأن الكمية الجديدة غير متوفرة.' : ''} لم يُخصم مخزون ولم يُسجَّل شحن أو تحصيل.`);
+      } else if (downgraded.status_downgraded) {
         // The requested quantity is saved in full; the stock that exists is reserved and the rest is a tracked shortage.
         const f = result.fulfillment;
         toast('info', `تم حفظ الأوردر بحالة «${statusLabel(RESERVED_STATUS)}» بدل «${statusLabel(downgraded.requested_status ?? '')}» لأن الكمية غير متوفرة للشحن${f ? ` — محجوز ${f.reserved.toLocaleString('ar-EG')} من ${f.requested.toLocaleString('ar-EG')} والناقص ${f.pending.toLocaleString('ar-EG')}` : ''}. ${downgraded.shipment_reversed ? ' وعُكس شحنه السابق (المخزون والتكلفة والمستحق) لأن الكمية الجديدة غير متوفرة.' : ' لم يُخصم أي مخزون'}${downgraded.ignored_collected ? ` ولم يُسجَّل المبلغ المستلم ${downgraded.ignored_collected.toLocaleString('ar-EG')} ج (الأوردر لم يُشحن بعد)` : ''}، واشحنه وسجّل التحصيل عند توفر الكمية.`);
@@ -483,6 +487,9 @@ await loadData();(returnForm);
                       sale.order_status === 'لم يتم الصرف' ? 'bg-yellow-100 text-yellow-700' :
                       'bg-amber-100 text-amber-700'
                     }`}>{statusLabel(sale.order_status)}</span>
+                    {sale.order_status === 'لم يتم الصرف' && sale.awaiting_stock && (
+                      <span className="block mt-1 text-[11px] font-semibold text-red-700" title="الحالة محفوظة كما اخترتها، ولم يُشحن شيء ولم يُخصم مخزون">بانتظار توفر المخزون</span>
+                    )}
                     {sale.order_status === 'تم الحجز' && sale.requested_status && (
                       <span className="block mt-1 text-[11px] font-semibold text-red-700" title="الأوردر محجوز ويُشحن عند توفر الكمية">طُلب «{statusLabel(sale.requested_status)}» — بانتظار توفر المخزون</span>
                     )}
