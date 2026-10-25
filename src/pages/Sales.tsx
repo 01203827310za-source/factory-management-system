@@ -225,11 +225,11 @@ readyStock.forEach((s: any) => {
     };
     try {
       const result = editSale ? await salesApi.update(editSale.id, data as any) : await salesApi.add(data as any);
-      const downgraded = result as { status_downgraded?: boolean; requested_status?: string };
+      const downgraded = result as { status_downgraded?: boolean; requested_status?: string; ignored_collected?: number };
       if (downgraded.status_downgraded) {
         // The requested quantity is saved in full; the stock that exists is reserved and the rest is a tracked shortage.
         const f = result.fulfillment;
-        toast('info', `تم حفظ الأوردر بحالة «${statusLabel(RESERVED_STATUS)}» بدل «${statusLabel(downgraded.requested_status ?? '')}» لأن الكمية غير متوفرة للشحن${f ? ` — محجوز ${f.reserved.toLocaleString('ar-EG')} من ${f.requested.toLocaleString('ar-EG')} والناقص ${f.pending.toLocaleString('ar-EG')}` : ''}. لم يُخصم أي مخزون، واشحنه عند توفر الكمية.`);
+        toast('info', `تم حفظ الأوردر بحالة «${statusLabel(RESERVED_STATUS)}» بدل «${statusLabel(downgraded.requested_status ?? '')}» لأن الكمية غير متوفرة للشحن${f ? ` — محجوز ${f.reserved.toLocaleString('ar-EG')} من ${f.requested.toLocaleString('ar-EG')} والناقص ${f.pending.toLocaleString('ar-EG')}` : ''}. لم يُخصم أي مخزون${downgraded.ignored_collected ? ` ولم يُسجَّل المبلغ المستلم ${downgraded.ignored_collected.toLocaleString('ar-EG')} ج (الأوردر لم يُشحن بعد)` : ''}، واشحنه وسجّل التحصيل عند توفر الكمية.`);
       } else if (form.order_status === 'تم الصرف' && result.collection_difference > 0) {
         toast('success', `تم الحفظ — المستلم فعليًا ${form.shipping_collected.toLocaleString('ar-EG')} ج، الفرق غير المحصل ${result.collection_difference.toLocaleString('ar-EG')} ج`);
       } else if (form.order_status === 'تم الإلغاء' && editSale && editSale.order_status !== 'تم الإلغاء' && result.cancellation) {

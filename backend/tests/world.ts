@@ -131,10 +131,7 @@ export class World {
     if (!input.legacy && isStockDeducting(input.status) && (!input.id || (pre && !isStockDeducting(pre.order_status)))) {
       const ctx0 = await loadStockContext(this.tx, input.season ?? 1, input.id);
       const problem = validateShipment(ctx0, input.slots, pre ? increasingKeys(ctx0, outsideSlots(pre), input.slots) : undefined);
-      if (problem) {
-        if (input.status === 'تم الصرف' && (input.collected ?? 0) > 0) throw new Error(problem);
-        input = { ...input, status: 'تم الحجز', collected: 0 };
-      }
+      if (problem) input = { ...input, status: 'تم الحجز', collected: 0 };   // the pre-filled received amount is not recorded: nothing shipped
     }
     const season = input.season ?? 1;
     const existing = input.id ? this.sales.find(s => s.id === input.id) : undefined;

@@ -163,7 +163,7 @@ export interface RbacMetadata {
 export const salesApi = {
   getAll: () => get<SaleRecord[]>('/sales'),
   getLedger: (id: number) => get<SaleLedger>(`/sales/${id}/ledger`),
-  add: (data: Omit<SaleRecord, 'id' | 'created_at'>) => post<SaleRecord & { collection_difference: number; cancellation?: CancellationSummary | null; status_downgraded?: boolean; requested_status?: string; downgrade_reason?: string | null }>('/sales', data),
+  add: (data: Omit<SaleRecord, 'id' | 'created_at'>) => post<SaleRecord & { collection_difference: number; cancellation?: CancellationSummary | null; status_downgraded?: boolean; requested_status?: string; downgrade_reason?: string | null; ignored_collected?: number }>('/sales', data),
   getCancellationPreview: (id: number) => get<CancellationPreview>(`/sales/${id}/cancellation-preview`),
   update: (id: number, data: Partial<SaleRecord> & {
     cancel_reason?: string; cancel_returned_qty?: number[];

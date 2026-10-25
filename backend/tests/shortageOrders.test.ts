@@ -121,10 +121,14 @@ test('10. inventory never goes negative however many short orders are entered', 
   assert.equal(w.movements.filter(m => m.movement_type === 'SHIP').reduce((n, m) => n + m.qty, 0) <= 5, true);   // never shipped more than existed
 });
 
-test('11. shipping-company money already entered for goods that do not exist is refused, never dropped silently', async () => {
+test('11. money pre-filled for goods that do not exist is not recorded as received: the order is saved as «يتم التجهيز», no collection, no cash', async () => {
   const w = world(0); w.readyStock[0].opening_balance = 2;
-  await assert.rejects(() => w.saveOrder({ status: PAID_OUT, slots: [line('M1', 10)], invoice: 1000, collected: 1000, date: '2026-10-05' }), /./);
-  assert.equal(w.sales.length, 0);
+  await w.saveOrder({ status: PAID_OUT, slots: [line('M1', 10)], invoice: 1000, collected: 1000, date: '2026-10-05' });
+  assert.equal(w.sales[0].order_status, PREPARED);
+  assert.equal(w.sales[0].shipping_collected, 0);
+  assert.equal(w.collections.length, 0);
+  assert.equal(w.cash().cash, 0);
+  assert.deepEqual(missing(w), [['M1', 'أسود', 8]]);
 });
 
 test('12. an order that already SHIPPED keeps the strict rule: its shipped quantity cannot grow beyond what exists', async () => {
@@ -177,13 +181,16 @@ test('E2. repeated saves never duplicate the shortage or any movement; the quant
   assert.equal(w.movements.length, 0);
 });
 
-test('E3. shipping-company money entered with the edit is not silently dropped: the edit is refused', async () => {
+test('E3. «صرف الحجز» with the pre-filled received amount (the real UI request) is saved, not rejected; the amount is not recorded', async () => {
   const w = editWorld();
   await w.saveOrder({ order_number: 'A', status: PREPARED, slots: black(8), invoice: 800 });
   const b = await w.saveOrder({ order_number: 'B', status: PREPARED, slots: black(8), invoice: 800 });
-  await assert.rejects(() => w.saveOrder({ id: b.id, status: PAID_OUT, slots: black(8), invoice: 800, collected: 800, date: '2026-10-05' }), /./);
+  await w.saveOrder({ id: b.id, status: PAID_OUT, slots: black(8), invoice: 800, collected: 800, date: '2026-10-05' });
   assert.equal(w.sales[1].order_status, PREPARED);
+  assert.equal(w.sales[1].shipping_collected, 0);
   assert.equal(w.collections.length, 0);
+  assert.equal(w.cash().cash, 0);
+  assert.deepEqual(w.missingSummary().rows.map(r => r.missing), [8]);
 });
 
 test('E4. actual shipment still follows the stock rules: once the pieces exist the same save really ships, deducting exactly once', async () => {

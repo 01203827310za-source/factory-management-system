@@ -209,6 +209,7 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
     const newSlots = extractModels(data);
     const explicitDate = data.shipping_collected_date;
     let downgradeReason = '';
+    let ignoredCollected = 0;
     const sale = await prisma.$transaction(async (tx) => {
       await lockStock(tx, seasonId);
       // «يتم التجهيز» is always accepted — whatever is not in stock is simply left pending.
@@ -220,9 +221,9 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
       if (isStockDeducting(status)) {
         const problem = validateShipment(await loadStockContext(tx, seasonId), newSlots);
         if (problem) {
-          if (resolved.value > 0) throw new StockError(`${problem} — سجّل الأوردر بحالة «يتم التجهيز» أولًا، ثم اشحنه عند توفر الكمية`);
           effectiveStatus = STATUS_RESERVED;
           downgradeReason = problem;
+          ignoredCollected = resolved.value;   // nothing shipped, so nothing received: not recorded, reported back to the screen
         }
       }
       const reserve = effectiveStatus === STATUS_RESERVED;
@@ -237,7 +238,7 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
         },
       });
       if (reserve) await syncReserved(tx, seasonId, newSlots);
-      await syncCollections(tx, created, { previousCached: 0, desired: resolved.value, date: collectionDate(explicitDate, null), user: req.user?.username });
+      await syncCollections(tx, created, { previousCached: 0, desired: reserve ? 0 : resolved.value, date: collectionDate(explicitDate, null), user: req.user?.username });
       await syncShipMovements(tx, created, req.user?.username);
       return created;
     });
@@ -255,7 +256,7 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
         ? `إضافة عملية بيع (تم الصرف مباشرة): ${sale.client} - ${sale.order_number} — المتبقي: ${remaining} — المستلم فعليًا: ${resolved.value} — الفرق غير المحصل: ${collection_difference}`
         : `إضافة عملية بيع: ${sale.client} - ${sale.order_number}`,
     });
-    return res.status(201).json({ ...sale, collection_difference, fulfillment: (await fulfillmentOf(seasonId, sale.id)).one, status_downgraded: !!downgradeReason, requested_status: status, downgrade_reason: downgradeReason || null });
+    return res.status(201).json({ ...sale, collection_difference, fulfillment: (await fulfillmentOf(seasonId, sale.id)).one, status_downgraded: !!downgradeReason, requested_status: status, downgrade_reason: downgradeReason || null, ignored_collected: ignoredCollected });
   } catch (err) {
     if (err instanceof StockError) return res.status(400).json({ message: err.message });
     console.error(err);
@@ -289,12 +290,16 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     // existing rule (its shipped quantity cannot grow beyond what exists) — both still fail below with the original message.
     let downgradeReason = '';
     let requestedStatus = '';
+    let ignoredCollected = 0;
     if (isStockDeducting(newStatus) && !isStockDeducting(oldSale.order_status)) {
       const wanted = extractModels({ ...oldSale, ...data } as unknown as Record<string, unknown>);
       const pre = await loadStockContext(prisma as unknown as Prisma.TransactionClient, seasonId, id);
       const problem = validateShipment(pre, wanted, increasingKeys(pre, outsideSlots(oldSale), wanted));
-      const moneyEntered = newStatus === 'تم الصرف' && Number(data.shipping_collected) > 0;
-      if (problem && !moneyEntered) {
+      if (problem) {
+        // The Edit Order form pre-fills the received amount with the remaining balance as soon as «تم الصرف» is selected («صرف الحجز»
+        // does the same), so an amount arrives with almost every such save. The order is NOT shipped, so nothing is received yet:
+        // it is not recorded, and the amount is returned so the screen can say so.
+        ignoredCollected = newStatus === 'تم الصرف' ? Math.max(0, Number(data.shipping_collected) || 0) : 0;
         requestedStatus = newStatus;
         newStatus = STATUS_RESERVED;
         data.order_status = STATUS_RESERVED;
@@ -485,6 +490,7 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
       cancellation: willBeCancelled ? cancelSummary : null,
       status_downgraded: !!downgradeReason,
       requested_status: requestedStatus || null,
+      ignored_collected: ignoredCollected,
       downgrade_reason: downgradeReason || null,
     });
   } catch (err) {
