@@ -153,13 +153,16 @@ test('12. an unpaid SHIPPED order edited to a bigger quantity: the extra is sale
   invariant(w);
 });
 
-test('12b. a PAID-OUT order that collected money is never un-shipped by an edit: it keeps the strict shipment rule', async () => {
+test('12b. a PAID-OUT order that collected money: raising its quantity is sales-only — money, stock and the paid-out status are untouched', async () => {
   const w = world(0); w.readyStock[0].opening_balance = 10;
   const o = await w.saveOrder({ status: PAID_OUT, slots: [line('M1', 8)], invoice: 800, collected: 800, date: '2026-10-05' });
-  await assert.rejects(() => w.saveOrder({ id: o.id, status: PAID_OUT, slots: [line('M1', 15)], invoice: 1500, collected: 800, date: '2026-10-05' }), /./);
-  assert.equal(w.sales[0].order_status, PAID_OUT);
-  assert.equal(w.sales[0].model1_qty, 8);
-  assert.equal(w.cash().cash, 800);
+  await w.saveOrder({ id: o.id, status: PAID_OUT, slots: [line('M1', 15)], invoice: 1500, collected: 800, date: '2026-10-05' });
+  assert.deepEqual([w.sales[0].order_status, w.sales[0].model1_qty, w.sales[0].model1_extra_qty, w.sales[0].invoice_value], [PAID_OUT, 15, 7, 1500]);
+  assert.equal(w.cash().cash, 800);                                          // no new cash: nothing more was collected
+  assert.equal(w.collections.length, 1);
+  assert.equal(w.shippingReceivable(), 700);                                 // the added value is still to be collected
+  assert.equal(w.movements.length, 1);
+  assert.deepEqual(missing(w), []);
 });
 
 // ───────── editing: the screenshot case — 8 black pieces, nothing available, 8 held for another order ─────────
@@ -359,21 +362,25 @@ test('Q3. lowering the quantity removes the sales-only extra first, then real st
   assert.deepEqual(w.movements.map(m => [m.movement_type, m.qty]), [['SHIP', 8], ['SHIP_REVERSAL', 3]]);      // 3 real pieces came back
 });
 
-test('Q4. a real shipment still validates stock: moving a 12-piece order to «تم الصرف» ships all 12 only if they exist', async () => {
+test('Q4. a real shipment still validates stock: the extra pieces only ship through a real shipment of the whole order', async () => {
   const w = qWorld(); w.readyStock[0].opening_balance = 10;
   const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: black(8), invoice: 800 });                          // ships 8, 2 left
   await w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: black(12), invoice: 1200 });                        // sales-only extra 4
-  await assert.rejects(() => w.saveOrder({ id: o.id, status: PAID_OUT, slots: black(12), invoice: 1200, collected: 0 }), /./);   // needs 4 more, only 2 exist → refused
-  assert.equal(w.sales[0].order_status, NOT_PAID_OUT);                       // the shipment that really happened is never undone by this
-  assert.equal(w.sales[0].model1_extra_qty, 4);
+  await w.saveOrder({ id: o.id, status: PAID_OUT, slots: black(12), invoice: 1200, collected: 1200, date: '2026-10-05' });   // confirming the payout is not a shipment
+  assert.deepEqual([w.sales[0].order_status, w.sales[0].model1_extra_qty], [PAID_OUT, 4]);
   assert.equal(w.movements.filter(m => m.movement_type === 'SHIP').reduce((n, m) => n + m.qty, 0), 8);
+  // shipping the extra for real: back to «يتم التجهيز» (extra becomes a normal reserved/pending quantity), then ship the whole 12
+  await w.saveOrder({ id: o.id, status: PREPARED, slots: black(12), invoice: 1200 });
+  assert.equal(w.sales[0].model1_extra_qty, 0);
+  await w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: black(12), invoice: 1200 });                        // only 10 exist → awaiting, not shipped
+  assert.equal(w.sales[0].awaiting_stock, true);
   invariant(w);
   w.addProduction('1002', 'أسود', 10);
   await w.resync();
-  await w.saveOrder({ id: o.id, status: PAID_OUT, slots: black(12), invoice: 1200, collected: 1200, date: '2026-10-05' });
-  assert.equal(w.sales[0].order_status, PAID_OUT);
-  assert.equal(w.sales[0].model1_extra_qty, 0);                              // the whole quantity is now a real shipment
-  assert.equal(w.movements.filter(m => m.movement_type === 'SHIP').reduce((n, m) => n + m.qty, 0), 12);   // 8 + the 4 extra, as an explicit shipment
+  await w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: black(12), invoice: 1200 });
+  assert.equal(w.sales[0].awaiting_stock, false);
+  const net = w.movements.reduce((n, m) => n + (m.movement_type === 'SHIP' ? m.qty : -m.qty), 0);
+  assert.equal(net, 12);                                                      // the whole 12 are now really shipped
   invariant(w);
 });
 
@@ -388,5 +395,57 @@ test('Q5. cancelling a «لم يتم الصرف» order with a sales-only extra 
   assert.deepEqual(w.movements.map(m => [m.movement_type, m.qty]), [['SHIP', 8], ['SHIP_REVERSAL', 8]]);
   await w.saveOrder({ id: o.id, status: CANCELED, slots: black(12), invoice: 1200 });
   assert.equal(w.stock().physicalQty, 20);
+  invariant(w);
+});
+
+test('P1. «تم الصرف»: raising 8 → 12 changes quantity and value only; no reservation, deduction, shortage, collection or cash; repeated saves add nothing', async () => {
+  const w = qWorld();
+  const other = await w.saveOrder({ order_number: 'RES', status: PREPARED, slots: black(5), invoice: 500 });
+  const o = await w.saveOrder({ order_number: 'PD', status: PAID_OUT, slots: black(8), invoice: 800, collected: 800, date: '2026-10-05' });
+  const before = { phys: w.stock().physicalQty, res: w.readyStock[0].reserved_quantity, alloc: w.allocation(other.id)!.reserved, mov: w.movements.length, cogs: w.cogs(), cash: w.cash().cash, col: w.collections.length };
+  await w.saveOrder({ id: o.id, status: PAID_OUT, slots: black(12), invoice: 1200, collected: 800, date: '2026-10-05' });
+  const row = w.sales.find(s => s.id === o.id)!;
+  assert.deepEqual([row.order_status, row.model1_qty, row.model1_extra_qty, row.invoice_value], [PAID_OUT, 12, 4, 1200]);
+  assert.deepEqual({ phys: w.stock().physicalQty, res: w.readyStock[0].reserved_quantity, alloc: w.allocation(other.id)!.reserved, mov: w.movements.length, cogs: w.cogs(), cash: w.cash().cash, col: w.collections.length }, before);
+  assert.deepEqual(missing(w), []);
+  assert.equal(w.shippingReceivable(), 400);                                  // 400 added to the order, not collected yet — not invented cash
+  const snap = () => JSON.stringify([w.movements, w.collections, w.readyStock.map(r => r.reserved_quantity), w.sales.map(s => [s.model1_qty, s.model1_extra_qty, s.invoice_value])]);
+  const first = snap();
+  for (let i = 0; i < 3; i++) await w.saveOrder({ id: o.id, status: PAID_OUT, slots: black(12), invoice: 1200, collected: 800, date: '2026-10-05' });
+  assert.equal(snap(), first);
+  invariant(w);
+});
+
+test('P2. «تم الصرف»: lowering the quantity removes the extra first; lowering below the shipped quantity returns real pieces', async () => {
+  const w = qWorld();
+  const o = await w.saveOrder({ status: PAID_OUT, slots: black(8), invoice: 800, collected: 800, date: '2026-10-05' });
+  await w.saveOrder({ id: o.id, status: PAID_OUT, slots: black(12), invoice: 1200, collected: 800, date: '2026-10-05' });
+  await w.saveOrder({ id: o.id, status: PAID_OUT, slots: black(9), invoice: 900, collected: 800, date: '2026-10-05' });
+  assert.deepEqual([w.sales[0].model1_qty, w.sales[0].model1_extra_qty, w.movements.length], [9, 1, 1]);   // extra only: no stock movement
+  await w.saveOrder({ id: o.id, status: PAID_OUT, slots: black(6), invoice: 600, collected: 600, date: '2026-10-05' });
+  assert.deepEqual([w.sales[0].model1_qty, w.sales[0].model1_extra_qty], [6, 0]);
+  assert.deepEqual(w.movements.map(m => [m.movement_type, m.qty]), [['SHIP', 8], ['SHIP_REVERSAL', 2]]);   // 2 real pieces came back
+  assert.equal(w.stock().physicalQty, 14);                                    // 20 − 6 shipped
+});
+
+test('P3. payout confirmation keeps the extra: «لم يتم الصرف» with extra 4 → «تم الصرف» ships nothing more', async () => {
+  const w = qWorld();
+  const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: black(8), invoice: 800 });
+  await w.saveOrder({ id: o.id, status: NOT_PAID_OUT, slots: black(12), invoice: 1200 });
+  await w.saveOrder({ id: o.id, status: PAID_OUT, slots: black(12), invoice: 1200, collected: 1200, date: '2026-10-05' });
+  assert.deepEqual([w.sales[0].order_status, w.sales[0].model1_extra_qty], [PAID_OUT, 4]);
+  assert.equal(w.movements.length, 1);
+  assert.equal(w.cash().cash, 1200);                                          // the payout the user actually confirmed
+});
+
+test('P4. cancelling a «تم الصرف» order with a sales-only extra restores only the 8 that shipped; collected money handling is the existing cancellation rule', async () => {
+  const w = qWorld();
+  const o = await w.saveOrder({ status: PAID_OUT, slots: black(8), invoice: 800, collected: 800, date: '2026-10-05' });
+  await w.saveOrder({ id: o.id, status: PAID_OUT, slots: black(12), invoice: 1200, collected: 800, date: '2026-10-05' });
+  await w.saveOrder({ id: o.id, status: CANCELED, slots: black(12), invoice: 1200 });
+  assert.equal(w.stock().physicalQty, 20);
+  assert.equal(w.cogs(), 0);
+  assert.equal(w.cash().cash, 0);                                             // the existing rule: collections are reversed with the order
+  assert.equal(w.shippingReceivable(), 0);
   invariant(w);
 });

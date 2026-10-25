@@ -311,7 +311,7 @@ async function main() {
   for (let i = 0; i < 2; i++) await api('PUT', `/sales/${eA.id}`, payload({ order_number: eA.order_number, order_status: NOT_PAID_OUT, invoice_value: 12000, lines: [{ code: 'M1', qty: 120, color: 'أسود' }] }));
   check('EDIT. …saving it again changes nothing', (await rows(eA.id)).movements.length === 1 && (await rows(eA.id)).sale?.model1_extra_qty === 20 && (await prisma.shippingCollection.count()) === 0);
   const shipExtra = await api('PUT', `/sales/${eA.id}`, payload({ order_number: eA.order_number, order_status: PAID_OUT, invoice_value: 12000, shipping_collected: 12000, shipping_collected_date: '2026-10-05', lines: [{ code: 'M1', qty: 120, color: 'أسود' }] }));
-  check('EDIT. actually shipping the whole 120 (status «تم الصرف») still validates stock: only 0 exist → refused (400), nothing changes', shipExtra.status === 400 && (await rows(eA.id)).sale?.order_status === NOT_PAID_OUT && (await rows(eA.id)).sale?.model1_extra_qty === 20, shipExtra.body);
+  check('EDIT. confirming the payout (لم يتم الصرف → تم الصرف) is not a shipment: the 20 extra stay sales-only, no new SHIP row, the confirmed 12,000 is the only collection', shipExtra.status === 200 && shipExtra.body.order_status === PAID_OUT && shipExtra.body.model1_extra_qty === 20 && (await rows(eA.id)).movements.length === 1 && (await rows(eA.id)).collections.length === 1 && (await rows(eA.id)).collections[0].amount === 12000, shipExtra.body);
 
   // ───────── the exact UI payload with status «لم يتم الصرف» (stale pre-filled amount included) ─────────
   await reset();
@@ -344,7 +344,7 @@ async function main() {
   check('NP. with the pieces available the same payload really ships: «لم يتم الصرف», one SHIP row, stock 92', okShip.status === 201 && okShip.body.order_status === NOT_PAID_OUT && (await rows(okShip.body.id)).movements.length === 1 && (await stockQty('M1', 'أسود')) === 92, okShip.body);
   const paidOrd = (await api('POST', '/sales', payload({ order_status: PAID_OUT, invoice_value: 9200, shipping_collected: 9200, shipping_collected_date: '2026-10-05', lines: [{ code: 'M1', qty: 92, color: 'أسود' }] }))).body;
   const paidGrow = await api('PUT', `/sales/${paidOrd.id}`, payload({ order_number: paidOrd.order_number, order_status: PAID_OUT, invoice_value: 9500, shipping_collected: 9200, shipping_collected_date: '2026-10-05', lines: [{ code: 'M1', qty: 95, color: 'أسود' }] }));
-  check('NP. a PAID-OUT order (money collected) edited to ship more than exists keeps the strict shipment rule (400) and changes nothing', paidGrow.status === 400 && (await rows(paidOrd.id)).sale?.order_status === PAID_OUT && (await rows(paidOrd.id)).sale?.model1_qty === 92 && (await rows(paidOrd.id)).collections.length === 1, paidGrow.body);
+  check('NP. a PAID-OUT order raised from 92 to 95 is sales-only: saved (200), still «تم الصرف», 3 extra, no new stock movement, no new collection, value 9,500', paidGrow.status === 200 && paidGrow.body.order_status === PAID_OUT && paidGrow.body.model1_qty === 95 && paidGrow.body.model1_extra_qty === 3 && paidGrow.body.invoice_value === 9500 && (await rows(paidOrd.id)).collections.length === 1 && (await rows(paidOrd.id)).movements.length === 1, paidGrow.body);
 
   // ───────── QTY. editing the quantity of a «لم يتم الصرف» order is sales-only (real form payload) ─────────
   await reset();
@@ -365,6 +365,22 @@ async function main() {
   check('QTY. repeated saves duplicate nothing', (await rows(q0.body.id)).movements.length === 1 && (await rows(q0.body.id)).sale?.model1_extra_qty === 4 && (await prisma.shippingCollection.count()) === 0);
   const q2 = await api('PUT', `/sales/${q0.body.id}`, { ...npBody(q0.body, 12), order_status: CANCELED });
   check('QTY. cancelling restores only the 8 that shipped: stock back to its original level, cost and receivable reversed', q2.status === 200 && (await stockQty('M1', 'أسود')) === 100 && (await dash()).cogs === 0 && (await dash()).money_owed_to_us === 0, q2.body);
+
+  // ───────── PAID. editing the quantity of a «تم الصرف» order (real form payload) ─────────
+  await reset();
+  const paidRes = (await api('POST', '/sales', payload({ order_status: PREPARED, invoice_value: 500, lines: [{ code: 'M1', qty: 5, color: 'أسود' }] }))).body;
+  const paid0 = (await api('POST', '/sales', payload({ order_status: PAID_OUT, invoice_value: 800, shipping_collected: 800, shipping_collected_date: '2026-10-05', lines: [{ code: 'M1', qty: 8, color: 'أسود' }] }))).body;
+  const pd0 = await dash();
+  const paidUi = (qty: number, invoice: number, collected: number) => ({ ...uiBody(paid0, qty, invoice), order_status: PAID_OUT, shipping_collected: collected, shipping_collected_date: '2026-10-05' });
+  const p1 = await api('PUT', `/sales/${paid0.id}`, paidUi(12, 1200, 800));
+  const pd1 = await dash();
+  check('PAID. edit 8 → 12 on a «تم الصرف» order: SAVED, quantity 12, value 1,200, status stays «تم الصرف», 4 extra', p1.status === 200 && p1.body.order_status === PAID_OUT && p1.body.model1_qty === 12 && p1.body.model1_extra_qty === 4 && p1.body.invoice_value === 1200, p1.body);
+  check('PAID. no reservation / deduction / shortage / movement / collection / cash change; the added 400 shows as still to collect', (await stockQty('M1', 'أسود')) === 92 && (await prisma.readyStock.findFirst({ where: { model_code: 'M1', color: 'أسود' } }))?.reserved_quantity === 5 && (pd1.missing_stock?.total_missing_units ?? 0) === 0 && (await rows(paid0.id)).movements.length === 1 && (await rows(paid0.id)).collections.length === 1 && pd1.cash_on_hand === pd0.cash_on_hand && Math.round(pd1.money_owed_to_us - pd0.money_owed_to_us) === 400, { cash0: pd0.cash_on_hand, cash1: pd1.cash_on_hand, owed: pd1.money_owed_to_us - pd0.money_owed_to_us });
+  for (let i = 0; i < 3; i++) await api('PUT', `/sales/${paid0.id}`, paidUi(12, 1200, 800));
+  check('PAID. repeated saves duplicate nothing', (await rows(paid0.id)).movements.length === 1 && (await rows(paid0.id)).collections.length === 1 && (await rows(paid0.id)).sale?.model1_extra_qty === 4);
+  const p2 = await api('PUT', `/sales/${paid0.id}`, paidUi(6, 600, 600));
+  check('PAID. lowering to 6 removes the extra first and returns 2 real pieces: one SHIP_REVERSAL of 2, stock back to 94 − ... = 94', p2.status === 200 && p2.body.model1_extra_qty === 0 && (await rows(paid0.id)).movements.map(m => m.movement_type + m.qty).join() === 'SHIP8,SHIP_REVERSAL2' && (await stockQty('M1', 'أسود')) === 94, p2.body);
+  void paidRes;
 
   // ───────── seasons + authorisation ─────────
   o = reopenedOrder;

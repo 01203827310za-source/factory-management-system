@@ -119,3 +119,12 @@ test('monthly sales: a paid-out order with no recorded payout date falls back to
   const r = report(w, '2026-10');                                           // created 2026-10-01
   assert.deepEqual([r.total_qty, r.estimated_orders], [5, 1]);
 });
+
+test('monthly sales: a sales-only quantity increase on a paid-out order counts in the report (ordered pieces), while stock does not move', async () => {
+  const w = world();
+  const o = await w.saveOrder({ status: PAID_OUT, slots: [line('M1', 8)], invoice: 800, collected: 800, date: '2026-10-05' });
+  await w.saveOrder({ id: o.id, status: PAID_OUT, slots: [line('M1', 12)], invoice: 1200, collected: 800, date: '2026-10-05' });
+  assert.equal(report(w, '2026-10').total_qty, 12);
+  assert.equal(w.sales[0].model1_extra_qty, 4);
+  assert.equal(w.stock().physicalQty, 2500 - 8);                            // stock still sees the 8 that shipped
+});

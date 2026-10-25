@@ -11,7 +11,12 @@
 // ============================================
 import type { Sale } from '@prisma/client';
 import { collectionMonth } from './charity';
-import { saleSlots } from './readyStockPositions';
+
+/** ORDERED pieces per line (sales view): includes the sales-only extra that stock never sees. */
+const orderedSlots = (s: Sale) => ([
+  [s.model1_code, s.model1_qty, s.model1_color], [s.model2_code, s.model2_qty, s.model2_color], [s.model3_code, s.model3_qty, s.model3_color],
+  [s.model4_code, s.model4_qty, s.model4_color], [s.model5_code, s.model5_qty, s.model5_color],
+] as [string, number, string][]).filter(([c, q]) => c && q > 0).map(([code, qty, color]) => ({ code, qty, color }));
 
 export const STATUS_PAID_OUT = 'تم الصرف';
 
@@ -47,7 +52,7 @@ export function monthlySalesByModel(sales: Sale[], month: string, modelNames: Ma
     months.add(m);
     const inMonth = m === month;
     if (inMonth) { monthOrders.add(s.id); if (est) estimated += 1; }
-    for (const slot of saleSlots(s)) {
+    for (const slot of orderedSlots(s)) {
       const k = key(slot.code);
       const row = rows.get(k) ?? { model_code: slot.code.trim(), model_name: modelNames.get(k) ?? '', qty: 0, order_count: 0, all_time_qty: 0, colors: [], orders: new Set<number>(), colorMap: new Map<string, number>() };
       row.all_time_qty += slot.qty;

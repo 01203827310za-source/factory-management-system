@@ -487,7 +487,7 @@ await loadData();(returnForm);
                       sale.order_status === 'لم يتم الصرف' ? 'bg-yellow-100 text-yellow-700' :
                       'bg-amber-100 text-amber-700'
                     }`}>{statusLabel(sale.order_status)}</span>
-                    {sale.order_status === 'لم يتم الصرف' && ((sale.model1_extra_qty ?? 0) + (sale.model2_extra_qty ?? 0) + (sale.model3_extra_qty ?? 0) + (sale.model4_extra_qty ?? 0) + (sale.model5_extra_qty ?? 0)) > 0 && (
+                    {(sale.order_status === 'لم يتم الصرف' || sale.order_status === 'تم الصرف') && ((sale.model1_extra_qty ?? 0) + (sale.model2_extra_qty ?? 0) + (sale.model3_extra_qty ?? 0) + (sale.model4_extra_qty ?? 0) + (sale.model5_extra_qty ?? 0)) > 0 && (
                       <span className="block mt-1 text-[11px] font-semibold text-amber-700" title="قطع أُضيفت على الأوردر: تُحسب في المبيعات فقط ولا تُحجز ولا تُخصم من المخزون حتى الشحن">منها {((sale.model1_extra_qty ?? 0) + (sale.model2_extra_qty ?? 0) + (sale.model3_extra_qty ?? 0) + (sale.model4_extra_qty ?? 0) + (sale.model5_extra_qty ?? 0)).toLocaleString('ar-EG')} قطعة للمبيعات فقط (غير محجوزة)</span>
                     )}
                     {sale.order_status === 'لم يتم الصرف' && sale.awaiting_stock && (

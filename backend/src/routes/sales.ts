@@ -295,11 +295,13 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     const wasReservation = oldSale.order_status === 'تم الحجز';
     let newStatus = (data.order_status as string | undefined) ?? oldRaw.order_status;
 
-    // ── Quantity edits on an order that stays «لم يتم الصرف» are SALES-ONLY ──
+    // ── Quantity edits on an order that stays «لم يتم الصرف» / «تم الصرف» are SALES-ONLY ──
     // The order quantity and value follow the edit, but the extra pieces are never reserved, deducted, costed or counted as a shortage:
     // stock keeps seeing only the quantity it already accounted for (model{i}_qty − model{i}_extra_qty). Lowering the quantity removes
-    // extra pieces first. Any other status change (a real shipment) resets the extra to 0, so the whole quantity is validated and shipped.
-    const keepsNotPaidOut = oldRaw.order_status === 'لم يتم الصرف' && newStatus === 'لم يتم الصرف';
+    // extra pieces first. The extra is kept when the order moves between these two statuses (confirming a payout is not a shipment);
+    // any other status change (e.g. back to «يتم التجهيز» and shipped again) resets it to 0, so the whole quantity is validated and shipped.
+    const SHIPPED_STATUSES = ['لم يتم الصرف', 'تم الصرف'];
+    const keepsNotPaidOut = SHIPPED_STATUSES.includes(oldRaw.order_status) && SHIPPED_STATUSES.includes(newStatus);
     const norm = (v: unknown) => String(v ?? '').trim().toLowerCase();
     for (let i = 1; i <= 5; i++) {
       const rec = oldRaw as unknown as Record<string, unknown>;

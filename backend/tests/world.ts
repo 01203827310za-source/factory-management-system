@@ -132,7 +132,7 @@ export class World {
     const pre = input.id ? this.sales.find(s => s.id === input.id) : undefined;
     // sales-only extra: pieces added while the order stays «لم يتم الصرف» are in the order (sales) but not in stock
     const norm = (v: unknown) => String(v ?? '').trim().toLowerCase();
-    const keepsNP = !!pre && pre.order_status === 'لم يتم الصرف' && input.status === 'لم يتم الصرف';
+    const keepsNP = !!pre && ['لم يتم الصرف', 'تم الصرف'].includes(pre.order_status) && ['لم يتم الصرف', 'تم الصرف'].includes(input.status);
     const extras = [1, 2, 3, 4, 5].map(i => {
       const o = pre as unknown as Record<string, unknown> | undefined;
       const ns = input.slots[i - 1];
