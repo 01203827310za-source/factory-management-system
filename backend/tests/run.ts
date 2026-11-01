@@ -12,5 +12,6 @@ import './cashLedger.test';
 import './monthlySales.test';
 import './shortageOrders.test';
 import './readyStockViews.test';
+import './shipmentTrim.test';
 
 runAll();

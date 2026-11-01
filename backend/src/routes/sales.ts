@@ -16,12 +16,26 @@ import {
 } from '../services/orderCancellation';
 import { lockStock } from '../services/reservationSync';
 import { planExtras } from '../services/salesOnlyExtra';
+import { applyTrim, confirmationMatches, planShipmentTrim, type TrimPlan } from '../services/shipmentTrim';
 import { ledgerTotal } from '../services/shippingCollections';
 import { collectionDate, loadStockContext, syncCollections, syncShipMovements } from '../services/orderLedgers';
 import { outstandingShippingReceivable } from '../services/receivablesAudit';
 
 const router = Router();
 router.use(authenticate);
+
+const NO_STOCK_MESSAGE = 'لا يوجد مخزون متاح لشحن هذا الأوردر — الكميات المطلوبة محجوزة لأوردرات أخرى أو غير موجودة. لم يُشحن الأوردر.';
+const linesOf = (src: Record<string, unknown>) => [1, 2, 3, 4, 5].map(i => ({ code: String(src[`model${i}_code`] ?? '').trim(), color: String(src[`model${i}_color`] ?? ''), qty: Number(src[`model${i}_qty`]) || 0 }));
+
+/**
+ * An explicit shipment («تم الصرف») of an order that has not shipped yet: what can really ship is decided per stock line, respecting every
+ * other order's reservation. Returns the plan; the caller refuses (nothing shippable), asks for confirmation, or applies it.
+ */
+async function shipmentPlan(seasonId: number, excludeSaleId: number | undefined, merged: Record<string, unknown>) {
+  const ctx = await loadStockContext(prisma as unknown as Prisma.TransactionClient, seasonId, excludeSaleId);
+  return planShipmentTrim(ctx, linesOf(merged), Number(merged.invoice_value) || 0, Number(merged.deposit_paid) || 0);
+}
+
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -179,6 +193,24 @@ router.get('/', async (req: Request, res: Response) => {
 });
 
 // POST /api/sales
+// POST /api/sales/ship-preview — what «تم الصرف» would really ship (read-only; nothing is saved or reserved)
+router.post('/ship-preview', async (req: Request, res: Response) => {
+  try {
+    const seasonId = await getSeasonId(req);
+    const body = { ...(req.body ?? {}) } as Record<string, unknown>;
+    const id = body.id !== undefined && body.id !== null ? parseInt(String(body.id)) : undefined;
+    const old = id ? await prisma.sale.findFirst({ where: { id, season_id: seasonId } }) : null;
+    if (id && !old) return res.status(404).json({ message: 'الطلب غير موجود' });
+    const applicable = (body.order_status as string) === 'تم الصرف' && (!old || !isStockDeducting(effectiveStatus(old).order_status));
+    const merged = old ? { ...old, ...body } : body;
+    const plan = applicable ? await shipmentPlan(seasonId, old?.id, merged) : null;
+    return res.json({ applicable, plan });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'خطأ في حساب الكمية القابلة للشحن' });
+  }
+});
+
 router.post('/', requireManager, async (req: Request, res: Response) => {
   try {
     const seasonId = await getSeasonId(req);
@@ -189,6 +221,19 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
     delete data.awaiting_stock;         // server-managed too
     for (let i = 1; i <= 5; i++) delete data[`model${i}_extra_qty`];   // server-managed: only a quantity edit of a «لم يتم الصرف» order creates it
     const status = (data.order_status as string) || '';
+    const trimConfirm = data.trim_confirm;
+    delete data.trim_confirm;           // not a column: only the confirmation of a shipment trim
+    // An explicit «تم الصرف» for more pieces than can ship: ship what exists, remove the excess completely (after the user confirms).
+    let trimmed: TrimPlan | null = null;
+    if (status === 'تم الصرف') {
+      const plan = await shipmentPlan(seasonId, undefined, data);
+      if (plan.needs_trim) {
+        if (plan.shippable_total === 0) return res.status(400).json({ message: NO_STOCK_MESSAGE, code: 'NO_STOCK_TO_SHIP', plan });
+        if (!confirmationMatches(trimConfirm, plan)) return res.status(409).json({ message: 'الكمية المتاحة للشحن أقل من المطلوب — أكّد التعديل أولًا', code: 'SHIPMENT_TRIM_REQUIRED', plan });
+        applyTrim(data, plan);
+        trimmed = plan;
+      }
+    }
     const remaining = (Number(data.invoice_value) || 0) - (Number(data.deposit_paid) || 0);
 
     // A brand-new order can be entered directly as "تم الصرف" (e.g. a counter sale) —
@@ -267,7 +312,7 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
         ? `إضافة عملية بيع (تم الصرف مباشرة): ${sale.client} - ${sale.order_number} — المتبقي: ${remaining} — المستلم فعليًا: ${resolved.value} — الفرق غير المحصل: ${collection_difference}`
         : `إضافة عملية بيع: ${sale.client} - ${sale.order_number}`,
     });
-    return res.status(201).json({ ...sale, collection_difference, fulfillment: (await fulfillmentOf(seasonId, sale.id)).one, status_downgraded: !!downgradeReason, requested_status: status, downgrade_reason: downgradeReason || null, ignored_collected: ignoredCollected, awaiting_stock: !!awaitingReason, awaiting_reason: awaitingReason || null });
+    return res.status(201).json({ ...sale, collection_difference, fulfillment: (await fulfillmentOf(seasonId, sale.id)).one, status_downgraded: !!downgradeReason, requested_status: status, downgrade_reason: downgradeReason || null, ignored_collected: ignoredCollected, awaiting_stock: !!awaitingReason, awaiting_reason: awaitingReason || null, trimmed });
   } catch (err) {
     if (err instanceof StockError) return res.status(400).json({ message: err.message });
     console.error(err);
@@ -292,6 +337,14 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     if (!oldRaw) return res.status(404).json({ message: 'الطلب غير موجود' });
     // An order held for missing pieces («لم يتم الصرف» + awaiting_stock) has not shipped: every stock / money rule sees it as «يتم التجهيز».
     const oldSale = effectiveStatus(oldRaw);
+
+    // A repeated submission of an already-applied shipment trim (double click / network retry): the order already holds exactly the confirmed
+    // shippable quantities, so there is nothing to do — never re-added as a sales-only extra and never shipped twice.
+    const replayShippable = (data.trim_confirm as { shippable?: unknown } | undefined)?.shippable;
+    if (Array.isArray(replayShippable) && oldRaw.order_status === 'تم الصرف'
+      && [1, 2, 3, 4, 5].every(i => (Number(replayShippable[i - 1]) || 0) === ((oldRaw as unknown as Record<string, number>)[`model${i}_qty`] || 0))) {
+      return res.json({ ...oldRaw, collection_difference: Math.max(0, oldRaw.remaining - oldRaw.shipping_collected), fulfillment: (await fulfillmentOf(seasonId, id)).one, status_downgraded: false, trimmed: null, replayed: true });
+    }
 
     const wasReservation = oldSale.order_status === 'تم الحجز';
     let newStatus = (data.order_status as string | undefined) ?? oldRaw.order_status;
@@ -326,6 +379,20 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     let shipmentReversed = false;
     let holdAwaiting = false;
     let awaitingReason = '';
+    const trimConfirm = data.trim_confirm;
+    delete data.trim_confirm;           // not a column: only the confirmation of a shipment trim
+    let trimmed: TrimPlan | null = null;
+    // An explicit «تم الصرف» on an order that has not shipped yet (يتم التجهيز / awaiting stock / reopened): ship what exists per line, respecting
+    // the other orders' reservations, and remove the excess from the order completely — after the user confirmed exactly that plan.
+    if (newStatus === 'تم الصرف' && !isStockDeducting(oldSale.order_status)) {
+      const plan = await shipmentPlan(seasonId, id, { ...oldSale, ...data });
+      if (plan.needs_trim) {
+        if (plan.shippable_total === 0) return res.status(400).json({ message: NO_STOCK_MESSAGE, code: 'NO_STOCK_TO_SHIP', plan });
+        if (!confirmationMatches(trimConfirm, plan)) return res.status(409).json({ message: 'الكمية المتاحة للشحن أقل من المطلوب — أكّد التعديل أولًا', code: 'SHIPMENT_TRIM_REQUIRED', plan });
+        applyTrim(data, plan);
+        trimmed = plan;
+      }
+    }
     const unpaidShipped = ['لم يتم الصرف', 'حساب عميل'].includes(oldSale.order_status) && oldSale.shipping_collected === 0;
     if (isStockDeducting(newStatus) && (!isStockDeducting(oldSale.order_status) || (unpaidShipped && newStatus === 'لم يتم الصرف'))) {
       const wanted = extractModels({ ...oldSale, ...data } as unknown as Record<string, unknown>);
@@ -535,6 +602,7 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
       fulfillment: (await fulfillmentOf(seasonId, id)).one,
       cancellation: willBeCancelled ? cancelSummary : null,
       status_downgraded: !!downgradeReason,
+      trimmed,
       requested_status: requestedStatus || null,
       awaiting_stock: holdAwaiting,
       awaiting_reason: awaitingReason || null,

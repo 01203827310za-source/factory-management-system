@@ -4,7 +4,7 @@ import {
   returnsApi,
   readyStockApi,
   marketersApi,
-  type SaleLedger,
+  type SaleLedger, type ShipTrimPlan,
 } from '../services/api';
 import type { Sale, ReturnItem } from '../types';
 import Modal from '../components/Modal';
@@ -27,6 +27,9 @@ export default function Sales() {
   const [filterStatus, setFilterStatus] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
   const [isReservation, setIsReservation] = useState(false);
+  // An explicit «تم الصرف» for more pieces than can ship: the plan waits here until the user confirms it
+  const [trimPending, setTrimPending] = useState<{ plan: ShipTrimPlan; data: Record<string, unknown> } | null>(null);
+  const [trimSaving, setTrimSaving] = useState(false);
   const [cancelReservationConfirm, setCancelReservationConfirm] = useState<number | null>(null);
 
   // Whether the "المبلغ المستلم من شركة الشحن" field should keep auto-following
@@ -225,10 +228,28 @@ readyStock.forEach((s: any) => {
       cancel_reason: form.order_status === 'تم الإلغاء' && cancelReason.trim() ? cancelReason.trim() : undefined,
       row_number: sales.length + 1,
     };
+    // An explicit «تم الصرف» on an order that has not shipped yet: ask the server what can really ship; if less than requested, show it first.
+    if (form.order_status === 'تم الصرف') {
+      try {
+        const pv = await salesApi.shipPreview({ ...data, id: editSale?.id });
+        if (pv.applicable && pv.plan?.needs_trim) {
+          if (pv.plan.shippable_total === 0) { toast('error', 'لا يوجد مخزون متاح لشحن هذا الأوردر — الكميات محجوزة لأوردرات أخرى أو غير موجودة. لم يُشحن الأوردر.'); return; }
+          setTrimPending({ plan: pv.plan, data });
+          return;
+        }
+      } catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'تعذر حساب الكمية القابلة للشحن'); return; }
+    }
+    await performSave(data);
+  };
+
+  const performSave = async (data: Record<string, unknown>, trim?: ShipTrimPlan) => {
     try {
-      const result = editSale ? await salesApi.update(editSale.id, data as any) : await salesApi.add(data as any);
+      const body = trim ? { ...data, trim_confirm: { shippable: [0, 1, 2, 3, 4].map(i => trim.lines.find(l => l.index === i)?.shippable ?? 0) } } : data;
+      const result = editSale ? await salesApi.update(editSale.id, body as any) : await salesApi.add(body as any);
       const downgraded = result as { status_downgraded?: boolean; requested_status?: string; ignored_collected?: number; shipment_reversed?: boolean; awaiting_stock?: boolean };
-      if (downgraded.awaiting_stock) {
+      if (trim) {
+        toast('success', `تم الصرف: شُحنت ${trim.shippable_total.toLocaleString('ar-EG')} قطعة وأُزيلت ${trim.removed_total.toLocaleString('ar-EG')} قطعة غير متاحة من الأوردر — الفاتورة ${trim.invoice_after.toLocaleString('ar-EG')} ج`);
+      } else if (downgraded.awaiting_stock) {
         // Status kept exactly as chosen; the pieces are missing, so nothing ships and the shortage is tracked separately.
         const f = result.fulfillment;
         toast('info', `تم حفظ الأوردر بحالة «${statusLabel(form.order_status)}» — بانتظار توفر المخزون${f ? `: محجوز ${f.reserved.toLocaleString('ar-EG')} من ${f.requested.toLocaleString('ar-EG')} والناقص ${f.pending.toLocaleString('ar-EG')}` : ''}.${downgraded.shipment_reversed ? ' وعُكس شحنه السابق لأن الكمية الجديدة غير متوفرة.' : ''} لم يُخصم مخزون ولم يُسجَّل شحن أو تحصيل.`);
@@ -921,6 +942,34 @@ await loadData();(returnForm);
 
 
       {/* Cancel Reservation Confirm */}
+      <Modal isOpen={!!trimPending} onClose={() => !trimSaving && setTrimPending(null)} title="تأكيد الصرف بالكمية المتاحة" size="lg">
+        {trimPending && (
+          <div className="space-y-4 text-sm">
+            <p className="text-amber-900 bg-amber-50 border border-amber-200 rounded-lg p-3">الكمية المتاحة للشحن أقل من المطلوب. سيتم صرف المتاح فقط، وتُحذف الكمية الزائدة من الأوردر نهائيًا (لا تُحجز ولا تظهر في النواقص ولا في المبيعات أو الفاتورة). لا تُؤخذ أي كمية محجوزة لأوردرات أخرى.</p>
+            <div className="overflow-x-auto border border-gray-100 rounded-lg"><table className="w-full">
+              <thead className="bg-gray-50 text-gray-600"><tr>{['الموديل', 'اللون', 'المطلوب', 'القابل للشحن', 'الكمية المحذوفة'].map(h => <th key={h} className="px-3 py-2 text-right font-semibold">{h}</th>)}</tr></thead>
+              <tbody>{trimPending.plan.lines.map(l => (
+                <tr key={l.index} className="border-t border-gray-100"><td className="px-3 py-2 font-medium">{l.code}</td><td className="px-3 py-2">{l.color || '—'}</td>
+                  <td className="px-3 py-2">{l.requested.toLocaleString('ar-EG')}</td><td className="px-3 py-2 font-bold text-emerald-700">{l.shippable.toLocaleString('ar-EG')}</td>
+                  <td className={`px-3 py-2 font-bold ${l.removed > 0 ? 'text-red-700' : 'text-gray-400'}`}>{l.removed.toLocaleString('ar-EG')}</td></tr>
+              ))}</tbody>
+              <tfoot><tr className="border-t-2 bg-gray-50 font-bold"><td className="px-3 py-2" colSpan={2}>الإجمالي</td><td className="px-3 py-2">{trimPending.plan.requested_total.toLocaleString('ar-EG')}</td><td className="px-3 py-2 text-emerald-700">{trimPending.plan.shippable_total.toLocaleString('ar-EG')}</td><td className="px-3 py-2 text-red-700">{trimPending.plan.removed_total.toLocaleString('ar-EG')}</td></tr></tfoot>
+            </table></div>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+              <div className="bg-gray-50 rounded-lg p-3"><p className="text-xs text-gray-500">الفاتورة الأصلية</p><p className="font-bold">{trimPending.plan.invoice_before.toLocaleString('ar-EG')} ج</p></div>
+              <div className="bg-blue-50 rounded-lg p-3"><p className="text-xs text-blue-700">الفاتورة بعد التعديل (بالتناسب مع الكمية)</p><p className="font-bold text-blue-800">{trimPending.plan.invoice_after.toLocaleString('ar-EG')} ج</p></div>
+              <div className="bg-gray-50 rounded-lg p-3"><p className="text-xs text-gray-500">المتبقي بعد خصم العربون</p><p className="font-bold">{trimPending.plan.remaining_after.toLocaleString('ar-EG')} ج</p></div>
+            </div>
+            <p className="text-xs text-gray-500">الفاتورة تُحسب بنفس سعر القطعة المتوسط للأوردر (لا يوجد سعر مستقل لكل صنف). المبلغ المستلم من شركة الشحن لن يزيد عن المتبقي الجديد.</p>
+            <div className="flex justify-end gap-3 pt-3 border-t border-gray-200">
+              <button onClick={() => setTrimPending(null)} disabled={trimSaving} className="px-5 py-2 text-sm border border-gray-300 rounded-lg disabled:opacity-60">إلغاء (لا يُحفظ شيء)</button>
+              <button disabled={trimSaving} onClick={async () => { setTrimSaving(true); try { await performSave(trimPending.data, trimPending.plan); } finally { setTrimSaving(false); setTrimPending(null); } }}
+                className="px-5 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-60">{trimSaving ? 'جارٍ الحفظ...' : 'تأكيد الصرف بالكمية المتاحة'}</button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
       <Modal isOpen={cancelReservationConfirm !== null} onClose={() => setCancelReservationConfirm(null)} title="تأكيد إلغاء الحجز" size="sm">
         <p className="text-gray-600">هل تريد إلغاء هذا الحجز؟ سيتم تحرير الكمية المحجوزة.</p>
         <div className="flex justify-end gap-3 mt-6">

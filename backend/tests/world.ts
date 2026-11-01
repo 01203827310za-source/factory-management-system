@@ -12,6 +12,7 @@ import { markReopened, recordCancellation, shippedSnapshot, updateDisposition, c
 import { computeDashboardCashFlow, computeMoneyOwedToUs } from '../src/services/financialMetrics';
 import { costOfGoodsShipped, returnsCostCredit, type MovementRow } from '../src/services/inventoryMovements';
 import { planExtras } from '../src/services/salesOnlyExtra';
+import { applyTrim, planShipmentTrim, type TrimPlan } from '../src/services/shipmentTrim';
 import { FuzzyKeyIndex } from '../src/utils/textMatch';
 import { ledgerTotal } from '../src/services/shippingCollections';
 import { summarizeMissingStock } from '../src/services/missingStock';
@@ -122,12 +123,36 @@ export class World {
     /** Required when a SHIPPED order is cancelled: what happened to the goods. */
     disposition?: CancelDisposition;
     reason?: string;
+    /** The user confirmed the trim of an explicit «تم الصرف» to what can really ship. */
+    confirmTrim?: boolean;
+    /** Filled by saveOrder: the trim plan that was applied (if any). */
+    trimmedOut?: { current?: TrimPlan | null };
     /** Pieces of each line that came back resalable (default: all, when the disposition is returned_resalable). */
     returnedQty?: number[];
   }): Promise<Sale> {
     // Same rule as POST /sales and PUT /sales/:id: an order that has NOT shipped yet (new, «يتم التجهيز» or cancelled) saved with a
     // shipped status while the pieces are not available is kept as «يتم التجهيز» with its full quantity (nothing deducted); it is
     // refused only if shipping-company money was already entered. An order that already shipped keeps the strict rule.
+    // An explicit «تم الصرف» on an order that has not shipped yet: ship what exists per line, remove the excess completely (confirmed by the user)
+    {
+      const old0 = input.id ? this.sales.find(x => x.id === input.id) : undefined;
+      if (input.status === 'تم الصرف' && !input.legacy && (!old0 || !isStockDeducting(effectiveStatus(old0).order_status))) {
+        const ctxT = await loadStockContext(this.tx, input.season ?? 1, input.id);
+        const plan = planShipmentTrim(ctxT, input.slots.map(sl => ({ code: sl.code, color: sl.color, qty: sl.qty })), input.invoice, input.deposit ?? 0);
+        if (plan.needs_trim) {
+          if (plan.shippable_total === 0) throw new Error('لا يوجد مخزون متاح لشحن هذا الأوردر');
+          if (!input.confirmTrim) throw new Error('SHIPMENT_TRIM_REQUIRED');
+          const data: Record<string, unknown> = { invoice_value: input.invoice, shipping_collected: input.collected ?? 0 };
+          input.slots.forEach((sl, i) => { data[`model${i + 1}_code`] = sl.code; data[`model${i + 1}_qty`] = sl.qty; data[`model${i + 1}_color`] = sl.color; });
+          applyTrim(data, plan);
+          input = {
+            ...input, invoice: data.invoice_value as number, collected: data.shipping_collected as number,
+            slots: input.slots.map((sl, i) => ({ code: data[`model${i + 1}_code`] as string, qty: data[`model${i + 1}_qty`] as number, color: data[`model${i + 1}_color`] as string })).filter(sl => sl.code && sl.qty > 0),
+          };
+          if (input.trimmedOut) input.trimmedOut.current = plan;
+        }
+      }
+    }
     let heldFor: string | null = null;
     let awaiting = false;                // «لم يتم الصرف» kept while the pieces are missing (nothing ships)   // status the user asked for while the order is held for missing pieces
     const pre = input.id ? this.sales.find(s => s.id === input.id) : undefined;

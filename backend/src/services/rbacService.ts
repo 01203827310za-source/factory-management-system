@@ -183,6 +183,7 @@ export function permissionForRequest(method: string, path: string): string | nul
   if (segment === 'sales' && rest[1]?.includes('reservation')) return 'sales.edit';
   if (segment === 'sales' && rest[1] === 'refunds') return 'sales.edit';
   if (segment === 'cash-report') return method === 'GET' ? 'dashboard.view' : 'expenses.create';
+  if (segment === 'sales' && rest[0] === 'ship-preview') return 'sales.view';   // read-only calculation
   if (segment === 'seasons' && rest[0] && rest[1] === 'activate') return 'seasons.activate';
   if ((segment === 'debts' || segment === 'client-accounts') && rest.includes('payments')) {
     const action = actionByMethod[method] ?? 'view';

@@ -160,7 +160,15 @@ export interface RbacMetadata {
 // add/update also return `collection_difference` whenever the saved order_status is
 // "تم الصرف" — the gap between the invoice's remaining balance and the actual amount
 // received from the shipping company (see the shipping_collected field below).
+export interface ShipTrimPlan {
+  needs_trim: boolean;
+  lines: { index: number; code: string; color: string; requested: number; shippable: number; removed: number }[];
+  requested_total: number; shippable_total: number; removed_total: number;
+  invoice_before: number; invoice_after: number; deposit: number; remaining_after: number;
+}
 export const salesApi = {
+  /** What an explicit «تم الصرف» would really ship (read-only; saves and reserves nothing). */
+  shipPreview: (body: Record<string, unknown>) => post<{ applicable: boolean; plan: ShipTrimPlan | null }>('/sales/ship-preview', body),
   getAll: () => get<SaleRecord[]>('/sales'),
   getLedger: (id: number) => get<SaleLedger>(`/sales/${id}/ledger`),
   add: (data: Omit<SaleRecord, 'id' | 'created_at'>) => post<SaleRecord & { collection_difference: number; cancellation?: CancellationSummary | null; status_downgraded?: boolean; requested_status?: string; downgrade_reason?: string | null; ignored_collected?: number }>('/sales', data),

@@ -246,8 +246,8 @@ async function main() {
   check('SHORTAGE. nothing was deducted: no cost-ledger rows, stock still 100, no receivable, no revenue', shMovements === 0 && (await stockQty('M1', 'أسود')) === 100 && shDash.money_owed_to_us === 0 && shDash.recognized_sales === 0, { shMovements, owed: shDash.money_owed_to_us });
   check('SHORTAGE. the shortage appears in the existing summary: M1 أسود missing 50', shDash.missing_stock?.total_missing_units === 50 && shDash.missing_stock?.rows[0]?.missing === 50 && shDash.missing_stock?.rows[0]?.orders?.length === 1, shDash.missing_stock);
   const shMoney = await api('POST', '/sales', payload({ order_status: PAID_OUT, invoice_value: 500, shipping_collected: 500, shipping_collected_date: '2026-10-05', lines: [{ code: 'M1', qty: 500, color: 'أسود' }] }));
-  check('SHORTAGE. a NEW «تم الصرف» order with received money for goods that do not exist is saved as «يتم التجهيز»; the money is NOT recorded', shMoney.status === 201 && shMoney.body.order_status === PREPARED && shMoney.body.ignored_collected === 500 && (await prisma.shippingCollection.count()) === 0, shMoney.body);
-  await api('PUT', `/sales/${shMoney.body.id}`, payload({ order_number: shMoney.body.order_number, order_status: CANCELED, invoice_value: 500, lines: [{ code: 'M1', qty: 500, color: 'أسود' }] }));
+  check('SHORTAGE. a NEW «تم الصرف» order for goods that do not exist (zero free) is not created as shipped: 400 NO_STOCK_TO_SHIP, no order, no collection', shMoney.status === 400 && shMoney.body.code === 'NO_STOCK_TO_SHIP' && (await prisma.sale.count({ where: { order_number: shMoney.body.order_number ?? 'x' } })) === 0 && (await prisma.shippingCollection.count()) === 0, shMoney.body);
+  // (no order was created by the refused request)
   const shShip = await api('PUT', `/sales/${sh.body.id}`, payload({ order_number: sh.body.order_number, order_status: NOT_PAID_OUT, invoice_value: 15000, lines: big }));
   check('SHORTAGE. saving the under-stocked order again keeps «لم يتم الصرف» and ships nothing', shShip.status === 200 && shShip.body.order_status === NOT_PAID_OUT && shShip.body.awaiting_stock === true && (await rows(sh.body.id)).movements.length === 0, shShip.body);
   for (let i = 0; i < 3; i++) await api('PUT', `/sales/${sh.body.id}`, payload({ order_number: sh.body.order_number, order_status: PREPARED, invoice_value: 15000, lines: big }));
@@ -290,15 +290,15 @@ async function main() {
     delivery_method: 'ايرجنت', warehouse: '', shipping_collected: invoice, row_number: 2,
   });
   const uiEdit = await api('PUT', `/sales/${eB.id}`, uiBody(eB, 5, 500));
-  check('EDIT (UI request). «صرف الحجز» with the pre-filled received amount, 5 pieces wanted, 0 available (100 held by order A): SAVED (200)', uiEdit.status === 200, uiEdit.body);
-  check('EDIT (UI request). order stays «يتم التجهيز», quantity 5 kept, 5 missing, the pre-filled amount is reported and NOT recorded', uiEdit.body.order_status === PREPARED && uiEdit.body.model1_qty === 5 && uiEdit.body.status_downgraded === true && uiEdit.body.ignored_collected === 500 && uiEdit.body.shipping_collected === 0 && (await dash()).missing_stock?.total_missing_units === 5, uiEdit.body);
+  check('EDIT (UI request). «صرف الحجز» with the pre-filled received amount when every piece is held for order A: nothing can ship — refused (400 NO_STOCK_TO_SHIP, Arabic message)', uiEdit.status === 400 && uiEdit.body.code === 'NO_STOCK_TO_SHIP' && /لا يوجد مخزون متاح/.test(uiEdit.body.message), uiEdit.body);
+  check('EDIT (UI request). the order is left exactly as it was: still «لم يتم الصرف» awaiting stock, quantity 5, 5 missing, no pre-filled amount recorded', (await rows(eB.id)).sale?.order_status === NOT_PAID_OUT && (await rows(eB.id)).sale?.awaiting_stock === true && (await rows(eB.id)).sale?.model1_qty === 5 && (await rows(eB.id)).sale?.shipping_collected === 0 && (await dash()).missing_stock?.total_missing_units === 5);
   check('EDIT (UI request). no collection row, no cash, no SHIP row, order A still holds 100', (await prisma.shippingCollection.count()) === 0 && (await dash()).cash_on_hand === 0 && (await prisma.inventoryMovement.count()) === 0 && (await prisma.readyStock.findFirst({ where: { model_code: 'M1', color: 'أسود' } }))?.reserved_quantity === 100);
   const uiAgain = await api('PUT', `/sales/${eB.id}`, uiBody(eB, 5, 500));
-  check('EDIT (UI request). the same Save again changes nothing', uiAgain.status === 200 && (await dash()).missing_stock?.total_missing_units === 5 && (await prisma.shippingCollection.count()) === 0);
+  check('EDIT (UI request). the same Save again changes nothing', uiAgain.status === 400 && (await dash()).missing_stock?.total_missing_units === 5 && (await prisma.shippingCollection.count()) === 0);
   const uiCreate = await api('POST', '/sales', { ...uiBody({ order_number: 'UI-NEW' }, 8, 800), row_number: 3 });
-  check('CREATE (UI request). a NEW order added with status «تم الصرف» and the pre-filled amount while stock is 0: SAVED (201) as «يتم التجهيز», quantity 8, amount not recorded', uiCreate.status === 201 && uiCreate.body.order_status === PREPARED && uiCreate.body.model1_qty === 8 && uiCreate.body.ignored_collected === 800 && (await prisma.shippingCollection.count()) === 0, uiCreate.body);
-  check('CREATE (UI request). shortage is now 5 + 8 = 13', (await dash()).missing_stock?.total_missing_units === 13);
-  await api('PUT', `/sales/${uiCreate.body.id}`, { ...uiBody(uiCreate.body, 8, 800), order_status: CANCELED });
+  check('CREATE (UI request). a NEW «تم الصرف» order with nothing free is refused (400 NO_STOCK_TO_SHIP): no order is created, nothing recorded', uiCreate.status === 400 && uiCreate.body.code === 'NO_STOCK_TO_SHIP' && (await prisma.sale.count({ where: { order_number: 'UI-NEW' } })) === 0 && (await prisma.shippingCollection.count()) === 0, uiCreate.body);
+  check('CREATE (UI request). the shortage is still just the 5 of order B', (await dash()).missing_stock?.total_missing_units === 5);
+  // (no order was created by the refused request)
   await api('PUT', `/sales/${eB.id}`, payload({ order_number: eB.order_number, order_status: CANCELED, invoice_value: 500, lines: [{ code: 'M1', qty: 5, color: 'أسود' }] }));
   check('EDIT. cancelling the edited order clears its shortage', (await dash()).missing_stock?.total_missing_units === 0);
   await api('PUT', `/sales/${eA.id}`, payload({ order_number: eA.order_number, order_status: NOT_PAID_OUT, invoice_value: 10000, lines: holdAll }));
@@ -419,7 +419,7 @@ async function main() {
   // actual shipment of a reservation is still validated
   const shipY = (await api('POST', '/sales', shotForm('SY', [['1001', 40, 'شانيه']], PREPARED, 4000, 0))).body;
   const shipTry = await api('PUT', `/sales/${shipY.id}`, shotForm('SY', [['1001', 40, 'شانيه']], PAID_OUT, 4000, 0));
-  check('SHOT. a reservation of 40 is NOT shipped when only part of it exists (stays «يتم التجهيز», no SHIP row)', shipTry.status === 200 && shipTry.body.order_status === PREPARED && (await rows(shipY.id)).movements.length === 0, shipTry.body);
+  check('SHOT. a reservation of 40 with every free piece held for other orders cannot ship (400 NO_STOCK_TO_SHIP): it stays «يتم التجهيز» with 40 and no SHIP row', shipTry.status === 400 && shipTry.body.code === 'NO_STOCK_TO_SHIP' && (await rows(shipY.id)).sale?.order_status === PREPARED && (await rows(shipY.id)).sale?.model1_qty === 40 && (await rows(shipY.id)).movements.length === 0, shipTry.body);
 
   // ───────── seasons + authorisation ─────────
   o = reopenedOrder;

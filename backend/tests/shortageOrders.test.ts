@@ -31,15 +31,16 @@ test('1. full quantity available: a directly shipped order is saved as shipped, 
   assert.equal(w.stock().physicalQty, 14);                                 // 20 − 6 shipped
 });
 
-test('2. quantity exceeds stock: the order is saved with the FULL quantity, 4 reserved, 6 tracked as shortage, nothing deducted', async () => {
+test('2. an explicit «تم الصرف» for more than exists ships what exists and REMOVES the excess: no reservation, no shortage, no deduction of the excess', async () => {
   const w = world(0); w.readyStock[0].opening_balance = 4;
-  await w.saveOrder({ status: PAID_OUT, slots: [line('M1', 10)], invoice: 1000, collected: 0 });
-  assert.equal(w.sales[0].model1_qty, 10);                                 // requested quantity untouched
-  notShipped(w.sales[0]);                          // saved as «يتم التجهيز», not shipped
-  assert.deepEqual(missing(w), [['M1', 'أسود', 6]]);
-  assert.equal(w.allocation(w.sales[0].id)!.reserved, 4);
-  assert.equal(w.movements.length, 0);                                     // no SHIP cost rows for goods that do not exist
-  assert.equal(w.stock().physicalQty, 4);                                  // physical stock untouched
+  await assert.rejects(() => w.saveOrder({ status: PAID_OUT, slots: [line('M1', 10)], invoice: 1000, collected: 0 }), /SHIPMENT_TRIM_REQUIRED/);   // never silent: needs the user's confirmation
+  assert.equal(w.sales.length, 0);
+  await w.saveOrder({ status: PAID_OUT, slots: [line('M1', 10)], invoice: 1000, collected: 0, confirmTrim: true });
+  assert.deepEqual([w.sales[0].order_status, w.sales[0].model1_qty, w.sales[0].invoice_value], [PAID_OUT, 4, 400]);   // 4 shipped, invoice proportional
+  assert.deepEqual(missing(w), []);                                        // the removed 6 are not a shortage
+  assert.equal(w.readyStock[0].reserved_quantity, 0);
+  assert.deepEqual(w.movements.map(m => [m.movement_type, m.qty]), [['SHIP', 4]]);
+  assert.equal(w.stock().physicalQty, 0);
   invariant(w);
 });
 
@@ -91,7 +92,7 @@ test('7. cancelling an order with an outstanding shortage removes the shortage a
 
 test('8. repeated saves / retries never duplicate the shortage, the reservation or a stock movement', async () => {
   const w = world(0); w.readyStock[0].opening_balance = 4;
-  const o = await w.saveOrder({ status: PAID_OUT, slots: [line('M1', 10)], invoice: 1000, collected: 0 });
+  const o = await w.saveOrder({ status: NOT_PAID_OUT, slots: [line('M1', 10)], invoice: 1000, collected: 0 });
   const snap = () => JSON.stringify([missing(w), w.readyStock.map(r => r.reserved_quantity), w.movements.length, w.collections.length, w.sales.length]);
   const first = snap();
   for (let i = 0; i < 4; i++) await w.saveOrder({ id: o.id, status: PREPARED, slots: [line('M1', 10)], invoice: 1000 });
@@ -118,19 +119,21 @@ test('9. stock arriving later reduces the shortage by allocation; the order is N
 
 test('10. inventory never goes negative however many short orders are entered', async () => {
   const w = world(0); w.readyStock[0].opening_balance = 5;
-  for (let i = 0; i < 6; i++) await w.saveOrder({ order_number: `S${i}`, status: i % 2 ? PAID_OUT : NOT_PAID_OUT, slots: [line('M1', 4)], invoice: 400, collected: 0 });
+  for (let i = 0; i < 6; i++) await w.saveOrder({ order_number: `S${i}`, status: NOT_PAID_OUT, slots: [line('M1', 4)], invoice: 400, collected: 0 });
   invariant(w);
   assert.equal(w.movements.filter(m => m.movement_type === 'SHIP').reduce((n, m) => n + m.qty, 0) <= 5, true);   // never shipped more than existed
 });
 
-test('11. money pre-filled for goods that do not exist is not recorded as received: the order is saved as «يتم التجهيز», no collection, no cash', async () => {
+test('11. «تم الصرف» with the pre-filled received amount: the amount follows the corrected invoice (never more than the new balance); no duplicate collection', async () => {
   const w = world(0); w.readyStock[0].opening_balance = 2;
-  await w.saveOrder({ status: PAID_OUT, slots: [line('M1', 10)], invoice: 1000, collected: 1000, date: '2026-10-05' });
-  notShipped(w.sales[0]);
-  assert.equal(w.sales[0].shipping_collected, 0);
-  assert.equal(w.collections.length, 0);
-  assert.equal(w.cash().cash, 0);
-  assert.deepEqual(missing(w), [['M1', 'أسود', 8]]);
+  const o = await w.saveOrder({ status: PAID_OUT, slots: [line('M1', 10)], invoice: 1000, collected: 1000, date: '2026-10-05', confirmTrim: true });
+  assert.deepEqual([w.sales[0].order_status, w.sales[0].model1_qty, w.sales[0].invoice_value, w.sales[0].remaining], [PAID_OUT, 2, 200, 200]);
+  assert.equal(w.sales[0].shipping_collected, 200);                        // clamped to the corrected balance
+  assert.deepEqual(w.collections.map(c => c.amount), [200]);
+  assert.equal(w.cash().cash, 200);
+  assert.deepEqual(missing(w), []);
+  await w.saveOrder({ id: o.id, status: PAID_OUT, slots: [line('M1', 2)], invoice: 200, collected: 200, date: '2026-10-05' });   // the same save again
+  assert.deepEqual([w.collections.length, w.movements.length], [1, 1]);
 });
 
 test('12. an unpaid SHIPPED order edited to a bigger quantity: the extra is sales-only (no deduction, no reservation, no shortage); changing the item beyond stock makes it awaiting and reverses its shipment once', async () => {
@@ -209,13 +212,13 @@ test('E2. repeated saves never duplicate the shortage or any movement; the quant
   assert.equal(w.movements.length, 0);
 });
 
-test('E3. «صرف الحجز» with the pre-filled received amount (the real UI request) is saved, not rejected; the amount is not recorded', async () => {
+test('E3. «صرف الحجز» when every piece is held for other orders: nothing can ship — the order is not shipped, with a clear message', async () => {
   const w = editWorld();
   await w.saveOrder({ order_number: 'A', status: PREPARED, slots: black(8), invoice: 800 });
   const b = await w.saveOrder({ order_number: 'B', status: PREPARED, slots: black(8), invoice: 800 });
-  await w.saveOrder({ id: b.id, status: PAID_OUT, slots: black(8), invoice: 800, collected: 800, date: '2026-10-05' });
-  notShipped(w.sales[1]);
-  assert.equal(w.sales[1].shipping_collected, 0);
+  await assert.rejects(() => w.saveOrder({ id: b.id, status: PAID_OUT, slots: black(8), invoice: 800, collected: 800, date: '2026-10-05', confirmTrim: true }), /لا يوجد مخزون متاح/);
+  assert.equal(w.sales[1].order_status, PREPARED);
+  assert.equal(w.sales[1].model1_qty, 8);                                   // untouched
   assert.equal(w.collections.length, 0);
   assert.equal(w.cash().cash, 0);
   assert.deepEqual(w.missingSummary().rows.map(r => r.missing), [8]);
@@ -301,12 +304,10 @@ test('R3. choosing «يتم التجهيز» or cancelling an awaiting order cle
   assert.deepEqual(missing(w), []);
 });
 
-test('R4. «تم الصرف» (money collected) is NOT held as awaiting: it is saved as «يتم التجهيز» with the request remembered', async () => {
+test('R4. a NEW «تم الصرف» order with zero available stock is not created as shipped', async () => {
   const w = world(0);
-  await w.saveOrder({ status: PAID_OUT, slots: [line('M1', 8)], invoice: 800, collected: 800, date: '2026-10-05' });
-  assert.equal(w.sales[0].order_status, PREPARED);
-  assert.equal(w.sales[0].requested_status, PAID_OUT);
-  assert.equal(w.sales[0].awaiting_stock, false);
+  await assert.rejects(() => w.saveOrder({ status: PAID_OUT, slots: [line('M1', 8)], invoice: 800, collected: 800, date: '2026-10-05', confirmTrim: true }), /لا يوجد مخزون متاح/);
+  assert.equal(w.sales.length, 0);
   assert.equal(w.collections.length, 0);
 });
 
@@ -487,11 +488,12 @@ for (const [label, slots] of [
   });
 }
 
-test('SHOT. actual shipment is still validated: a reservation (يتم التجهيز) of 40 cannot be shipped with 28 available / 60 held for others', async () => {
+test('SHOT. a reservation of 40 with every free piece held for other orders cannot ship at all (nothing shippable) and is left untouched', async () => {
   const { w, r } = await shotSetup();
   const y = await w.saveOrder({ order_number: 'Y', status: PREPARED, slots: sh(40), invoice: 4000 });
-  await w.saveOrder({ id: y.id, status: PAID_OUT, slots: sh(40), invoice: 4000, collected: 0 });
-  assert.equal(w.sales.find(s => s.id === y.id)!.order_status, PREPARED);                                 // not shipped
+  await assert.rejects(() => w.saveOrder({ id: y.id, status: PAID_OUT, slots: sh(40), invoice: 4000, collected: 0, confirmTrim: true }), /لا يوجد مخزون متاح/);
+  assert.equal(w.sales.find(s => s.id === y.id)!.order_status, PREPARED);
+  assert.equal(w.sales.find(s => s.id === y.id)!.model1_qty, 40);
   assert.equal(w.movements.filter(m => m.movement_type === 'SHIP').length, 1);                           // only X's original shipment
   assert.equal(w.allocation(r.id)!.reserved >= 0, true);
   invariant(w);
