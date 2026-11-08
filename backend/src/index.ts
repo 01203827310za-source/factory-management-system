@@ -18,6 +18,7 @@ import auditLogRouter from './routes/auditLog';
 import aiAssistantRouter from './routes/aiAssistant';
 import snapshotsRouter from './routes/snapshots';
 import seasonsRouter from './routes/seasons';
+import readExportRouter from './routes/readExport';
 import { authenticate, requireRoutePermission } from './middleware/auth';
 import { syncDefaultRbac } from './services/rbacService';
 import {
@@ -46,6 +47,9 @@ app.use(morgan(process.env.NODE_ENV === 'development' ? 'dev' : 'combined'));
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// Read-only export, protected by its own key (READ_EXPORT_KEY); off when unset.
+app.use('/api/read-export', readExportRouter);
 
 app.use('/api', (req, res, next) => {
   if (req.path === '/auth/login') return next();
