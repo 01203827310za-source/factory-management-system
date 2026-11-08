@@ -19,6 +19,7 @@ import aiAssistantRouter from './routes/aiAssistant';
 import snapshotsRouter from './routes/snapshots';
 import seasonsRouter from './routes/seasons';
 import readExportRouter from './routes/readExport';
+import assistantWriteRouter from './routes/assistantWrite';
 import { authenticate, requireRoutePermission } from './middleware/auth';
 import { syncDefaultRbac } from './services/rbacService';
 import {
@@ -50,6 +51,8 @@ app.get('/api/health', (_req, res) => {
 
 // Read-only export, protected by its own key (READ_EXPORT_KEY); off when unset.
 app.use('/api/read-export', readExportRouter);
+// Two-step write bridge for the assistant (ASSISTANT_WRITE_KEY); off when unset.
+app.use('/api/assistant-write', assistantWriteRouter);
 
 app.use('/api', (req, res, next) => {
   if (req.path === '/auth/login') return next();
