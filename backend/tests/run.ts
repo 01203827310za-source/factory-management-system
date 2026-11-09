@@ -13,5 +13,6 @@ import './monthlySales.test';
 import './shortageOrders.test';
 import './readyStockViews.test';
 import './shipmentTrim.test';
+import './stockReconciliation.test';
 
 runAll();

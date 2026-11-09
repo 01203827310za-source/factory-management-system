@@ -18,7 +18,8 @@ import prisma from '../lib/prisma';
 import { authenticate, requireManager } from '../middleware/auth';
 import { logAudit } from '../services/auditHelper';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
-import { resyncReservations } from '../services/reservationSync';
+import { lockStock, resyncReservations } from '../services/reservationSync';
+import { isValidCount, planReconciliation } from '../services/stockReconciliation';
 import { computeStockPositions, effectiveSales, outsideSlots } from '../services/readyStockPositions';
 import { textsMatch } from '../utils/textMatch';
 import { cairoToday } from '../services/charity';
@@ -204,6 +205,117 @@ router.put('/:id/production/:prodId', requireManager, async (req: Request, res: 
   } catch (err) {
     if (err instanceof Error && err.message === 'CONCURRENT') return res.status(409).json({ message: 'تم تعديل هذا السجل من مستخدم آخر — أعد التحميل' });
     console.error(err); return res.status(500).json({ message: 'خطأ في تصحيح الإنتاج' });
+  }
+});
+
+// ───────── physical inventory reconciliation («تسوية المخزون») ─────────
+type Db = Pick<Prisma.TransactionClient, 'readyStock' | 'modelProduction' | 'sale' | 'returnItem'>;
+
+/** Current physical balance (raw, may be < 0 only if shipments already exceed supply), reservations, and who would lose what for a given count. */
+async function reconState(db: Db, seasonId: number, rowId: number, counted?: number) {
+  const where = seasonWhere(seasonId);
+  const [readyStock, modelProds, sales, returns_] = await Promise.all([
+    db.readyStock.findMany({ where, orderBy: { id: 'asc' } }), db.modelProduction.findMany({ where }), db.sale.findMany({ where }), db.returnItem.findMany({ where }),
+  ]);
+  const ctx = computeStockPositions({ readyStock, modelProds, sales, returns_ });
+  const idx = readyStock.findIndex(r => r.id === rowId);
+  if (idx < 0) return null;
+  const pos = ctx.positions[idx];
+  const shippedOut = effectiveSales(sales).flatMap(sl => outsideSlots(sl)).filter(sl => ctx.keyOf(sl.code, sl.color) === pos.key).reduce((n, sl) => n + sl.qty, 0);
+  const previous = pos.supply - shippedOut;                       // raw physical balance (the table shows it clamped at 0)
+  const plan = planReconciliation({ previousPhysical: previous, reserved: pos.reserved, counted: counted ?? previous });
+  // which orders would hold less after the count (derived, FIFO) — listed so the decision is informed; nothing is changed here
+  const orderHolds = (c: typeof ctx) => new Map([...c.allocations.values()].map(a => [a.sale_id, a.slots.filter(sl => c.keyOf(sl.code, sl.color) === pos.key).reduce((n, sl) => n + sl.reserved, 0)]));
+  const afterCtx = computeStockPositions({ readyStock: readyStock.map(r => (r.id === rowId ? { ...r, opening_balance: r.opening_balance + plan.difference } : r)), modelProds, sales, returns_ });
+  const before = orderHolds(ctx); const after = orderHolds(afterCtx);
+  const saleById = new Map(sales.map(s => [s.id, s]));
+  const affected = [...before.entries()].filter(([sid, n]) => (after.get(sid) ?? 0) !== n).map(([sid, n]) => ({
+    sale_id: sid, order_number: saleById.get(sid)?.order_number ?? '', client: saleById.get(sid)?.client ?? '', reserved_before: n, reserved_after: after.get(sid) ?? 0,
+  }));
+  return { row: readyStock[idx], pos, plan, affected };
+}
+
+router.get('/:id/reconcile-preview', async (req: Request, res: Response) => {
+  try {
+    const { seasonId, id, row } = await loadRow(req);
+    if (!row) return res.status(404).json({ message: 'الصنف غير موجود' });
+    const counted = req.query.counted === undefined ? undefined : Number(req.query.counted);
+    if (counted !== undefined && !isValidCount(counted)) return res.status(400).json({ message: 'الكمية المعدودة يجب أن تكون عددًا صحيحًا صفرًا أو أكبر' });
+    const st = await reconState(prisma, seasonId, id, counted);
+    if (!st) return res.status(404).json({ message: 'الصنف غير موجود' });
+    return res.json({ stock_id: id, model_code: row.model_code, product_name: row.product_name, color: row.color, primary: st.pos.primary, ...st.plan, affected_orders: st.affected,
+      can_override_conflict: has(req, 'ready_stock.delete') });
+  } catch (err) { console.error(err); return res.status(500).json({ message: 'خطأ في حساب التسوية' }); }
+});
+
+router.get('/:id/adjustments', async (req: Request, res: Response) => {
+  try {
+    const { seasonId, id, row } = await loadRow(req);
+    if (!row) return res.status(404).json({ message: 'الصنف غير موجود' });
+    const rows = await prisma.stockAdjustment.findMany({ where: { season_id: seasonId, stock_id: id }, orderBy: { id: 'desc' }, take: 100 });
+    return res.json(rows);
+  } catch (err) { console.error(err); return res.status(500).json({ message: 'خطأ في جلب سجل التسويات' }); }
+});
+
+router.post('/:id/reconcile', requireManager, async (req: Request, res: Response) => {
+  try {
+    if (!has(req, 'ready_stock.edit')) return forbid(res, 'ready_stock.edit');
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const counted = typeof body.counted === 'number' ? body.counted : Number(body.counted);
+    if (!isValidCount(counted)) return res.status(400).json({ message: 'الكمية المعدودة يجب أن تكون عددًا صحيحًا صفرًا أو أكبر' });
+    const reason = typeof body.reason === 'string' ? body.reason.trim().slice(0, 200) : '';
+    if (reason.length < 3) return res.status(400).json({ message: 'سبب التسوية مطلوب' });
+    const notes = typeof body.notes === 'string' ? body.notes.trim().slice(0, 500) : '';
+    if (!keyOk(body.idempotency_key)) return res.status(400).json({ message: 'معرّف العملية (idempotency_key) مطلوب' });
+    const key = body.idempotency_key;
+    const { seasonId, id, row } = await loadRow(req);
+    if (!row) return res.status(404).json({ message: 'الصنف غير موجود' });
+
+    const dup = await prisma.stockAdjustment.findUnique({ where: { idempotency_key: key } });
+    if (dup) return res.status(200).json({ duplicate: true, adjustment: dup });
+
+    type Plan = ReturnType<typeof planReconciliation>;
+    type Outcome = { code: 'ok'; adjustment: Awaited<ReturnType<typeof prisma.stockAdjustment.create>> } | { code: 'none'; plan: Plan }
+      | { code: 'conflict'; plan: Plan; affected: { order_number: string; client: string; reserved_before: number; reserved_after: number }[] }
+      | { code: 'duplicate_card' };
+    const outcome: Outcome = await prisma.$transaction(async (tx) => {
+      await lockStock(tx, seasonId);
+      const st = await reconState(tx, seasonId, id, counted);
+      if (!st) throw new Error('GONE');
+      if (!st.pos.primary) return { code: 'duplicate_card' as const };
+      if (st.plan.difference === 0) return { code: 'none' as const, plan: st.plan };
+      const override = body.confirm_shortfall === true && has(req, 'ready_stock.delete');
+      if (st.plan.reservation_conflict && !override) return { code: 'conflict' as const, plan: st.plan, affected: st.affected };
+      await tx.readyStock.update({ where: { id }, data: { opening_balance: { increment: st.plan.difference } } });
+      const adjustment = await tx.stockAdjustment.create({ data: {
+        season_id: seasonId, stock_id: id, model_code: row.model_code, color: row.color, previous_physical: st.plan.previous_physical, counted_physical: counted,
+        difference: st.plan.difference, reserved_at_time: st.plan.reserved, uncovered_reservations: st.plan.uncovered_reservations,
+        conflict_acknowledged: st.plan.reservation_conflict, reason, notes, idempotency_key: key, created_by: req.user?.username ?? '',
+      } });
+      return { code: 'ok' as const, adjustment };
+    });
+
+    if (outcome.code === 'duplicate_card') return res.status(400).json({ message: 'هذا الكارت مكرر لنفس الموديل واللون — سوِّ الكارت الأساسي (الأول) الذي يحمل الرصيد' });
+    if (outcome.code === 'none') return res.status(200).json({ changed: false, plan: outcome.plan, message: 'الكمية المعدودة تساوي الرصيد الحالي — لا توجد تسوية' });
+    if (outcome.code === 'conflict') {
+      const authorised = has(req, 'ready_stock.delete');
+      return res.status(409).json({
+        code: 'RESERVATION_CONFLICT', plan: outcome.plan, affected_orders: outcome.affected, can_override_conflict: authorised,
+        message: `الكمية المعدودة (${counted}) أقل من المحجوز لأوردرات (${outcome.plan.reserved}). ${authorised ? 'يلزم قرارك الصريح لإتمام التسوية: ستتحول الأوردرات الأحدث إلى ناقصة دون تغيير كمياتها أو حالاتها.' : 'التسوية تحتاج مستخدمًا مخوّلًا (صلاحية حذف المخزون) لأنها لا تغطي الحجوزات.'}`,
+      });
+    }
+    await resyncReservations(seasonId);
+    const adj = outcome.adjustment;
+    logAudit({ user: req.user, module: 'ReadyStock', action: 'UPDATE', record_id: id,
+      before_data: { physical: adj.previous_physical, reserved: adj.reserved_at_time }, after_data: { physical: adj.counted_physical, difference: adj.difference, conflict_acknowledged: adj.conflict_acknowledged, adjustment_id: adj.id },
+      description: `تسوية مخزون ${adj.model_code} (${adj.color || '—'}): الفعلي ${adj.previous_physical} ← المعدود ${adj.counted_physical} (الفرق ${adj.difference > 0 ? '+' : ''}${adj.difference}) — ${reason}${notes ? ` — ${notes}` : ''}${adj.conflict_acknowledged ? ` — بقرار صريح رغم أن الحجز ${adj.reserved_at_time} أكبر من المعدود` : ''}` });
+    return res.status(201).json({ duplicate: false, adjustment: adj });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      return res.status(200).json({ duplicate: true, adjustment: await prisma.stockAdjustment.findUnique({ where: { idempotency_key: String((req.body ?? {}).idempotency_key) } }) });
+    }
+    console.error(err);
+    return res.status(500).json({ message: 'خطأ في تسوية المخزون' });
   }
 });
 

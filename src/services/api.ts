@@ -259,7 +259,22 @@ export interface ProductionInfo {
   entries: { id: number; date: string; cut_number: number; status: string; qty_from_cutting: number; qty_received: number; wastage: number }[];
   cuts: { cut_number: number; color: string; total_pieces: number; description: string }[];
 }
+export interface ReconcilePreview {
+  stock_id: number; model_code: string; product_name: string; color: string; primary: boolean;
+  previous_physical: number; counted: number; difference: number; direction: 'increase' | 'decrease' | 'none';
+  reserved: number; available_before: number; available_after: number; uncovered_reservations: number; reservation_conflict: boolean;
+  affected_orders: { sale_id: number; order_number: string; client: string; reserved_before: number; reserved_after: number }[];
+  can_override_conflict: boolean;
+}
+export interface StockAdjustmentRecord {
+  id: number; model_code: string; color: string; previous_physical: number; counted_physical: number; difference: number;
+  reserved_at_time: number; uncovered_reservations: number; conflict_acknowledged: boolean; reason: string; notes: string; created_by: string; created_at: string;
+}
 export const readyStockApi = {
+  reconcilePreview: (id: number, counted?: number) => get<ReconcilePreview>(`/ready-stock/${id}/reconcile-preview${counted === undefined ? '' : `?counted=${counted}`}`),
+  getAdjustments: (id: number) => get<StockAdjustmentRecord[]>(`/ready-stock/${id}/adjustments`),
+  reconcile: (id: number, body: { counted: number; reason: string; notes?: string; idempotency_key: string; confirm_shortfall?: boolean }) =>
+    post<{ duplicate?: boolean; changed?: boolean; adjustment?: StockAdjustmentRecord; message?: string }>(`/ready-stock/${id}/reconcile`, body),
   getReservations: (id: number) => get<ReservationBreakdown>(`/ready-stock/${id}/reservations`),
   reconcileReservations: (id: number) => put<{ before: number; after: number; changed: boolean }>(`/ready-stock/${id}/reconcile-reservations`, {}),
   getProduction: (id: number) => get<ProductionInfo>(`/ready-stock/${id}/production`),

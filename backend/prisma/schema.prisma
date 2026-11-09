@@ -80,6 +80,7 @@ model Season {
   inventory_movements    InventoryMovement[]
   order_cancellations    OrderCancellation[]
   cash_counts            CashCount[]
+  stock_adjustments      StockAdjustment[]
   cash_adjustments       CashAdjustment[]
   ready_stock            ReadyStock[]
   fabric_warehouse       FabricWarehouse[]
@@ -785,4 +786,31 @@ model CashAdjustment {
 
   @@index([season_id, kind])
   @@map("cash_adjustments")
+}
+
+
+// ===== PHYSICAL INVENTORY RECONCILIATION (تسوية المخزون) =====
+// Append-only history of counts applied to a stock card. The difference is applied to the card's base balance (opening_balance) so every
+// derived figure (physical, available, shortages) follows; this table keeps what was there before and why. Never edited or deleted.
+model StockAdjustment {
+  id                    Int      @id @default(autoincrement())
+  season_id             Int
+  season                Season   @relation(fields: [season_id], references: [id])
+  stock_id              Int      // no FK: the history survives a deleted card
+  model_code            String
+  color                 String   @default("")
+  previous_physical     Int
+  counted_physical      Int
+  difference            Int
+  reserved_at_time      Int      @default(0)
+  uncovered_reservations Int     @default(0)
+  conflict_acknowledged Boolean  @default(false)
+  reason                String
+  notes                 String   @default("")
+  idempotency_key       String   @unique
+  created_by            String   @default("")
+  created_at            DateTime @default(now())
+
+  @@index([season_id, stock_id])
+  @@map("stock_adjustments")
 }

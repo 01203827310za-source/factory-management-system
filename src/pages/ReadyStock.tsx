@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { readyStockStore } from '../data/store';
-import { dashboardApi, printOrdersApi, readyStockApi, type ProductionInfo, type ReservationBreakdown } from '../services/api';
+import { dashboardApi, printOrdersApi, readyStockApi, type ProductionInfo, type ReconcilePreview, type ReservationBreakdown, type StockAdjustmentRecord } from '../services/api';
 import { matchesSearch, modelCodesOf, rowsForView, type StockView } from '../utils/readyStockViews';
 import type { MissingStockSummaryData } from '../types';
 import type { ReadyStock, ComputedReadyStock, PrintOrder } from '../types';
@@ -44,6 +44,19 @@ export default function ReadyStock() {
   const [shortage, setShortage] = useState<MissingStockSummaryData | null>(null);
   const [shortageError, setShortageError] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
+
+  // ── physical inventory reconciliation («تسوية المخزون») ──
+  const [reconOpen, setReconOpen] = useState(false);
+  const [reconId, setReconId] = useState(0);
+  const [reconCounted, setReconCounted] = useState('');
+  const [reconReason, setReconReason] = useState('');
+  const [reconNotes, setReconNotes] = useState('');
+  const [reconStep, setReconStep] = useState<1 | 2>(1);
+  const [reconPreview, setReconPreview] = useState<ReconcilePreview | null>(null);
+  const [reconHistory, setReconHistory] = useState<StockAdjustmentRecord[]>([]);
+  const [reconAck, setReconAck] = useState(false);
+  const [reconBusy, setReconBusy] = useState(false);
+  const [reconKey, setReconKey] = useState('');
 
   // ── reserved / production editing (nothing is typed into a balance: reservations come from orders, stock from production entries) ──
   const [resItem, setResItem] = useState<ComputedReadyStock | null>(null);
@@ -142,6 +155,44 @@ export default function ReadyStock() {
       setProdItem(null); await loadData();
     } catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'خطأ في حفظ الإنتاج'); setProdStep(1); }
     finally { setProdBusy(false); }
+  };
+
+  const openRecon = (stockId = 0) => {
+    setReconOpen(true); setReconId(stockId); setReconCounted(''); setReconReason(''); setReconNotes(''); setReconStep(1); setReconPreview(null); setReconAck(false); setReconKey(crypto.randomUUID());
+    setReconHistory([]);
+    if (stockId) readyStockApi.getAdjustments(stockId).then(setReconHistory).catch(() => setReconHistory([]));
+  };
+  const pickReconItem = (id: number) => {
+    setReconId(id); setReconCounted(''); setReconPreview(null); setReconStep(1); setReconAck(false); setReconHistory([]);
+    if (id) readyStockApi.getAdjustments(id).then(setReconHistory).catch(() => setReconHistory([]));
+  };
+  const reconCountedNum = reconCounted === '' ? NaN : Number(reconCounted);
+  const reconProblem = (): string => {
+    if (!reconId) return 'اختر الموديل واللون';
+    if (!Number.isInteger(reconCountedNum) || reconCountedNum < 0) return 'الكمية المعدودة يجب أن تكون عددًا صحيحًا صفرًا أو أكبر';
+    if (reconReason.trim().length < 3) return 'سبب التسوية مطلوب';
+    return '';
+  };
+  const reconNext = async () => {
+    const p = reconProblem();
+    if (p) { toast('error', p); return; }
+    try {
+      const pv = await readyStockApi.reconcilePreview(reconId, reconCountedNum);
+      if (!pv.primary) { toast('error', 'هذا الكارت مكرر لنفس الموديل واللون — اختر الكارت الأول الذي يحمل الرصيد'); return; }
+      if (pv.direction === 'none') { toast('error', 'الكمية المعدودة تساوي الرصيد الحالي — لا توجد تسوية'); return; }
+      setReconPreview(pv); setReconAck(false); setReconStep(2);
+    } catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'تعذر حساب التسوية'); }
+  };
+  const reconSave = async () => {
+    if (!reconPreview || reconBusy) return;
+    if (reconPreview.reservation_conflict && !reconAck) { toast('error', 'يلزم الإقرار الصريح لأن الكمية المعدودة لا تغطي الحجوزات'); return; }
+    setReconBusy(true);
+    try {
+      const r = await readyStockApi.reconcile(reconId, { counted: reconCountedNum, reason: reconReason.trim(), notes: reconNotes.trim() || undefined, idempotency_key: reconKey, confirm_shortfall: reconPreview.reservation_conflict ? true : undefined });
+      toast('success', r.duplicate ? 'هذه التسوية مسجّلة مسبقًا' : r.changed === false ? (r.message ?? 'لا تغيير') : 'تمت تسوية المخزون وتسجيلها في سجل التسويات');
+      setReconOpen(false); await loadData();
+    } catch (e: unknown) { toast('error', e instanceof Error ? e.message : 'خطأ في تسوية المخزون'); setReconStep(1); }
+    finally { setReconBusy(false); }
   };
 
   const openAdd = () => { setEditItem(null); setForm(emptyForm); setModalOpen(true); };
@@ -280,6 +331,7 @@ export default function ReadyStock() {
         <div><h1 className="text-2xl font-bold text-gray-800">📦 مخزن الاستوك الجاهز</h1><p className="text-sm text-gray-500">إدارة المخزون وإنتاج جديد مبيعات آلي</p></div>
         <div className="flex items-center gap-2">
           <button onClick={loadData} disabled={loading} className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg"><RefreshCw size={16} className={loading ? 'animate-spin' : ''} /></button>
+          {can('ready_stock.edit') && <button onClick={() => openRecon(0)} className="flex items-center gap-2 px-3 py-2 text-sm bg-amber-500 text-white rounded-lg hover:bg-amber-600" title="جرد فعلي وتسوية الفرق"><Download size={16} className="rotate-180" /> تسوية المخزون</button>}
           <button onClick={openHistory} className="flex items-center gap-2 px-3 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"><History size={16} /> سجل الطباعة</button>
           <button onClick={openPrintModal} className="flex items-center gap-2 px-3 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700"><Printer size={16} /> أمر طباعة</button>
           <button onClick={exportExcel} className="flex items-center gap-2 px-3 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700"><Download size={16} /> تصدير</button>
@@ -410,6 +462,86 @@ export default function ReadyStock() {
         </div>
       </div>
       )}
+
+      {/* Physical inventory reconciliation */}
+      <Modal isOpen={reconOpen} onClose={() => !reconBusy && setReconOpen(false)} title="تسوية المخزون (جرد فعلي)" size="lg">
+        <div className="space-y-4">
+          {reconStep === 1 && (
+            <>
+              <div>
+                <label className={lc}>الموديل واللون *</label>
+                <select className={ic} value={reconId} onChange={e => pickReconItem(parseInt(e.target.value) || 0)}>
+                  <option value={0}>اختر...</option>
+                  {items.map(i => <option key={i.id} value={i.id}>{i.model_code} — {i.product_name} — {i.color || 'بدون لون'} (الفعلي {i.actual_balance.toLocaleString('ar-EG')})</option>)}
+                </select>
+              </div>
+              {(() => {
+                const it = items.find(i => i.id === reconId);
+                if (!it) return null;
+                const diff = Number.isInteger(reconCountedNum) ? reconCountedNum - it.actual_balance : null;
+                return (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+                    <div className="bg-gray-50 rounded-lg p-3"><p className="text-xs text-gray-500">كود الموديل / الاسم</p><p className="font-bold">{it.model_code}</p><p className="text-xs text-gray-500">{it.product_name || '—'}</p></div>
+                    <div className="bg-gray-50 rounded-lg p-3"><p className="text-xs text-gray-500">اللون</p><p className="font-bold">{it.color || '—'}</p></div>
+                    <div className="bg-blue-50 rounded-lg p-3"><p className="text-xs text-blue-700">الرصيد الفعلي الحالي</p><p className="font-bold text-blue-800">{it.actual_balance.toLocaleString('ar-EG')}</p></div>
+                    <div className="bg-orange-50 rounded-lg p-3"><p className="text-xs text-orange-700">المحجوز (من الأوردرات)</p><p className="font-bold text-orange-800">{it.reserved_quantity.toLocaleString('ar-EG')}</p></div>
+                    <div className="md:col-span-4 bg-gray-50 rounded-lg p-3 flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-gray-600">فرق التسوية = المعدود − الرصيد الحالي</span>
+                      <strong className={diff === null ? 'text-gray-400' : diff > 0 ? 'text-emerald-700' : diff < 0 ? 'text-red-700' : 'text-gray-500'}>
+                        {diff === null ? '—' : diff === 0 ? 'لا فرق' : `${diff > 0 ? '+' : ''}${diff.toLocaleString('ar-EG')} — ${diff > 0 ? 'يزيد المخزون' : 'ينقص المخزون'}`}
+                      </strong>
+                    </div>
+                    {diff !== null && reconCountedNum < it.reserved_quantity && (
+                      <p className="md:col-span-4 text-sm text-red-800 bg-red-50 border border-red-200 rounded-lg p-3">⚠ الكمية المعدودة ({reconCountedNum.toLocaleString('ar-EG')}) أقل من المحجوز لأوردرات ({it.reserved_quantity.toLocaleString('ar-EG')}). لن تُلغى أي حجوزات تلقائيًا؛ ستحتاج قرارًا صريحًا من مستخدم مخوّل في الخطوة التالية.</p>
+                    )}
+                  </div>
+                );
+              })()}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div><label className={lc}>الكمية المعدودة فعليًا *</label><input type="number" min={0} className={ic} value={reconCounted} onChange={e => setReconCounted(e.target.value)} /></div>
+                <div><label className={lc}>سبب التسوية *</label><input className={ic} value={reconReason} onChange={e => setReconReason(e.target.value)} placeholder="مثال: جرد نهاية الشهر" /></div>
+                <div className="md:col-span-2"><label className={lc}>ملاحظات (اختياري)</label><input className={ic} value={reconNotes} onChange={e => setReconNotes(e.target.value)} /></div>
+              </div>
+              <p className="text-xs text-gray-500">التسوية لا تُسجَّل كبيع أو شراء أو إنتاج أو مرتجع، ولا تغيّر الحجوزات (تُشتق من الأوردرات). تُسجَّل في سجل التسويات وسجل التعديلات بالقيمة السابقة والجديدة والمستخدم.</p>
+              {reconId > 0 && (
+                <details className="text-xs text-gray-600"><summary className="cursor-pointer font-semibold">سجل تسويات هذا الصنف ({reconHistory.length.toLocaleString('ar-EG')})</summary>
+                  {reconHistory.length === 0 ? <p className="mt-1 text-gray-400">لا توجد تسويات سابقة</p> : (
+                    <div className="overflow-x-auto mt-2"><table className="w-full"><thead className="bg-gray-50"><tr>{['التاريخ', 'السابق', 'المعدود', 'الفرق', 'السبب', 'المستخدم'].map(h => <th key={h} className="px-2 py-1 text-right font-semibold">{h}</th>)}</tr></thead>
+                      <tbody>{reconHistory.map(h => <tr key={h.id} className="border-t border-gray-100"><td className="px-2 py-1">{h.created_at.slice(0, 10)}</td><td className="px-2 py-1">{h.previous_physical}</td><td className="px-2 py-1">{h.counted_physical}</td><td className={`px-2 py-1 font-bold ${h.difference > 0 ? 'text-emerald-700' : 'text-red-700'}`}>{h.difference > 0 ? '+' : ''}{h.difference}</td><td className="px-2 py-1">{h.reason}{h.conflict_acknowledged ? ' ⚠' : ''}</td><td className="px-2 py-1">{h.created_by}</td></tr>)}</tbody></table></div>
+                  )}
+                </details>
+              )}
+            </>
+          )}
+          {reconStep === 2 && reconPreview && (
+            <div className="space-y-3">
+              <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm space-y-1">
+                <p className="font-semibold text-amber-900">تأكيد التسوية</p>
+                <p>{reconPreview.model_code} ({reconPreview.color || '—'}): الرصيد الفعلي <strong>{reconPreview.previous_physical.toLocaleString('ar-EG')}</strong> ← المعدود <strong>{reconPreview.counted.toLocaleString('ar-EG')}</strong></p>
+                <p className={reconPreview.difference > 0 ? 'text-emerald-800 font-bold' : 'text-red-800 font-bold'}>{reconPreview.difference > 0 ? 'سيزيد المخزون بمقدار' : 'سينقص المخزون بمقدار'} {Math.abs(reconPreview.difference).toLocaleString('ar-EG')} قطعة</p>
+                <p>المحجوز: {reconPreview.reserved.toLocaleString('ar-EG')} (لا يتغير يدويًا) — المتاح: {reconPreview.available_before.toLocaleString('ar-EG')} ← {reconPreview.available_after.toLocaleString('ar-EG')}</p>
+                <p className="text-xs text-gray-600">السبب: {reconReason}{reconNotes ? ` — ${reconNotes}` : ''}</p>
+              </div>
+              {reconPreview.reservation_conflict && (
+                <div className="rounded-lg border border-red-300 bg-red-50 p-4 text-sm space-y-2">
+                  <p className="font-semibold text-red-900">⚠ الكمية المعدودة لا تغطي الحجوزات ({reconPreview.uncovered_reservations.toLocaleString('ar-EG')} قطعة غير مغطاة)</p>
+                  <p className="text-red-800">لن تُغيَّر كميات أو حالات أي أوردر؛ سيتحول الجزء غير المغطى (الأوردرات الأحدث أولًا) إلى «ناقص» في قائمة النواقص.</p>
+                  {reconPreview.affected_orders.length > 0 && <ul className="list-disc pr-5 text-xs text-red-900">{reconPreview.affected_orders.map(o => <li key={o.sale_id}>{o.order_number} — {o.client}: المحجوز {o.reserved_before} ← {o.reserved_after}</li>)}</ul>}
+                  {reconPreview.can_override_conflict
+                    ? <label className="flex items-start gap-2 text-xs"><input type="checkbox" checked={reconAck} onChange={e => setReconAck(e.target.checked)} className="mt-0.5" /><span>أُقرّ كمستخدم مخوّل بأن الجرد الفعلي لا يغطي الحجوزات وأوافق على إتمام التسوية.</span></label>
+                    : <p className="text-xs font-semibold text-red-900">لا تملك صلاحية إتمام تسوية لا تغطي الحجوزات — اطلب من مستخدم مخوّل.</p>}
+                </div>
+              )}
+            </div>
+          )}
+          <div className="flex justify-between gap-3 pt-3 border-t border-gray-200">
+            <button onClick={() => (reconStep === 2 ? setReconStep(1) : setReconOpen(false))} disabled={reconBusy} className="px-5 py-2 text-sm border border-gray-300 rounded-lg disabled:opacity-60">{reconStep === 2 ? 'رجوع' : 'إلغاء'}</button>
+            {reconStep === 1
+              ? <button onClick={reconNext} className="px-5 py-2 text-sm bg-[#1e3a5f] text-white rounded-lg hover:bg-[#16304d]">متابعة</button>
+              : <button onClick={reconSave} disabled={reconBusy || (!!reconPreview?.reservation_conflict && (!reconAck || !reconPreview.can_override_conflict))} className="px-5 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-60">{reconBusy ? 'جارٍ الحفظ...' : 'تأكيد وحفظ التسوية'}</button>}
+          </div>
+        </div>
+      </Modal>
 
       {/* Reserved quantity: derived from orders — shown, explained and reconciled, never typed over */}
       <Modal isOpen={!!resItem} onClose={() => setResItem(null)} title={resItem ? `الحجز — ${resItem.model_code} ${resItem.color || ''}` : 'الحجز'} size="lg">
