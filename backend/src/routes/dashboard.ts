@@ -3,6 +3,7 @@ import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate } from '../middleware/auth';
 import { FuzzyKeyIndex } from '../utils/textMatch';
+import { computeFabricPositions } from '../services/fabricPositions';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
 import { computeDashboardCashFlow } from '../services/financialMetrics';
 import { STATUS_CANCELED, STATUS_RESERVED, computeStockPositions, hasLineReturns, holdsGoodsOutside, isStockDeducting, leavesStock, outsideSlots, valueStockRow } from '../services/readyStockPositions';
@@ -76,18 +77,10 @@ router.get('/', async (req: Request, res: Response) => {
     sales.forEach(s => { orderStatusCounts[s.order_status] = (orderStatusCounts[s.order_status] || 0) + 1; });
 
     const cuttingOrders = await prisma.cuttingOrder.findMany({ where: seasonWhere(seasonId) });
-    const fabricIndex = new FuzzyKeyIndex(['color', 'color']); // [material_type, color]
-    const fabricConsumed: Record<string, number> = {};
-    cuttingOrders.forEach(c => {
-      const key = fabricIndex.resolve([c.material_type, c.color]);
-      fabricConsumed[key] = (fabricConsumed[key] || 0) + c.kg_consumed;
-    });
     let fabricValue = 0;
     const fabricItems: Array<{ material_type: string; color: string; available_qty: number; unit_cost: number; total: number }> = [];
-    fabric.forEach(f => {
-      const consumed = fabricConsumed[fabricIndex.resolve([f.material_type, f.color])] || 0;
-      const available = Math.max(0, f.qty_in - consumed);
-      const wac = f.avg_cost_per_kg > 0 ? f.avg_cost_per_kg : f.cost_per_kg;
+    computeFabricPositions(fabric, cuttingOrders).forEach(({ row: f, available: bal, unitCost: wac }) => {
+      const available = Math.max(0, bal);
       const total = available * wac;
       fabricValue += total;
       if (total !== 0) {

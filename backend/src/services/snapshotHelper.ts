@@ -1,6 +1,7 @@
 import { effectiveSales } from './readyStockPositions';
 import prisma from '../lib/prisma';
 import { FuzzyKeyIndex } from '../utils/textMatch';
+import { computeFabricPositions } from './fabricPositions';
 import { holdsCollectedCash, leavesStock, outsideSlots, valueStockRow } from '../services/readyStockPositions';
 
 export type SnapshotData = {
@@ -59,19 +60,7 @@ export async function computeSnapshot(seasonId: number): Promise<SnapshotData> {
     dispatchedUncollected +
     clientAccts.reduce((s, ca) => s + Math.max(0, ca.remaining), 0);
 
-  const fabricIndex = new FuzzyKeyIndex(['color', 'color']); // [material_type, color]
-  const fabricConsumed: Record<string, number> = {};
-  cuttingOrders.forEach(c => {
-    const key = fabricIndex.resolve([c.material_type, c.color]);
-    fabricConsumed[key] = (fabricConsumed[key] || 0) + c.kg_consumed;
-  });
-  let fabricValue = 0;
-  fabric.forEach(f => {
-    const consumed  = fabricConsumed[fabricIndex.resolve([f.material_type, f.color])] || 0;
-    const available = Math.max(0, f.qty_in - consumed);
-    const wac       = f.avg_cost_per_kg > 0 ? f.avg_cost_per_kg : f.cost_per_kg;
-    fabricValue    += available * wac;
-  });
+  const fabricValue = computeFabricPositions(fabric, cuttingOrders).reduce((s, p) => s + p.value, 0);
 
   const modelIndex = new FuzzyKeyIndex(['model', 'color']); // [model_code, color]
   const newProd: Record<string, number> = {};

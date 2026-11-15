@@ -4,6 +4,7 @@ import prisma from '../lib/prisma';
 import { holdsCollectedCash, leavesStock, outsideSlots } from '../services/readyStockPositions';
 import { authenticate } from '../middleware/auth';
 import { FuzzyKeyIndex } from '../utils/textMatch';
+import { computeFabricPositions } from '../services/fabricPositions';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
 
 const router = Router();
@@ -54,16 +55,9 @@ router.get('/', async (req: Request, res: Response) => {
     const cashAvailable = totalIn - totalOut;
 
     const cuttingOrders = await prisma.cuttingOrder.findMany({ where: seasonWhere(seasonId) });
-    const fabricIndex = new FuzzyKeyIndex(['color', 'color']); // [material_type, color]
-    const fabricConsumed: Record<string, number> = {};
-    cuttingOrders.forEach(c => {
-      const key = fabricIndex.resolve([c.material_type, c.color]);
-      fabricConsumed[key] = (fabricConsumed[key] || 0) + c.kg_consumed;
-    });
     let fabricValue = 0;
-    fabric.forEach(f => {
-      const consumed = fabricConsumed[fabricIndex.resolve([f.material_type, f.color])] || 0;
-      fabricValue += Math.max(0, f.qty_in - consumed) * f.cost_per_kg;
+    computeFabricPositions(fabric, cuttingOrders).forEach(({ row: f, available }) => {
+      fabricValue += Math.max(0, available) * f.cost_per_kg;
     });
 
     const modelProds = await prisma.modelProduction.findMany({ where: seasonWhere(seasonId) });

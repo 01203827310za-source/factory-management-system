@@ -5,6 +5,7 @@ import { authenticate } from '../middleware/auth';
 import { computeFinancialSummary } from '../services/financialMetrics';
 import { holdsCollectedCash, leavesStock, outsideSlots, valueStockRow } from '../services/readyStockPositions';
 import { FuzzyKeyIndex } from '../utils/textMatch';
+import { computeFabricPositions } from '../services/fabricPositions';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
 
 const router = Router();
@@ -61,18 +62,8 @@ function computeCapitalSnapshot(db: AllData, upToDate: string) {
     stockValue += valueStockRow(actual, rs.reserved_quantity, rs.cost_per_piece).physicalValue;
   });
 
-  const fabricIndex = new FuzzyKeyIndex(['color', 'color']); // [material_type, color]
-  const consumed: Record<string, number> = {};
-  cuttingOrders.filter(c => c.date <= upToDate).forEach(c => {
-    const key = fabricIndex.resolve([c.material_type, c.color]);
-    consumed[key] = (consumed[key] || 0) + c.kg_consumed;
-  });
-  let fabricValue = 0;
-  fabric.filter(f => f.date <= upToDate).forEach(f => {
-    const avail = Math.max(0, f.qty_in - (consumed[fabricIndex.resolve([f.material_type, f.color])] || 0));
-    const wac = f.avg_cost_per_kg > 0 ? f.avg_cost_per_kg : f.cost_per_kg;
-    fabricValue += avail * wac;
-  });
+  const fabricValue = computeFabricPositions(fabric.filter(f => f.date <= upToDate), cuttingOrders.filter(c => c.date <= upToDate))
+    .reduce((s, p) => s + p.value, 0);
 
   let accValue = 0;
   accessories.filter(a => a.date <= upToDate).forEach(a => {
@@ -166,18 +157,10 @@ router.get('/', async (req: Request, res: Response) => {
     const totalReservedQty = stockDetails.reduce((s, x) => s + x.reserved, 0);
     const lowStock         = stockDetails.filter(x => x.available >= 0 && x.available < 10);
 
-    const fabricIndexAll = new FuzzyKeyIndex(['color', 'color']); // [material_type, color]
-    const fabricConsumedAll: Record<string, number> = {};
-    cuttingOrders.forEach(c => {
-      const key = fabricIndexAll.resolve([c.material_type, c.color]);
-      fabricConsumedAll[key] = (fabricConsumedAll[key] || 0) + c.kg_consumed;
-    });
     let fabricValue = 0; let fabricBalanceKg = 0;
-    fabric.forEach(f => {
-      const avail = Math.max(0, f.qty_in - (fabricConsumedAll[fabricIndexAll.resolve([f.material_type, f.color])] || 0));
-      const wac   = f.avg_cost_per_kg > 0 ? f.avg_cost_per_kg : f.cost_per_kg;
-      fabricValue    += avail * wac;
-      fabricBalanceKg += avail;
+    computeFabricPositions(fabric, cuttingOrders).forEach(p => {
+      fabricValue     += p.value;
+      fabricBalanceKg += Math.max(0, p.available);
     });
 
     let accessoriesValue = 0; let accessoriesBalance = 0;

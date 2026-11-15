@@ -15,6 +15,7 @@ import prisma from '../lib/prisma';
 import { authenticate } from '../middleware/auth';
 import { calcEmployeePayroll, round2 } from '../services/payrollCalc';
 import { FuzzyKeyIndex } from '../utils/textMatch';
+import { computeFabricPositions } from '../services/fabricPositions';
 import { getSeasonId, seasonWhere } from '../services/seasonContext';
 import { holdsCollectedCash, leavesStock, outsideSlots, valueStockRow } from '../services/readyStockPositions';
 
@@ -215,18 +216,11 @@ async function gatherSnapshot(seasonId: number) {
     .sort((a, b) => b.qty - a.qty);
 
   // ── Fabric warehouse (WAC cost) ────────────────────────────────────────────
-  const fabricIndex = new FuzzyKeyIndex(['color', 'color']); // [material_type, color]
-  const fabricConsumed: Record<string, number> = {};
-  cuttingOrders.forEach(c => {
-    const key = fabricIndex.resolve([c.material_type, c.color]);
-    fabricConsumed[key] = (fabricConsumed[key] || 0) + c.kg_consumed;
-  });
+  const fabricIndex = new FuzzyKeyIndex(['color', 'color']); // [material_type, color] — grouping of purchases below
   let fabricValue = 0;
   const fabricSummary: { type: string; color: string; qty_in: number; consumed: number; available_kg: number; avg_cost: number; value: number }[] = [];
-  fabric.forEach(f => {
-    const consumed  = fabricConsumed[fabricIndex.resolve([f.material_type, f.color])] || 0;
-    const available = Math.max(0, f.qty_in - consumed);
-    const wac       = f.avg_cost_per_kg > 0 ? f.avg_cost_per_kg : f.cost_per_kg;  // WAC, fallback to entry cost
+  computeFabricPositions(fabric, cuttingOrders).forEach(({ row: f, consumed, available: bal, unitCost: wac }) => {
+    const available = Math.max(0, bal);
     const value     = available * wac;
     fabricValue += value;
     fabricSummary.push({ type: f.material_type, color: f.color, qty_in: f.qty_in, consumed, available_kg: available, avg_cost: wac, value });

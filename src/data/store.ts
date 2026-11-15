@@ -127,20 +127,31 @@ export const fabricStore = {
 
   getComputed: async (): Promise<ComputedFabric[]> => {
     const [fabric, cutting] = await Promise.all([fabricApi.getAll(), cuttingApi.getAll()]);
+    // A colour can sit on several rows (two spellings, or a new purchase row): its cutting consumption is drawn
+    // ONCE across them, oldest row first — never subtracted in full from every row. Same rule as the server.
     const fabricIndex = new FuzzyKeyIndex(['color', 'color']); // [material_type, color]
-    const consumed: Record<string, number> = {};
+    const left: Record<string, number> = {};
     cutting.forEach(c => {
       const key = fabricIndex.resolve([c.material_type, c.color]);
-      consumed[key] = (consumed[key] || 0) + c.kg_consumed;
+      left[key] = (left[key] || 0) + (Number(c.kg_consumed) || 0);
     });
-    return fabric.map(f => {
-      const consumedQty = consumed[fabricIndex.resolve([f.material_type, f.color])] || 0;
-      return {
-        ...f,
-        qty_consumed: consumedQty,
-        available_balance: f.qty_in - consumedQty,
-      };
-    }) as ComputedFabric[];
+    const keyOf = new Map(fabric.map(f => [f.id, fabricIndex.resolve([f.material_type, f.color])] as const));
+    const ordered = [...fabric].sort((a, b) => a.id - b.id);
+    const newestOfKey: Record<string, number> = {};
+    ordered.forEach(f => { newestOfKey[keyOf.get(f.id)!] = f.id; });
+    const consumedOf: Record<number, number> = {};
+    ordered.forEach(f => {
+      const key = keyOf.get(f.id)!;
+      const remaining = left[key] || 0;
+      const take = newestOfKey[key] === f.id ? remaining : Math.min(Math.max(0, f.qty_in), remaining);
+      left[key] = remaining - take;
+      consumedOf[f.id] = take;
+    });
+    return fabric.map(f => ({
+      ...f,
+      qty_consumed: consumedOf[f.id] || 0,
+      available_balance: f.qty_in - (consumedOf[f.id] || 0),
+    })) as ComputedFabric[];
   },
 };
 
