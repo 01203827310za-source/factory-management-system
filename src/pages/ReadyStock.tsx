@@ -326,10 +326,10 @@ export default function ReadyStock() {
   const inventoryValue = printForm.qty_to_print * finalUnitCost;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 min-w-0">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div><h1 className="text-2xl font-bold text-gray-800">📦 مخزن الاستوك الجاهز</h1><p className="text-sm text-gray-500">إدارة المخزون وإنتاج جديد مبيعات آلي</p></div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button onClick={loadData} disabled={loading} className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg"><RefreshCw size={16} className={loading ? 'animate-spin' : ''} /></button>
           {can('ready_stock.edit') && <button onClick={() => openRecon(0)} className="flex items-center gap-2 px-3 py-2 text-sm bg-amber-500 text-white rounded-lg hover:bg-amber-600" title="جرد فعلي وتسوية الفرق"><Download size={16} className="rotate-180" /> تسوية المخزون</button>}
           <button onClick={openHistory} className="flex items-center gap-2 px-3 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"><History size={16} /> سجل الطباعة</button>
@@ -356,12 +356,12 @@ export default function ReadyStock() {
           ))}
         </div>
         {modelCodes.length > 0 && (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 min-w-0">
             <span className="text-xs text-gray-500 whitespace-nowrap">قائمة لكل كود:</span>
             {modelCodes.length > 12 && (
               <input value={modelSearch} onChange={e => setModelSearch(e.target.value)} placeholder="ابحث عن كود..." className="border border-gray-300 rounded-lg px-2 py-1 text-xs w-32" aria-label="بحث عن كود موديل" />
             )}
-            <div role="tablist" aria-label="أكواد الموديلات" className="flex gap-1.5 overflow-x-auto pb-1">
+            <div role="tablist" aria-label="أكواد الموديلات" className="flex gap-1.5 overflow-x-auto pb-1 min-w-0 flex-1">
               {visibleCodes.length === 0 && <span className="text-xs text-gray-400">لا يوجد كود مطابق</span>}
               {visibleCodes.map(m => (
                 <button key={m.code} role="tab" aria-selected={view === 'model' && model.toLowerCase() === m.code.toLowerCase()} type="button" onClick={() => { setView('model'); setModel(m.code); }}
