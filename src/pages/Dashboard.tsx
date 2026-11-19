@@ -343,12 +343,15 @@ export default function Dashboard() {
                 <tr className="border-t border-gray-100">
                   <td className="px-6 py-4 text-center text-emerald-700 font-bold text-lg">{metrics.total_in.toLocaleString('ar-EG')}</td>
                   <td className="px-6 py-4 text-center text-red-700 font-bold text-lg">{metrics.total_out.toLocaleString('ar-EG')}</td>
-                  <td className={`px-6 py-4 text-center font-bold text-lg ${metrics.net_profit >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
+                  <td className={`px-6 py-4 text-center font-bold text-lg ${(metrics.cash_on_hand ?? metrics.net_profit) >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
                     {canDetails ? (
                       <button type="button" onClick={() => setCashOpen(true)} title="عرض تقرير مطابقة الكاش" className="underline decoration-dotted underline-offset-4 hover:opacity-80">
-                        {metrics.net_profit.toLocaleString('ar-EG')}
+                        {(metrics.cash_on_hand ?? metrics.net_profit).toLocaleString('ar-EG')}
                       </button>
-                    ) : metrics.net_profit.toLocaleString('ar-EG')}
+                    ) : (metrics.cash_on_hand ?? metrics.net_profit).toLocaleString('ar-EG')}
+                    {(metrics.cash_adjustments ?? 0) !== 0 && (
+                      <span className="block text-[11px] font-medium text-gray-500">شامل تسويات جرد الكاش {(metrics.cash_adjustments ?? 0).toLocaleString('ar-EG')}</span>
+                    )}
                   </td>
                 </tr>
               </tbody>
@@ -358,7 +361,7 @@ export default function Dashboard() {
 
         {/* Summary Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <StatCard title="الكاش المتاح" value={metrics.cash_available} subtitle="الوارد الكلي − الديون − المصاريف" icon={<Wallet size={22} />} color={metrics.cash_available >= 0 ? 'green' : 'red'} />
+          <StatCard title="الكاش المتاح" value={metrics.cash_available} subtitle={`اللي معاك فعلًا (بعد تسويات الجرد) — الديون المتبقية ${(metrics.remaining_debts ?? 0).toLocaleString('ar-EG')} منفصلة`} icon={<Wallet size={22} />} color={metrics.cash_available >= 0 ? 'green' : 'red'} />
           <StatCard title="الفلوس اللي لنا برا" value={metrics.money_owed_to_us} subtitle="مبيعات غير مصروفة + حسابات عملاء" icon={<DollarSign size={22} />} color="purple" alert={metrics.money_owed_to_us > 0} />
           <StatCard title="إجمالي الحجوزات" value={metrics.total_reservations} subtitle="قيمة الأوردرات المحجوزة" icon={<ShoppingCart size={22} />} color="orange" alert={metrics.total_reservations > 0} />
         </div>
@@ -695,8 +698,8 @@ export default function Dashboard() {
 
               {detailCategory === 'cash' && (
                 <div className="space-y-1.5 text-sm">
-                  <div className="flex items-center justify-between px-4 py-2 bg-gray-50 rounded-lg"><span className="text-gray-600">الكاش المتاح (بعد خصم الديون المتبقية)</span><span className="font-bold">{fmt(metrics.cash_available)} ج.م</span></div>
-                  <p className="text-xs text-gray-400">الكاش الفعلي = إجمالي الوارد − إجمالي المنصرف (نفس رقم «الصافي» أعلى الصفحة). «الكاش المتاح» رقم مختلف لأنه يخصم الديون. المستحقات لدى العملاء وشركة الشحن غير داخلة هنا — تتحول إلى كاش فقط عند تحصيلها فعليًا، وتُحسب مرة واحدة في أحدهما.</p>
+                  <div className="flex items-center justify-between px-4 py-2 bg-gray-50 rounded-lg"><span className="text-gray-600">الكاش المتاح (اللي معاك فعلًا)</span><span className="font-bold">{fmt(metrics.cash_available)} ج.م</span></div>
+                  <p className="text-xs text-gray-400">الكاش المتاح = إجمالي الوارد − إجمالي المنصرف ± تسويات جرد الكاش (نفس رقم «الصافي» أعلى الصفحة). الديون المتبقية التزام منفصل ولا تُخصم منه. المستحقات لدى العملاء وشركة الشحن غير داخلة هنا — تتحول إلى كاش فقط عند تحصيلها فعليًا، وتُحسب مرة واحدة في أحدهما.</p>
                 </div>
               )}
 

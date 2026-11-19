@@ -50,6 +50,8 @@ router.get('/', async (req: Request, res: Response) => {
       prisma.readyStock.findMany({ where: seasonWhere(seasonId) }),
       prisma.accessoriesWarehouse.findMany({ where: seasonWhere(seasonId) }),
     ]);
+    // Cash-count reconciliations («تسوية جرد الكاش»): the owner's count is the truth for the money in hand.
+    const cashAdjustments = (await prisma.cashAdjustment.findMany({ where: seasonWhere(seasonId) })).reduce((n, a) => n + a.amount, 0);
 
     const totalSales = sales.reduce((s, sale) => s + sale.invoice_value, 0);
     const totalReservations = sales
@@ -68,7 +70,9 @@ router.get('/', async (req: Request, res: Response) => {
       sales.filter(s => s.order_status === 'لم يتم الصرف').reduce((s, sale) => s + Math.max(0, sale.remaining), 0) +
       dispatchedUncollected +
       clientAccts.reduce((s, ca) => s + Math.max(0, ca.remaining), 0);
-    const cashAvailable = totalIn - totalOut - remainingDebts;
+    // «الكاش المتاح» = the money actually in hand: every pound in − every pound out + cash-count reconciliations.
+    // Outstanding debts are an obligation shown on their own (remaining_debts), never subtracted from the cash in hand.
+    const cashAvailable = totalIn - totalOut + cashAdjustments;
 
     const salesByMarketer: Record<string, number> = {};
     sales.forEach(s => { salesByMarketer[s.marketer] = (salesByMarketer[s.marketer] || 0) + s.invoice_value; });
@@ -325,7 +329,7 @@ router.get('/', async (req: Request, res: Response) => {
     // paid out. It is NOT «الكاش المتاح» (that one also subtracts outstanding debts). Receivables are money that
     // has NOT been received, so they are counted separately and only become cash when collected — a deposit or a
     // shipping-company payment moves from "owed" to "cash", never both.
-    const cashOnHand = netProfit;
+    const cashOnHand = netProfit + cashAdjustments;
     const cashItems = [
       { key: 'expense_in', label: 'وارد المصروفات والإيرادات (رأس مال / إيراد / استلاف ...)', amount: cashFlow.expenseIn, direction: 'in' as const },
       { key: 'deposits', label: 'عربون مستلم من العملاء', amount: cashFlow.depositIn, direction: 'in' as const },
@@ -334,6 +338,7 @@ router.get('/', async (req: Request, res: Response) => {
       { key: 'expense_out', label: 'المصروفات والمنصرفات', amount: cashFlow.expenseOut, direction: 'out' as const },
       { key: 'debt_payments', label: 'سداد ديون', amount: cashFlow.debtOut, direction: 'out' as const },
       { key: 'refunds', label: 'مرتجعات (مبالغ مستردة)', amount: cashFlow.refundOut, direction: 'out' as const },
+      ...(cashAdjustments !== 0 ? [{ key: 'cash_adjustments', label: 'تسويات جرد الكاش', amount: Math.abs(cashAdjustments), direction: (cashAdjustments > 0 ? 'in' : 'out') as 'in' | 'out' }] : []),
     ];
     const totalCurrentAssets = cashOnHand + fabricValue + stockValue + accessoriesValue + cuttingInventoryValue + wipValue + moneyOwedToUs;
 
@@ -373,6 +378,7 @@ router.get('/', async (req: Request, res: Response) => {
       total_out: totalOut,
       cash_available: cashAvailable,
       cash_on_hand: cashOnHand,
+      cash_adjustments: cashAdjustments,
       cash_items: cashItems,
       money_owed_to_us: moneyOwedToUs,
       sales_by_marketer: salesByMarketer,

@@ -375,6 +375,8 @@ export interface DashboardMetrics {
   }[];
   /** Actual cash in the safe (= the top table's «الصافي»). Separate from cash_available. */
   cash_on_hand?: number;
+  /** Cash-count reconciliations («تسوية جرد الكاش») included in cash_on_hand / cash_available. */
+  cash_adjustments?: number;
   cash_items?: { key: string; label: string; amount: number; direction: 'in' | 'out' }[];
   pending_units?: number;
   /** Shortages grouped by model code + colour (same allocation as pending_orders). */

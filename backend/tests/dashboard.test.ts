@@ -34,7 +34,7 @@ async function callDashboard(data: Record<string, Row[]>, seasonId: number): Pro
     sale: model('sales'), expenseRevenue: model('expenses'), debt: model('debts'), clientAccount: model('clientAccts'),
     returnItem: model('returns'), paymentLog: model('paymentLogs'), fabricWarehouse: model('fabric'), readyStock: model('readyStock'),
     accessoriesWarehouse: model('accessories'), cuttingOrder: model('cutting'), modelPart: model('modelParts'),
-    modelProduction: model('modelProds'), inventoryMovement: model('movements'), clientAccountInvoice: model('clientInvoices'), orderCancellation: model('cancellations'),
+    modelProduction: model('modelProds'), inventoryMovement: model('movements'), clientAccountInvoice: model('clientInvoices'), orderCancellation: model('cancellations'), cashAdjustment: model('cashAdjustments'),
     financialSnapshot: { upsert: async () => ({}) },
   };
 
@@ -254,8 +254,7 @@ test('Dashboard cash: «الصافي» = total in − total out is the actual ca
 test('Dashboard cash: «الكاش الفعلي بالخزنة» stays separate from «الكاش المتاح»', async () => {
   const { w } = await cashWorld();
   const d = await callDashboard(dataOf(w, extras), 1);
-  assert.equal(d.cash_available, d.cash_on_hand - 3000);                        // «المتاح» also subtracts outstanding debts
-  assert.notEqual(d.cash_available, d.cash_on_hand);
+  assert.equal(d.cash_available, d.cash_on_hand);                               // «المتاح» = the money in hand; debts are shown separately
   assert.equal(d.total_current_assets - d.cash_on_hand, 90 * 600 + 7500);       // the asset total uses the actual cash, not «المتاح»
 });
 
@@ -424,4 +423,15 @@ test('Delayed-collections rule (frontend) equals the server receivable rule for 
   assert.equal(mod.exports.daysBetween('2026-10-01T23:30:00.000Z', '2026-10-11'), 10);
   assert.equal(mod.exports.daysBetween('2026-10-11', '2026-10-11'), 0);
   assert.equal(mod.exports.daysBetween('2026-10-20', '2026-10-11'), 0);
+});
+
+test('Dashboard cash: a cash-count reconciliation moves «الكاش المتاح» and «الصافي» to the counted money; debts stay separate', async () => {
+  const { w } = await cashWorld();
+  const base = await callDashboard(dataOf(w, extras), 1);
+  const withAdj = { ...dataOf(w, extras), cashAdjustments: [{ id: 1, season_id: 1, kind: 'adjustment', amount: -1234.5, entry_date: '2026-11-19', reason: 'جرد', idempotency_key: 'k', created_by: 'x', created_at: new Date() }] } as never;
+  const d = await callDashboard(withAdj, 1);
+  assert.equal(d.cash_on_hand, base.cash_on_hand - 1234.5);
+  assert.equal(d.cash_available, d.cash_on_hand);
+  assert.equal(d.cash_items.reduce((n, i) => n + (i.direction === 'in' ? i.amount : -i.amount), 0), d.cash_on_hand);
+  assert.equal(d.assets_reconciliation.reconciled, true);
 });

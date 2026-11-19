@@ -149,7 +149,7 @@ async function main() {
   const b = dash.body as { cash_on_hand: number; net_profit: number; total_in: number; total_out: number; cash_available: number; total_current_assets: number; assets_reconciliation: { components_sum: number } };
   check('Dashboard: «الكاش الفعلي» = «الصافي» = total in − total out', b.cash_on_hand === b.net_profit && b.cash_on_hand === b.total_in - b.total_out, { cash: b.cash_on_hand, net: b.net_profit });
   check('Dashboard: cash is inside current assets exactly once (total = components sum)', b.total_current_assets === b.assets_reconciliation.components_sum && b.total_current_assets >= b.cash_on_hand, b);
-  check('Dashboard: «الكاش الفعلي» is a different figure from «الكاش المتاح» only by outstanding debts', b.cash_available <= b.cash_on_hand, b);
+  check('Dashboard: «الكاش المتاح» is the money in hand (= «الكاش الفعلي»)', b.cash_available === b.cash_on_hand, b);
 
   // 3e) monthly charity: lock + payment + idempotency + overpay + reversal (uses the same advisory lock)
   const month = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' }).slice(0, 7);

@@ -52,7 +52,9 @@ router.get('/', async (req: Request, res: Response) => {
       dispatchedUncollected +
       clientAccts.reduce((s, ca) => s + Math.max(0, ca.remaining), 0);
 
-    const cashAvailable = totalIn - totalOut;
+    // Money actually in hand, including cash-count reconciliations (same rule as the Dashboard).
+    const cashAdjustments = (await prisma.cashAdjustment.findMany({ where: seasonWhere(seasonId) })).reduce((n, x) => n + x.amount, 0);
+    const cashAvailable = totalIn - totalOut + cashAdjustments;
 
     const cuttingOrders = await prisma.cuttingOrder.findMany({ where: seasonWhere(seasonId) });
     let fabricValue = 0;
