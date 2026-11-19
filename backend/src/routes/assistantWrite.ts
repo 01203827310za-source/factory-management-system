@@ -11,7 +11,9 @@
  *   2) GET /api/assistant-write/confirm?token=<token>
  *        -> runs the change once. Re-sending the same token never runs it again.
  *
- * ops: sale.create, sale.update, expense.create, expense.update, stock.reconcile
+ * ops: GET /propose with an unknown op lists them all. Create / update only — nothing is ever deleted (owner-approved scope:
+ *   every data-entry screen: sales, expenses, stock, production, returns, fabric, cutting, accessories, debts, client accounts,
+ *   payment log, marketers, fixed assets, print orders, charity, cash counts / adjustments, payroll entries).
  *   stock.reconcile = the «تسوية المخزون» screen action (POST /api/ready-stock/:id/reconcile): data { counted, reason, notes?, idempotency_key }.
  */
 import { Router, Request, Response, NextFunction } from 'express';
@@ -23,12 +25,43 @@ import { getEffectivePermissionKeys } from '../services/rbacService';
 
 const router = Router();
 
-const OPS: Record<string, { method: 'POST' | 'PUT'; path: string; suffix?: string; needsId: boolean; table: 'sale' | 'expenseRevenue' | 'readyStock' }> = {
-  'sale.create':    { method: 'POST', path: '/api/sales',    needsId: false, table: 'sale' },
-  'sale.update':    { method: 'PUT',  path: '/api/sales',    needsId: true,  table: 'sale' },
-  'expense.create': { method: 'POST', path: '/api/expenses', needsId: false, table: 'expenseRevenue' },
-  'expense.update': { method: 'PUT',  path: '/api/expenses', needsId: true,  table: 'expenseRevenue' },
-  'stock.reconcile': { method: 'POST', path: '/api/ready-stock', suffix: '/reconcile', needsId: true, table: 'readyStock' },
+type Table = 'sale' | 'expenseRevenue' | 'readyStock' | 'fabricWarehouse' | 'fabricPurchase' | 'accessoriesWarehouse' | 'cuttingOrder'
+  | 'modelProduction' | 'debt' | 'clientAccount' | 'returnItem' | 'fixedAsset' | 'employee' | 'attendance' | 'salaryAdjustment' | null;
+type OpDef = { method: 'POST' | 'PUT'; path: string; suffix?: string; needsId: boolean; table: Table };
+
+// Create / update only — the bridge has no delete. Each op calls the same route the screen uses, so the
+// route's own validation, stock / ledger side effects and the assistant user's permissions all apply.
+const crud = (name: string, path: string, table: Table): Record<string, OpDef> => ({
+  [`${name}.create`]: { method: 'POST', path, needsId: false, table: null },
+  [`${name}.update`]: { method: 'PUT', path, needsId: true, table },
+});
+const OPS: Record<string, OpDef> = {
+  ...crud('sale', '/api/sales', 'sale'),
+  ...crud('expense', '/api/expenses', 'expenseRevenue'),
+  'stock.reconcile':   { method: 'POST', path: '/api/ready-stock', suffix: '/reconcile', needsId: true, table: 'readyStock' },
+  'stock.production':  { method: 'POST', path: '/api/ready-stock', suffix: '/production', needsId: true, table: 'readyStock' },
+  ...crud('stock_card', '/api/ready-stock', 'readyStock'),
+  ...crud('production', '/api/model-prod', 'modelProduction'),
+  ...crud('return', '/api/returns', 'returnItem'),
+  ...crud('fabric', '/api/fabric', 'fabricWarehouse'),
+  ...crud('fabric_purchase', '/api/fabric-purchases', 'fabricPurchase'),
+  ...crud('accessory', '/api/accessories', 'accessoriesWarehouse'),
+  ...crud('cutting', '/api/cutting', 'cuttingOrder'),
+  ...crud('debt', '/api/debts', 'debt'),
+  'debt.payment':      { method: 'POST', path: '/api/debts', suffix: '/payments', needsId: true, table: 'debt' },
+  ...crud('client_account', '/api/client-accounts', 'clientAccount'),
+  'client_account.payment': { method: 'POST', path: '/api/client-accounts', suffix: '/payments', needsId: true, table: 'clientAccount' },
+  'client_account.invoice': { method: 'POST', path: '/api/client-accounts', suffix: '/invoices', needsId: true, table: 'clientAccount' },
+  'payment_log.create':     { method: 'POST', path: '/api/payment-log', needsId: false, table: null },
+  'marketer.create':        { method: 'POST', path: '/api/marketers', needsId: false, table: null },
+  ...crud('fixed_asset', '/api/fixed-assets', 'fixedAsset'),
+  'print_order.create':     { method: 'POST', path: '/api/print-orders', needsId: false, table: null },
+  'charity.payment':        { method: 'POST', path: '/api/charity/payments', needsId: false, table: null },
+  'cash.count':             { method: 'POST', path: '/api/cash-report/counts', needsId: false, table: null },
+  'cash.adjustment':        { method: 'POST', path: '/api/cash-report/adjustments', needsId: false, table: null },
+  ...crud('employee', '/api/payroll/employees', 'employee'),
+  ...crud('attendance', '/api/payroll/attendance', 'attendance'),
+  ...crud('salary_adjustment', '/api/payroll/adjustments', 'salaryAdjustment'),
 };
 const TOKEN_TTL_MS = 30 * 60 * 1000;
 const AUDIT_MODULE = 'AssistantWrite';
@@ -116,12 +149,13 @@ router.get('/propose', async (req, res, next) => {
 
     let current: Record<string, unknown> | null = null;
     if (id) {
-      current = await (prisma as any)[def.table].findUnique({ where: { id } });
+      current = def.table ? await (prisma as any)[def.table].findUnique({ where: { id } }) : null;
       if (!current) return res.status(404).json({ message: 'Record not found' });
     }
     if (!(await assistantUser())) return res.status(409).json({ message: 'Assistant user is missing or inactive' });
 
-    const changes = current
+    // A PUT previews field-by-field changes; a POST on a parent record (payment, production, reconcile) adds a new entry.
+    const changes = current && def.method === 'PUT'
       ? Object.fromEntries(Object.entries(data).map(([k, v]) => [k, { from: current![k], to: v }]))
       : data;
 
