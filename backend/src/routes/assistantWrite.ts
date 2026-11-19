@@ -11,7 +11,8 @@
  *   2) GET /api/assistant-write/confirm?token=<token>
  *        -> runs the change once. Re-sending the same token never runs it again.
  *
- * ops: sale.create, sale.update, expense.create, expense.update
+ * ops: sale.create, sale.update, expense.create, expense.update, stock.reconcile
+ *   stock.reconcile = the «تسوية المخزون» screen action (POST /api/ready-stock/:id/reconcile): data { counted, reason, notes?, idempotency_key }.
  */
 import { Router, Request, Response, NextFunction } from 'express';
 import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
@@ -22,11 +23,12 @@ import { getEffectivePermissionKeys } from '../services/rbacService';
 
 const router = Router();
 
-const OPS: Record<string, { method: 'POST' | 'PUT'; path: string; needsId: boolean; table: 'sale' | 'expenseRevenue' }> = {
+const OPS: Record<string, { method: 'POST' | 'PUT'; path: string; suffix?: string; needsId: boolean; table: 'sale' | 'expenseRevenue' | 'readyStock' }> = {
   'sale.create':    { method: 'POST', path: '/api/sales',    needsId: false, table: 'sale' },
   'sale.update':    { method: 'PUT',  path: '/api/sales',    needsId: true,  table: 'sale' },
   'expense.create': { method: 'POST', path: '/api/expenses', needsId: false, table: 'expenseRevenue' },
   'expense.update': { method: 'PUT',  path: '/api/expenses', needsId: true,  table: 'expenseRevenue' },
+  'stock.reconcile': { method: 'POST', path: '/api/ready-stock', suffix: '/reconcile', needsId: true, table: 'readyStock' },
 };
 const TOKEN_TTL_MS = 30 * 60 * 1000;
 const AUDIT_MODULE = 'AssistantWrite';
@@ -156,7 +158,7 @@ router.get('/confirm', async (req, res, next) => {
       process.env.JWT_SECRET!,
       { expiresIn: '2m' },
     );
-    const path = def.needsId ? `${def.path}/${p.id}` : def.path;
+    const path = (def.needsId ? `${def.path}/${p.id}` : def.path) + (def.suffix ?? '');
     const result = await callApi(def.method, path, token, p.data, p.season_id);
 
     await prisma.auditLog.update({ where: { id: claim.id }, data: { description: `HTTP ${result.status}` } });
