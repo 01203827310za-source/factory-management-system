@@ -11,6 +11,12 @@ export interface Sale {
   model3_code: string; model3_qty: number; model3_color: string;
   model4_code: string; model4_qty: number; model4_color: string;
   model5_code: string; model5_qty: number; model5_color: string;
+  // Slots 6..10 (an order holds up to 10 model lines — see utils/saleLines).
+  model6_code?: string; model6_qty?: number; model6_color?: string;
+  model7_code?: string; model7_qty?: number; model7_color?: string;
+  model8_code?: string; model8_qty?: number; model8_color?: string;
+  model9_code?: string; model9_qty?: number; model9_color?: string;
+  model10_code?: string; model10_qty?: number; model10_color?: string;
   invoice_value: number;
   deposit_paid: number;
   deposit_receiver: string;
@@ -26,11 +32,17 @@ export interface Sale {
   awaiting_stock?: boolean;
   /** Pieces added while «لم يتم الصرف»: they count in the order (sales) but never in stock. Stock qty = qty − extra. */
   model1_extra_qty?: number; model2_extra_qty?: number; model3_extra_qty?: number; model4_extra_qty?: number; model5_extra_qty?: number;
+  model6_extra_qty?: number; model7_extra_qty?: number; model8_extra_qty?: number; model9_extra_qty?: number; model10_extra_qty?: number;
   model1_unreturned_qty?: number | null;
   model2_unreturned_qty?: number | null;
   model3_unreturned_qty?: number | null;
   model4_unreturned_qty?: number | null;
   model5_unreturned_qty?: number | null;
+  model6_unreturned_qty?: number | null;
+  model7_unreturned_qty?: number | null;
+  model8_unreturned_qty?: number | null;
+  model9_unreturned_qty?: number | null;
+  model10_unreturned_qty?: number | null;
   /** «يتم التجهيز» orders only: units really held in stock vs still to be produced / purchased. */
   fulfillment?: {
     requested: number; reserved: number; pending: number;

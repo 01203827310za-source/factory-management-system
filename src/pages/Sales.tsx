@@ -12,6 +12,10 @@ import { useToast } from '../components/Toast';
 import { Plus, Edit2, Trash2, Filter, Download, Search, UserPlus, Printer, ArrowLeftRight, RefreshCw, CheckSquare, XCircle, BookmarkPlus } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { RESERVED_STATUS, statusLabel } from '../utils/orderStatus';
+import { SALE_SLOTS, SALE_SLOT_COUNT, SALE_SLOTS_SHOWN, lastUsedSlot, saleLinesOf, filledLines, slotFields } from '../utils/saleLines';
+
+/** Pieces added while «لم يتم الصرف» that count in sales only (never reserved or deducted). */
+const extraPieces = (s: unknown) => saleLinesOf(s).reduce((n, l) => n + l.extra, 0);
 
 // Stored values. The reservation status is stored as 'تم الحجز' but shown as «يتم التجهيز» (see utils/orderStatus.ts).
 const ORDER_STATUSES: Sale['order_status'][] = ['تم الصرف', 'لم يتم الصرف', 'حساب عميل', RESERVED_STATUS, 'تم الإلغاء'];
@@ -102,16 +106,15 @@ setReadyStock(stock);
 
   const emptyForm = {
     order_number: '', marketer: marketers[0] || '', client: '', mobile: '',
-    model1_code: '', model1_qty: 0, model1_color: '',
-    model2_code: '', model2_qty: 0, model2_color: '',
-    model3_code: '', model3_qty: 0, model3_color: '',
-    model4_code: '', model4_qty: 0, model4_color: '',
-    model5_code: '', model5_qty: 0, model5_color: '',
+    ...slotFields(),
     invoice_value: 0, deposit_paid: 0, deposit_receiver: '',
     shipping_number: '', order_status: 'تم الصرف' as Sale['order_status'],
     delivery_method: DELIVERY_METHODS[0], warehouse: '', shipping_collected: 0, shipping_collected_date: '',
   };
   const [form, setForm] = useState(emptyForm);
+  // Slots beyond the default 5 that the user opened with «إضافة موديل»; an order that already uses more always shows them.
+  const [extraSlots, setExtraSlots] = useState(0);
+  const visibleSlots = Math.min(SALE_SLOT_COUNT, Math.max(SALE_SLOTS_SHOWN + extraSlots, lastUsedSlot(form)));
 
   const stockCodes = readyStock.map((s: any) => s.model_code);
 
@@ -129,12 +132,14 @@ readyStock.forEach((s: any) => {
   const openAdd = () => {
     setEditSale(null); setIsReservation(false);
     setShippingCollectedAuto(true); // status defaults to "تم الصرف" — track the remaining amount as it's typed
+    setExtraSlots(0);
     setForm({ ...emptyForm, marketer: marketers[0] || '', order_status: 'تم الصرف' });
     setModalOpen(true);
   };
   const openReservation = () => {
     setEditSale(null); setIsReservation(true);
     setShippingCollectedAuto(true);
+    setExtraSlots(0);
     setForm({ ...emptyForm, marketer: marketers[0] || '', order_status: 'تم الحجز' });
     setModalOpen(true);
   };
@@ -149,13 +154,11 @@ readyStock.forEach((s: any) => {
     // Already "تم الصرف"? Show its previously saved amount as-is (don't overwrite it).
     // Otherwise start in auto mode so switching the status to "تم الصرف" defaults it.
     setShippingCollectedAuto(sale.order_status !== 'تم الصرف');
+    // Keep every slot the order already uses on screen, so clearing one of them is saved too.
+    setExtraSlots(Math.max(0, lastUsedSlot(sale) - SALE_SLOTS_SHOWN));
     setForm({
       order_number: sale.order_number, marketer: sale.marketer, client: sale.client, mobile: sale.mobile,
-      model1_code: sale.model1_code, model1_qty: sale.model1_qty, model1_color: sale.model1_color,
-      model2_code: sale.model2_code, model2_qty: sale.model2_qty, model2_color: sale.model2_color,
-      model3_code: sale.model3_code, model3_qty: sale.model3_qty, model3_color: sale.model3_color,
-      model4_code: sale.model4_code, model4_qty: sale.model4_qty, model4_color: sale.model4_color,
-      model5_code: sale.model5_code, model5_qty: sale.model5_qty, model5_color: sale.model5_color,
+      ...slotFields(sale),
       invoice_value: sale.invoice_value, deposit_paid: sale.deposit_paid,
       deposit_receiver: sale.deposit_receiver || '',
       shipping_number: sale.shipping_number,
@@ -214,11 +217,8 @@ readyStock.forEach((s: any) => {
     }
     const data = {
       order_number: form.order_number, marketer: form.marketer, client: form.client, mobile: form.mobile,
-      model1_code: form.model1_code, model1_qty: form.model1_qty, model1_color: form.model1_color,
-      model2_code: form.model2_code, model2_qty: form.model2_qty, model2_color: form.model2_color,
-      model3_code: form.model3_code, model3_qty: form.model3_qty, model3_color: form.model3_color,
-      model4_code: form.model4_code, model4_qty: form.model4_qty, model4_color: form.model4_color,
-      model5_code: form.model5_code, model5_qty: form.model5_qty, model5_color: form.model5_color,
+      // Only the slots on screen are sent (an ordinary 5-line order sends exactly what it always did).
+      ...slotFields(form, visibleSlots),
       invoice_value: form.invoice_value, deposit_paid: form.deposit_paid,
       deposit_receiver: form.deposit_receiver,
       shipping_number: form.shipping_number, order_status: form.order_status,
@@ -309,8 +309,7 @@ await loadData();; setDeleteConfirm(null); toast('success', 'تم حذف الأ�
     <tr><td><strong>المخزن:</strong> ${s.warehouse}</td><td><strong>الحالة:</strong> ${statusLabel(s.order_status)}</td></tr></table>
     <h3 style="margin-top:25px">تفاصيل الموديلات:</h3>
     <table><tr><th>#</th><th>كود الموديل</th><th>العدد</th><th>اللون</th></tr>
-    ${[[s.model1_code,s.model1_qty,s.model1_color],[s.model2_code,s.model2_qty,s.model2_color],[s.model3_code,s.model3_qty,s.model3_color],[s.model4_code,s.model4_qty,s.model4_color],[s.model5_code,s.model5_qty,s.model5_color]]
-      .filter(r=>r[0]&&(Number(r[1])>0)).map((r,i)=>`<tr><td>${i+1}</td><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join('')}</table>
+    ${filledLines(s).map(l=>[l.code,l.qty,l.color]).map((r,i)=>`<tr><td>${i+1}</td><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join('')}</table>
     <table class="totals"><tr><td>قيمة الفاتورة</td><td>${s.invoice_value.toLocaleString('ar-EG')}</td></tr>
     <tr><td>العربون المدفوع</td><td style="color:#10b981">${s.deposit_paid.toLocaleString('ar-EG')}</td></tr>
     ${s.deposit_receiver?`<tr><td>الذي استلم العربون</td><td>${s.deposit_receiver}</td></tr>`:''}
@@ -349,11 +348,7 @@ await loadData();(returnForm);
     const ws = XLSX.utils.json_to_sheet(filtered.map(s => ({
       'رقم الأوردر': s.order_number, 'المسوق': s.marketer, 'العميل': s.client,
       'الموبايل': s.mobile, 'البوليصة': s.shipping_number,
-      'موديل 1': s.model1_code, 'عدد 1': s.model1_qty, 'لون 1': s.model1_color,
-      'موديل 2': s.model2_code, 'عدد 2': s.model2_qty, 'لون 2': s.model2_color,
-      'موديل 3': s.model3_code, 'عدد 3': s.model3_qty, 'لون 3': s.model3_color,
-      'موديل 4': s.model4_code, 'عدد 4': s.model4_qty, 'لون 4': s.model4_color,
-      'موديل 5': s.model5_code, 'عدد 5': s.model5_qty, 'لون 5': s.model5_color,
+      ...Object.fromEntries(saleLinesOf(s).filter(l => l.slot <= 5 || l.code).flatMap(l => [[`موديل ${l.slot}`, l.code], [`عدد ${l.slot}`, l.qty], [`لون ${l.slot}`, l.color]])),
       'قيمة الفاتورة': s.invoice_value, 'العربون': s.deposit_paid, 'مستلم العربون': s.deposit_receiver, 'المتبقي': s.remaining,
       'الحالة': statusLabel(s.order_status), 'التسليم': s.delivery_method,
       'المخزن': s.warehouse,
@@ -475,7 +470,7 @@ await loadData();(returnForm);
                   </td>
                   <td className="px-2 py-3 text-center">
                     <div className="flex flex-wrap justify-center gap-1">
-                      {[sale.model1_code&&`${sale.model1_code}(${sale.model1_qty})`,sale.model2_code&&`${sale.model2_code}(${sale.model2_qty})`,sale.model3_code&&`${sale.model3_code}(${sale.model3_qty})`,sale.model4_code&&`${sale.model4_code}(${sale.model4_qty})`,sale.model5_code&&`${sale.model5_code}(${sale.model5_qty})`].filter(Boolean).map((m,i)=>(
+                      {saleLinesOf(sale).filter(l=>l.code).map(l=>`${l.code}(${l.qty})`).map((m,i)=>(
                         <span key={i} className="inline-block bg-blue-100 text-blue-800 text-xs px-2 py-0.5 rounded-full">{m}</span>
                       ))}
                     </div>
@@ -508,8 +503,8 @@ await loadData();(returnForm);
                       sale.order_status === 'لم يتم الصرف' ? 'bg-yellow-100 text-yellow-700' :
                       'bg-amber-100 text-amber-700'
                     }`}>{statusLabel(sale.order_status)}</span>
-                    {(sale.order_status === 'لم يتم الصرف' || sale.order_status === 'تم الصرف') && ((sale.model1_extra_qty ?? 0) + (sale.model2_extra_qty ?? 0) + (sale.model3_extra_qty ?? 0) + (sale.model4_extra_qty ?? 0) + (sale.model5_extra_qty ?? 0)) > 0 && (
-                      <span className="block mt-1 text-[11px] font-semibold text-amber-700" title="قطع أُضيفت على الأوردر: تُحسب في المبيعات فقط ولا تُحجز ولا تُخصم من المخزون حتى الشحن">منها {((sale.model1_extra_qty ?? 0) + (sale.model2_extra_qty ?? 0) + (sale.model3_extra_qty ?? 0) + (sale.model4_extra_qty ?? 0) + (sale.model5_extra_qty ?? 0)).toLocaleString('ar-EG')} قطعة للمبيعات فقط (غير محجوزة)</span>
+                    {(sale.order_status === 'لم يتم الصرف' || sale.order_status === 'تم الصرف') && extraPieces(sale) > 0 && (
+                      <span className="block mt-1 text-[11px] font-semibold text-amber-700" title="قطع أُضيفت على الأوردر: تُحسب في المبيعات فقط ولا تُحجز ولا تُخصم من المخزون حتى الشحن">منها {extraPieces(sale).toLocaleString('ar-EG')} قطعة للمبيعات فقط (غير محجوزة)</span>
                     )}
                     {sale.order_status === 'لم يتم الصرف' && sale.awaiting_stock && (
                       <span className="block mt-1 text-[11px] font-semibold text-red-700" title="الحالة محفوظة كما اخترتها، ولم يُشحن شيء ولم يُخصم مخزون">بانتظار توفر المخزون</span>
@@ -607,10 +602,10 @@ await loadData();(returnForm);
           </div>
         </div>
 
-        {/* 5 Model Groups */}
+        {/* Model lines: 5 shown, up to SALE_SLOT_COUNT with «إضافة موديل» */}
         <div className="mt-4">
           <h3 className="font-bold text-gray-700 mb-3">الموديلات</h3>
-          {[1, 2, 3, 4, 5].map(i => (
+          {SALE_SLOTS.slice(0, visibleSlots).map(i => (
             <div key={i} className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3 p-3 bg-gray-50 rounded-lg">
               <div>
                 <label className={labelClass}>موديل {i}</label>
@@ -632,6 +627,12 @@ await loadData();(returnForm);
               </div>
             </div>
           ))}
+          {visibleSlots < SALE_SLOT_COUNT && (
+            <button type="button" onClick={() => setExtraSlots(n => n + 1)}
+              className="w-full mb-3 py-2 rounded-lg border-2 border-dashed border-gray-300 text-sm font-semibold text-gray-600 hover:border-blue-400 hover:text-blue-700">
+              + إضافة موديل ({visibleSlots} من {SALE_SLOT_COUNT})
+            </button>
+          )}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
@@ -771,7 +772,7 @@ await loadData();(returnForm);
                 <th className="px-3 py-2 text-right">#</th><th className="px-3 py-2 text-right">الكود</th><th className="px-3 py-2 text-center">العدد</th><th className="px-3 py-2 text-center">اللون</th>
               </tr></thead>
               <tbody>
-                {[invoiceSale.model1_code&&{c:invoiceSale.model1_code,q:invoiceSale.model1_qty,col:invoiceSale.model1_color},invoiceSale.model2_code&&{c:invoiceSale.model2_code,q:invoiceSale.model2_qty,col:invoiceSale.model2_color},invoiceSale.model3_code&&{c:invoiceSale.model3_code,q:invoiceSale.model3_qty,col:invoiceSale.model3_color},invoiceSale.model4_code&&{c:invoiceSale.model4_code,q:invoiceSale.model4_qty,col:invoiceSale.model4_color},invoiceSale.model5_code&&{c:invoiceSale.model5_code,q:invoiceSale.model5_qty,col:invoiceSale.model5_color}].filter(Boolean).map((m: any, i: number) => (
+                {saleLinesOf(invoiceSale).filter(l => l.code).map(l => ({ c: l.code, q: l.qty, col: l.color })).map((m, i) => (
                   <tr key={i} className="border-b border-gray-100">
                     <td className="px-3 py-2">{i + 1}</td><td className="px-3 py-2">{m.c}</td><td className="px-3 py-2 text-center">{m.q}</td><td className="px-3 py-2 text-center">{m.col}</td>
                   </tr>
@@ -781,7 +782,7 @@ await loadData();(returnForm);
             {(() => {
               // Derived from the order's status — the same rule the stock engine uses:
               // reserved = still in the factory; shipped = goods left (any status except reservation/cancelled).
-              const ordered = (invoiceSale.model1_qty || 0) + (invoiceSale.model2_qty || 0) + (invoiceSale.model3_qty || 0) + (invoiceSale.model4_qty || 0) + (invoiceSale.model5_qty || 0);
+              const ordered = saleLinesOf(invoiceSale).reduce((n, l) => n + l.qty, 0);
               // «يتم التجهيز»: only what really exists in stock is held (the server allocates it); the rest is pending.
               const prepared = invoiceSale.order_status === 'تم الحجز';
               const reserved = prepared ? (invoiceSale.fulfillment?.reserved ?? ordered) : 0;

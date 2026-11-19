@@ -5,18 +5,17 @@
 // reaches «تم الصرف», cleared if it leaves that status, and is the same date the monthly charity uses (collectionMonth).
 // Orders from before that column existed have no date; they fall back to the creation day and are counted as `estimated`.
 //
-// Pieces come straight from the order lines (model1..5_qty). Money, reservations, shipped-but-unpaid, prepared and cancelled
+// Pieces come straight from the order lines (model{i}_qty, every slot). Money, reservations, shipped-but-unpaid, prepared and cancelled
 // orders never contribute. The report is derived from the final order data on every request, so editing or cancelling an
 // order changes it with no extra bookkeeping. The orders carry no size field, so there is no size breakdown.
 // ============================================
 import type { Sale } from '@prisma/client';
 import { collectionMonth } from './charity';
+import { saleLinesOf } from '../utils/saleLines';
 
 /** ORDERED pieces per line (sales view): includes the sales-only extra that stock never sees. */
-const orderedSlots = (s: Sale) => ([
-  [s.model1_code, s.model1_qty, s.model1_color], [s.model2_code, s.model2_qty, s.model2_color], [s.model3_code, s.model3_qty, s.model3_color],
-  [s.model4_code, s.model4_qty, s.model4_color], [s.model5_code, s.model5_qty, s.model5_color],
-] as [string, number, string][]).filter(([c, q]) => c && q > 0).map(([code, qty, color]) => ({ code, qty, color }));
+const orderedSlots = (s: Sale) => saleLinesOf(s as unknown as Record<string, unknown>)
+  .filter(l => l.code && l.qty > 0).map(({ code, qty, color }) => ({ code, qty, color }));
 
 export const STATUS_PAID_OUT = 'تم الصرف';
 

@@ -14,5 +14,6 @@ import './shortageOrders.test';
 import './readyStockViews.test';
 import './shipmentTrim.test';
 import './stockReconciliation.test';
+import './saleSlots.test';
 
 runAll();

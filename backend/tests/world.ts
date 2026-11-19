@@ -201,9 +201,11 @@ export class World {
       invoice_value: 0, deposit_paid: 0, deposit_receiver: '', remaining: 0, shipping_number: '', order_status: '', delivery_method: '',
       mobile: '', warehouse: '', shipping_collected: 0, shipping_collected_date: null, created_at: new Date('2026-10-01T09:00:00Z'),
       model1_code: '', model1_qty: 0, model1_color: '', model2_code: '', model2_qty: 0, model2_color: '', model3_code: '', model3_qty: 0, model3_color: '',
-      model4_code: '', model4_qty: 0, model4_color: '', model5_code: '', model5_qty: 0, model5_color: '', cancel_disposition: null, requested_status: null, awaiting_stock: false,
-      model1_extra_qty: 0, model2_extra_qty: 0, model3_extra_qty: 0, model4_extra_qty: 0, model5_extra_qty: 0,
-      model1_unreturned_qty: null, model2_unreturned_qty: null, model3_unreturned_qty: null, model4_unreturned_qty: null, model5_unreturned_qty: null,
+      model4_code: '', model4_qty: 0, model4_color: '', model5_code: '', model5_qty: 0, model5_color: '',
+      model6_code: '', model6_qty: 0, model6_color: '', model7_code: '', model7_qty: 0, model7_color: '', model8_code: '', model8_qty: 0, model8_color: '', model9_code: '', model9_qty: 0, model9_color: '', model10_code: '', model10_qty: 0, model10_color: '',
+      cancel_disposition: null, requested_status: null, awaiting_stock: false,
+      model1_extra_qty: 0, model2_extra_qty: 0, model3_extra_qty: 0, model4_extra_qty: 0, model5_extra_qty: 0, model6_extra_qty: 0, model7_extra_qty: 0, model8_extra_qty: 0, model9_extra_qty: 0, model10_extra_qty: 0,
+      model1_unreturned_qty: null, model2_unreturned_qty: null, model3_unreturned_qty: null, model4_unreturned_qty: null, model5_unreturned_qty: null, model6_unreturned_qty: null, model7_unreturned_qty: null, model8_unreturned_qty: null, model9_unreturned_qty: null, model10_unreturned_qty: null,
     });
     // Same rule as the routes: «يتم التجهيز» is always accepted; goods leaving the factory must exist
     // and not be held for other orders (only checked where the shipped quantity goes UP).

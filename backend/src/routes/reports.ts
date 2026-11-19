@@ -1,4 +1,5 @@
 import { effectiveSales } from '../services/readyStockPositions';
+import { saleLinesOf } from '../utils/saleLines';
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate } from '../middleware/auth';
@@ -119,9 +120,7 @@ router.get('/', async (req: Request, res: Response) => {
 
     const modelQtyMap: Record<string, number> = {};
     salesInRange.forEach(s => {
-      [{ c: s.model1_code, q: s.model1_qty }, { c: s.model2_code, q: s.model2_qty },
-       { c: s.model3_code, q: s.model3_qty }, { c: s.model4_code, q: s.model4_qty },
-       { c: s.model5_code, q: s.model5_qty }].forEach(({ c, q }) => {
+      saleLinesOf(s as unknown as Record<string, unknown>).forEach(({ code: c, qty: q }) => {
         if (c && q > 0) modelQtyMap[c] = (modelQtyMap[c] || 0) + q;
       });
     });

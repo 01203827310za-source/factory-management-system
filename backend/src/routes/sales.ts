@@ -21,11 +21,12 @@ import { ledgerTotal } from '../services/shippingCollections';
 import { collectionDate, loadStockContext, syncCollections, syncShipMovements } from '../services/orderLedgers';
 import { outstandingShippingReceivable } from '../services/receivablesAudit';
 
+import { SALE_SLOTS } from '../utils/saleLines';
 const router = Router();
 router.use(authenticate);
 
 const NO_STOCK_MESSAGE = 'لا يوجد مخزون متاح لشحن هذا الأوردر — الكميات المطلوبة محجوزة لأوردرات أخرى أو غير موجودة. لم يُشحن الأوردر.';
-const linesOf = (src: Record<string, unknown>) => [1, 2, 3, 4, 5].map(i => ({ code: String(src[`model${i}_code`] ?? '').trim(), color: String(src[`model${i}_color`] ?? ''), qty: Number(src[`model${i}_qty`]) || 0 }));
+const linesOf = (src: Record<string, unknown>) => SALE_SLOTS.map(i => ({ code: String(src[`model${i}_code`] ?? '').trim(), color: String(src[`model${i}_color`] ?? ''), qty: Number(src[`model${i}_qty`]) || 0 }));
 
 /**
  * An explicit shipment («تم الصرف») of an order that has not shipped yet: what can really ship is decided per stock line, respecting every
@@ -42,7 +43,7 @@ async function shipmentPlan(seasonId: number, excludeSaleId: number | undefined,
 type ModelSlot = { code: string; qty: number; color: string };
 
 function extractModels(data: Record<string, unknown>): ModelSlot[] {
-  return [1, 2, 3, 4, 5]
+  return SALE_SLOTS
     .map(i => ({
       code: (data[`model${i}_code`] as string) || '',
       qty: (Number(data[`model${i}_qty`]) || 0) - (Number(data[`model${i}_extra_qty`]) || 0),   // stock quantity: the sales-only extra is excluded
@@ -219,7 +220,7 @@ router.post('/', requireManager, async (req: Request, res: Response) => {
     data.cancel_disposition = null;     // set only when a shipped order is cancelled
     delete data.requested_status;       // server-managed: set below only when a shipped status had to be held
     delete data.awaiting_stock;         // server-managed too
-    for (let i = 1; i <= 5; i++) delete data[`model${i}_extra_qty`];   // server-managed: only a quantity edit of a «لم يتم الصرف» order creates it
+    for (const i of SALE_SLOTS) delete data[`model${i}_extra_qty`];   // server-managed: only a quantity edit of a «لم يتم الصرف» order creates it
     const status = (data.order_status as string) || '';
     const trimConfirm = data.trim_confirm;
     delete data.trim_confirm;           // not a column: only the confirmation of a shipment trim
@@ -342,7 +343,7 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     // shippable quantities, so there is nothing to do — never re-added as a sales-only extra and never shipped twice.
     const replayShippable = (data.trim_confirm as { shippable?: unknown } | undefined)?.shippable;
     if (Array.isArray(replayShippable) && oldRaw.order_status === 'تم الصرف'
-      && [1, 2, 3, 4, 5].every(i => (Number(replayShippable[i - 1]) || 0) === ((oldRaw as unknown as Record<string, number>)[`model${i}_qty`] || 0))) {
+      && SALE_SLOTS.every(i => (Number(replayShippable[i - 1]) || 0) === ((oldRaw as unknown as Record<string, number>)[`model${i}_qty`] || 0))) {
       return res.json({ ...oldRaw, collection_difference: Math.max(0, oldRaw.remaining - oldRaw.shipping_collected), fulfillment: (await fulfillmentOf(seasonId, id)).one, status_downgraded: false, trimmed: null, replayed: true });
     }
 
@@ -359,10 +360,10 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     {
       const rec = oldRaw as unknown as Record<string, unknown>;
       const line = (src: Record<string, unknown>, i: number) => ({ code: String(src[`model${i}_code`] ?? ''), color: String(src[`model${i}_color`] ?? ''), qty: Number(src[`model${i}_qty`]) || 0 });
-      const existing = [1, 2, 3, 4, 5].map(i => ({ ...line(rec, i), extra: Number(rec[`model${i}_extra_qty`]) || 0 }));
-      const wanted = [1, 2, 3, 4, 5].map(i => line({ ...rec, ...data }, i));
+      const existing = SALE_SLOTS.map(i => ({ ...line(rec, i), extra: Number(rec[`model${i}_extra_qty`]) || 0 }));
+      const wanted = SALE_SLOTS.map(i => line({ ...rec, ...data }, i));
       const keyOf = keepsNotPaidOut ? (await loadStockContext(prisma as unknown as Prisma.TransactionClient, seasonId, id)).keyOf : (() => '');
-      const extras = keepsNotPaidOut ? planExtras(existing, wanted, keyOf) : [0, 0, 0, 0, 0];
+      const extras = keepsNotPaidOut ? planExtras(existing, wanted, keyOf) : SALE_SLOTS.map(() => 0);
       extras.forEach((e, idx) => { data[`model${idx + 1}_extra_qty`] = e; });
     }
 
@@ -428,8 +429,8 @@ router.put('/:id', requireManager, async (req: Request, res: Response) => {
     // Cancelling reverses the WHOLE order automatically: no returned-goods condition, no returned quantities, no refund inputs.
     // Anything the browser still sends for those is ignored.
     ['cancel_disposition', 'cancel_returned_qty', 'refund_customer_now', 'repay_shipping_now', 'refund_key', 'refund_date'].forEach(k => delete data[k]);
-    const unretKeys = [1, 2, 3, 4, 5].map(i => `model${i}_unreturned_qty`);
-    const lineQty = [1, 2, 3, 4, 5].map(i => (oldSale[`model${i}_code` as keyof typeof oldSale] ? (Number(oldSale[`model${i}_qty` as keyof typeof oldSale]) || 0) - (Number(oldSale[`model${i}_extra_qty` as keyof typeof oldSale]) || 0) : 0));
+    const unretKeys = SALE_SLOTS.map(i => `model${i}_unreturned_qty`);
+    const lineQty = SALE_SLOTS.map(i => (oldSale[`model${i}_code` as keyof typeof oldSale] ? (Number(oldSale[`model${i}_qty` as keyof typeof oldSale]) || 0) - (Number(oldSale[`model${i}_extra_qty` as keyof typeof oldSale]) || 0) : 0));
     const cancelEvent0 = willBeCancelled && !wasCancelled;
     // An order cancelled by an EARLIER version may still hold goods outside the stock (marked not returned / damaged)
     // or money it never reversed. Saving it again finishes the job — once: afterwards nothing is left to reconcile.

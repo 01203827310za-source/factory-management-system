@@ -3,16 +3,14 @@ import { Search } from 'lucide-react';
 import { salesApi } from '../../services/api';
 import { statusLabel, RESERVED_STATUS } from '../../utils/orderStatus';
 import MonthlyModelSales from '../MonthlyModelSales';
+import { filledLines } from '../../utils/saleLines';
 import { Empty, ErrorBox, ExportButton, Loading, Pager, Panel, SortTh, Th, dayOf, exportRows, fmt, inputCls, monthOf } from './reportKit';
 
 type SaleRow = Awaited<ReturnType<typeof salesApi.getAll>>[number];
 const STATUSES = ['تم الصرف', 'لم يتم الصرف', 'حساب عميل', RESERVED_STATUS, 'تم الإلغاء'];
 const PAGE = 25;
 
-const lines = (s: SaleRow) => ([
-  [s.model1_code, s.model1_qty, s.model1_color], [s.model2_code, s.model2_qty, s.model2_color], [s.model3_code, s.model3_qty, s.model3_color],
-  [s.model4_code, s.model4_qty, s.model4_color], [s.model5_code, s.model5_qty, s.model5_color],
-] as [string, number, string][]).filter(([c, q]) => c && q > 0);
+const lines = (s: SaleRow) => filledLines(s).map(l => [l.code, l.qty, l.color] as [string, number, string]);
 const pieces = (s: SaleRow) => lines(s).reduce((n, [, q]) => n + q, 0);
 
 type SortKey = 'created_at' | 'order_number' | 'invoice_value' | 'order_status';

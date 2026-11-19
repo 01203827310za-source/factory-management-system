@@ -150,6 +150,21 @@ model Sale {
   model5_code        String   @default("")
   model5_qty         Int      @default(0)
   model5_color       String   @default("")
+  model6_code        String   @default("")
+  model6_qty         Int      @default(0)
+  model6_color       String   @default("")
+  model7_code        String   @default("")
+  model7_qty         Int      @default(0)
+  model7_color       String   @default("")
+  model8_code        String   @default("")
+  model8_qty         Int      @default(0)
+  model8_color       String   @default("")
+  model9_code        String   @default("")
+  model9_qty         Int      @default(0)
+  model9_color       String   @default("")
+  model10_code        String   @default("")
+  model10_qty         Int      @default(0)
+  model10_color       String   @default("")
   invoice_value      Float    @default(0)
   deposit_paid       Float    @default(0)
   deposit_receiver   String   @default("")
@@ -179,15 +194,25 @@ model Sale {
   model3_extra_qty   Int      @default(0)
   model4_extra_qty   Int      @default(0)
   model5_extra_qty   Int      @default(0)
+  model6_extra_qty   Int      @default(0)
+  model7_extra_qty   Int      @default(0)
+  model8_extra_qty   Int      @default(0)
+  model9_extra_qty   Int      @default(0)
+  model10_extra_qty   Int      @default(0)
   // Cancellation of a shipped order, per order line: pieces that are STILL OUTSIDE the sellable stock
   // (not returned / damaged). NULL = the order was cancelled before this column existed (the whole-order
-  // disposition then decides, and the shipped cost was fully reversed). Non-NULL (all five set) = the
+  // disposition then decides, and the shipped cost was fully reversed). Non-NULL (every slot set) = the
   // cost of exactly these pieces stays recognised until they come back resalable.
   model1_unreturned_qty Int?
   model2_unreturned_qty Int?
   model3_unreturned_qty Int?
   model4_unreturned_qty Int?
   model5_unreturned_qty Int?
+  model6_unreturned_qty Int?
+  model7_unreturned_qty Int?
+  model8_unreturned_qty Int?
+  model9_unreturned_qty Int?
+  model10_unreturned_qty Int?
   collections        ShippingCollection[]
   movements          InventoryMovement[]
   cancellations      OrderCancellation[]
